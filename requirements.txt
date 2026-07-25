@@ -4,6 +4,7 @@
 # ── Web framework + ASGI server ──────────────────────────────────────
 fastapi
 uvicorn[standard]
+streamlit
 
 # ── WebSocket (client + server) ──────────────────────────────────────
 websockets

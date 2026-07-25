@@ -39,10 +39,10 @@ def _get_requirements_names() -> set[str]:
     return names
 
 
-# ── Phase 1.1: CUDA / GPU Detection ──────────────────────────────────
+# ── Phase 1.1: GPU Detection (Multi-Platform) ──────────────────────────────────
 
-class TestPhase1CudaGpu:
-    """Verify PyTorch CUDA availability and VRAM budget."""
+class TestPhase1GpuDetection:
+    """Verify platform-agnostic GPU detection (CUDA, Metal, or CPU)."""
 
     @pytest.mark.skipif(
         os.environ.get("SKIP_GPU_TESTS") == "1",
@@ -59,42 +59,57 @@ class TestPhase1CudaGpu:
         os.environ.get("SKIP_GPU_TESTS") == "1",
         reason="SKIP_GPU_TESTS=1 set — no GPU available",
     )
-    def test_cuda_available(self):
-        """torch.cuda.is_available() must return True."""
-        import torch
-
-        if not torch.cuda.is_available():
-            pytest.skip("No CUDA GPU detected — skipping GPU test")
-        assert torch.cuda.is_available(), "CUDA must be available for local inference"
+    def test_platform_detection(self):
+        """Platform detection must identify CUDA, Metal, or CPU."""
+        from app.platform import detect_compute_device
+        
+        config = detect_compute_device()
+        assert config is not None, "Platform detection failed"
+        assert "device" in config, "Config missing 'device' key"
+        assert config["device"] in ["cuda", "mps", "cpu"], f"Unknown device: {config['device']}"
+        assert config["platform"] in ["nvidia", "apple_silicon", "cpu"], f"Unknown platform: {config['platform']}"
 
     @pytest.mark.skipif(
         os.environ.get("SKIP_GPU_TESTS") == "1",
         reason="SKIP_GPU_TESTS=1 set — no GPU available",
     )
     def test_gpu_vram_sufficient(self):
-        """GPU must report ≥5.5 GB total VRAM for the full pipeline."""
-        import torch
-
-        if not torch.cuda.is_available():
-            pytest.skip("No CUDA GPU detected")
-
-        total_mb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        assert total_mb >= 5.5, (
-            f"GPU has only {total_mb:.1f} GB VRAM — need ≥5.5 GB "
-            f"for Qwen 2.5 6B + Whisper + Kokoro"
+        """GPU must meet platform-specific VRAM requirements."""
+        from app.platform import detect_compute_device
+        from app.memory_budget import validate_memory_available
+        
+        config = detect_compute_device()
+        platform = config["platform"]
+        total_memory_gb = config["total_memory_gb"]
+        
+        ok = validate_memory_available(platform, total_memory_gb)
+        assert ok, (
+            f"Insufficient VRAM for {platform}: {total_memory_gb:.1f} GB available"
         )
 
     @pytest.mark.skipif(
         os.environ.get("SKIP_GPU_TESTS") == "1",
         reason="SKIP_GPU_TESTS=1 set — no GPU available",
     )
-    def test_cuda_device_count(self):
-        """At least one CUDA device must be visible."""
+    def test_device_accessible(self):
+        """Selected device must be accessible to PyTorch."""
+        from app.platform import detect_compute_device
         import torch
-
-        if not torch.cuda.is_available():
-            pytest.skip("No CUDA GPU detected")
-        assert torch.cuda.device_count() >= 1, "Expected at least 1 CUDA device"
+        
+        config = detect_compute_device()
+        device = config["device"]
+        
+        try:
+            # Try to create a tensor on the device
+            test_tensor = torch.randn(2, 2)
+            if device == "cuda":
+                test_tensor = test_tensor.cuda()
+            elif device == "mps":
+                test_tensor = test_tensor.to("mps")
+            # CPU doesn't need explicit placement
+            assert test_tensor is not None, f"Failed to create tensor on {device}"
+        except Exception as e:
+            pytest.fail(f"Device {device} not accessible: {e}")
 
 
 # ── Phase 1.2: Ollama Service ────────────────────────────────────────

@@ -1,0 +1,6 @@
+INFO:     Started server process [30250]
+INFO:     Waiting for application startup.
+WARNING:voice_db:PostgreSQL not available — running without database. Connection: host=localhost port=5432 dbname=admissions user=postgres password=
+INFO:voice_api:Database: not available — running without lead capture
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

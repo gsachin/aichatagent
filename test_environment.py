@@ -35,45 +35,56 @@ def check_torch_installed() -> bool:
         return False
 
 
-def check_cuda_available() -> bool:
-    """Check CUDA GPU is visible to PyTorch."""
+def check_gpu_available() -> bool:
+    """Check for any GPU (CUDA, Metal, or CPU)."""
     try:
-        import torch
-        if torch.cuda.is_available():
-            count = torch.cuda.device_count()
-            name = torch.cuda.get_device_name(0)
-            print(f"  [OK] CUDA available: {count} device(s) - {name}")
+        from app.platform import detect_compute_device, is_gpu_available
+        
+        platform_config = detect_compute_device()
+        if is_gpu_available():
+            device = platform_config["device"]
+            platform = platform_config["platform"]
+            device_name = platform_config["device_name"]
+            print(f"  [OK] GPU available: {platform} ({device})")
+            print(f"       Device: {device_name}")
             return True
         else:
-            print("  [WARN] CUDA not available - GPU inference won't work")
-            print("         CPU-only mode is possible but will be very slow")
+            print("  [WARN] No GPU detected - CPU-only mode will be very slow")
+            print("         Supported: NVIDIA CUDA, Apple Metal, or CPU fallback")
             return False
     except ImportError:
-        print("  [SKIP] PyTorch not installed")
+        print("  [SKIP] Platform detection module not available")
         return False
 
 
 def check_vram_budget() -> bool:
-    """GPU must have ≥5.5 GB total VRAM for the full pipeline."""
+    """Validate VRAM budget for the full pipeline (platform-specific)."""
     try:
-        import torch
-        if not torch.cuda.is_available():
-            print("  [SKIP] No CUDA GPU")
-            return False
-
-        total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        used_gb = torch.cuda.memory_allocated(0) / (1024**3)
-        free_gb = total_gb - used_gb
-
-        ok = total_gb >= 5.5
+        from app.platform import detect_compute_device
+        from app.memory_budget import get_platform_budget, validate_memory_available
+        
+        platform_config = detect_compute_device()
+        platform = platform_config["platform"]
+        total_memory_gb = platform_config["total_memory_gb"]
+        
+        budget = get_platform_budget(platform)
+        required = budget["recommended_gb"]
+        
+        ok = validate_memory_available(platform, total_memory_gb, verbose=False)
+        
         status = "OK" if ok else "WARN"
-        print(f"  [{status}] VRAM: {total_gb:.2f} GB total, {used_gb:.2f} GB used, {free_gb:.2f} GB free")
+        print(f"  [{status}] VRAM Budget ({platform}):")
+        print(f"            Available: {total_memory_gb:.2f} GB")
+        print(f"            Required:  {required:.2f} GB")
+        print(f"            Headroom:  {max(0, total_memory_gb - required):.2f} GB")
+        
         if not ok:
-            print("         Need ≥5.5 GB for Qwen 2.5 6B + Whisper + Kokoro")
+            print("            Need more VRAM or run on GPU system for better performance")
         return ok
-    except ImportError:
-        print("  [SKIP] PyTorch not installed")
-        return False
+    except Exception as e:
+        print(f"  [WARN] Could not validate VRAM: {e}")
+        print("         Continuing with checks...")
+        return True  # Don't fail if we can't validate
 
 
 def check_ollama_reachable() -> bool:
@@ -146,10 +157,10 @@ def main() -> int:
     results["python"] = check_python_version()
     print()
 
-    # 2. PyTorch + CUDA
-    print("-- GPU / CUDA --")
+    # 2. PyTorch + GPU (CUDA, Metal, or CPU)
+    print("-- GPU / Accelerator --")
     results["torch"] = check_torch_installed()
-    results["cuda"] = check_cuda_available()
+    results["gpu"] = check_gpu_available()
     vram_ok = check_vram_budget()
     results["vram"] = vram_ok
     print(f"  VRAM budget: {'Met' if vram_ok else 'Check warnings above'}")

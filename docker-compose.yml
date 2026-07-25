@@ -1,0 +1,124 @@
+version: '3.9'
+
+################################################################################
+# Docker Compose - University Admissions Voice AI Assistant
+################################################################################
+# Services:
+# 1. Ollama - LLM server (local model execution)
+# 2. FastAPI - Backend API server
+# 3. Streamlit - Web UI frontend
+#
+# Usage:
+#   docker-compose up -d                # Start all services
+#   docker-compose down                 # Stop all services
+#   docker-compose logs -f ollama       # View logs
+################################################################################
+
+services:
+  # ──────────────────────────────────────────────────────────────────
+  # Ollama - LLM Service
+  # ──────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: voice-assistant-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MODELS=/root/.ollama/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - voice-network
+    command: serve
+
+  # ──────────────────────────────────────────────────────────────────
+  # FastAPI - Backend Server
+  # ──────────────────────────────────────────────────────────────────
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-assistant-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./chroma_local_db:/app/chroma_local_db
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - OLLAMA_URL=http://ollama:11434
+      - FASTAPI_HOST=0.0.0.0
+      - FASTAPI_PORT=8000
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - voice-network
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────────
+  # Streamlit - Web UI
+  # ──────────────────────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-assistant-ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - ./chroma_local_db:/app/chroma_local_db
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - OLLAMA_URL=http://ollama:11434
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_PORT=8501
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    networks:
+      - voice-network
+    command: streamlit run app.py --server.port 8501 --server.headless true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+################################################################################
+# Networks
+################################################################################
+networks:
+  voice-network:
+    driver: bridge
+
+################################################################################
+# Volumes
+################################################################################
+volumes:
+  ollama_data:
+    driver: local

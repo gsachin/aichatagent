@@ -86,7 +86,7 @@ def load_rag_chain():
     retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
     # Use the VRAM-optimized Qwen model
-    llm = ChatOllama(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
+    llm = ChatOllama(model="qwen3.6:latest", temperature=0.0, num_ctx=2048)
 
     system_prompt = (
         "You are a warm, helpful, and highly precise University Admissions Advisor. "
@@ -117,9 +117,12 @@ def load_rag_chain():
 def load_stt_model():
     """Load the Faster-Whisper model for speech-to-text."""
     from faster_whisper import WhisperModel
+    from app.platform import detect_compute_device
 
-    device = "cuda" if _has_cuda() else "cpu"
-    model = WhisperModel("small.en", device=device, compute_type="int8")
+    platform_config = detect_compute_device()
+    device = platform_config["device"]
+    compute_type = platform_config["compute_type"]
+    model = WhisperModel("small.en", device=device, compute_type=compute_type)
     return model
 
 

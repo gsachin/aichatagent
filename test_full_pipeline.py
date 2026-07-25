@@ -52,7 +52,10 @@ with wave.open(INPUT_WAV, "rb") as w:
 audio_np = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
 from faster_whisper import WhisperModel
-whisper = WhisperModel("small.en", device="cuda", compute_type="int8")
+from app.platform import detect_compute_device
+
+platform_config = detect_compute_device()
+whisper = WhisperModel("small.en", device=platform_config["device"], compute_type=platform_config["compute_type"])
 segments, info = whisper.transcribe(audio_np, beam_size=5)
 transcript = " ".join(seg.text for seg in segments).strip()
 

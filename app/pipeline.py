@@ -38,15 +38,13 @@ TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
 RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "2"))
 
-GPU_AVAILABLE = False
-try:
-    import torch
-    GPU_AVAILABLE = torch.cuda.is_available()
-except ImportError:
-    pass
+# ── Platform Detection (Multi-GPU Support) ──────────────────────────
+from app.platform import detect_compute_device
 
-DEVICE = "cuda" if GPU_AVAILABLE else "cpu"
-COMPUTE_TYPE = "int8"
+PLATFORM_CONFIG = detect_compute_device()
+DEVICE = PLATFORM_CONFIG["device"]
+COMPUTE_TYPE = PLATFORM_CONFIG["compute_type"]
+GPU_AVAILABLE = PLATFORM_CONFIG["device"] != "cpu"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

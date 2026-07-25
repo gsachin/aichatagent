@@ -105,10 +105,14 @@ def main() -> int:
         print("Or run: python -c \"import wave,struct,math; ...\" to generate a test tone.")
         return 1
 
-    device = "cuda" if _has_cuda() else "cpu"
-    compute_type = "int8" if _has_cuda() else "int8"
-    print(f"  Device: {device}")
+    from app.platform import detect_compute_device
+    
+    platform_config = detect_compute_device()
+    device = platform_config["device"]
+    compute_type = platform_config["compute_type"]
+    print(f"  Device: {device} ({platform_config['platform']})")
     print(f"  Compute: {compute_type}")
+    print(f"  GPU Memory: {platform_config['total_memory_gb']:.1f} GB")
     print()
 
     # ---- VRAM before ----
