@@ -1,16 +1,22 @@
 """
-University Admissions Advisor — Streamlit Web UI
-===============================================
+University Admissions Advisor — Streamlit Web UI with Voice Support
+====================================================================
+Text + Voice chat interface powered by local AI.
 Run:    streamlit run app.py
+        (or: python -m streamlit run app.py --server.headless true)
 """
 
 import os
 import sys
+import io
 import warnings
+import tempfile
 import requests
 import streamlit as st
+import numpy as np
 
 warnings.filterwarnings("ignore")
+os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
 
 # ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
@@ -30,17 +36,22 @@ with st.sidebar:
         "tuition, admission requirements, and more."
     )
     st.markdown("---")
+    st.markdown("### Voice Mode")
+    st.markdown("🎤 **Click the mic button** below the chat to ask questions by voice.")
+    st.markdown("🔊 Responses can be read aloud (TTS coming soon).")
+    st.markdown("---")
     st.markdown("### Powered by")
     st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
-    st.markdown("📚university profiles")
+    st.markdown("👂 **Faster-Whisper** (local STT)")
+    st.markdown("📚 **UMD & FDU** university profiles")
     st.markdown("---")
     st.caption("All data stays on your machine. No internet required.")
 
 # ── Title ──────────────────────────────────────────────────────────
 st.title("🎓 University Admissions Advisor")
-st.caption("Ask me anything about UMD or FDU — admissions, tuition, programs, and more.")
+st.caption("Ask me anything about UMD or FDU — type or use your voice.")
 
-# ── Load the RAG chain (cached, runs only once) ────────────────────
+# ── Load RAG chain (cached, runs once) ─────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_rag_chain():
     """Initialize the full RAG pipeline and return the chain."""
@@ -74,7 +85,8 @@ def load_rag_chain():
     )
     retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
-    llm = ChatOllama(model="qwen2.5:7b", temperature=0.0)
+    # Use the VRAM-optimized Qwen model
+    llm = ChatOllama(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
 
     system_prompt = (
         "You are a warm, helpful, and highly precise University Admissions Advisor. "
@@ -82,7 +94,8 @@ def load_rag_chain():
         "CONVERSATIONAL TONE RULES:\n"
         "1. Be encouraging, professional, and approachable.\n"
         "2. Avoid mechanical language. Use natural transitions.\n"
-        "3. Keep responses concise and easy to read.\n\n"
+        "3. Keep responses concise and easy to read.\n"
+        "4. When responding to voice input, keep answers brief and spoken-word friendly.\n\n"
         "STRICT FACTUAL CONSTRAINTS:\n"
         "1. Rely EXCLUSIVELY on the provided context. If a detail isn't in the text, politely say so.\n"
         "2. Never confuse details between UMD and FDU.\n"
@@ -99,6 +112,51 @@ def load_rag_chain():
     return create_retrieval_chain(retriever, qa_chain)
 
 
+# ── Load STT model (cached) ────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def load_stt_model():
+    """Load the Faster-Whisper model for speech-to-text."""
+    from faster_whisper import WhisperModel
+
+    device = "cuda" if _has_cuda() else "cpu"
+    model = WhisperModel("small.en", device=device, compute_type="int8")
+    return model
+
+
+def _has_cuda() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+@st.cache_resource(show_spinner=False)
+def load_tts_service():
+    """Load Kokoro TTS service for text-to-speech output."""
+    try:
+        from pipecat.services.kokoro.tts import KokoroTTSService
+        return KokoroTTSService(voice_id="af_heart")
+    except Exception:
+        return None
+
+
+# ── Transcribe audio ────────────────────────────────────────────────
+def transcribe_audio(audio_bytes: bytes, sample_rate: int = 16000) -> str:
+    """Convert raw PCM audio to text using local Whisper."""
+    if len(audio_bytes) < 1000:
+        return ""
+
+    # Convert bytes to numpy float32 array
+    audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+    model = load_stt_model()
+    segments, _ = model.transcribe(audio_np, beam_size=5)
+    transcript = " ".join(seg.text for seg in segments).strip()
+
+    return transcript
+
+
 # ── Initialize ─────────────────────────────────────────────────────
 if "rag_chain" not in st.session_state:
     with st.spinner("🔧 Loading PDF, building vector store, booting Qwen 2.5 7B..."):
@@ -113,11 +171,11 @@ if "rag_chain" not in st.session_state:
             st.stop()
 
         st.session_state.rag_chain = load_rag_chain()
-        st.success("✅ Bot is ready!")
+        st.success("✅ Bot is ready! Type below or click 🎤 to speak.")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. How can I help you today?"}
+        {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything — by text or voice."}
     ]
 
 # ── Display chat history ───────────────────────────────────────────
@@ -125,7 +183,67 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Handle user input ──────────────────────────────────────────────
+# ── Voice input (audio_input) ──────────────────────────────────────
+audio_value = st.audio_input("🎤 Click to ask by voice")
+
+if audio_value is not None:
+    # Show what was recorded
+    with st.chat_message("user"):
+        st.audio(audio_value)
+        with st.spinner("👂 Transcribing..."):
+            # Read the audio bytes and convert to PCM for Whisper
+            audio_bytes = audio_value.read()
+
+            # Streamlit's audio_input returns audio in the browser's format.
+            # Convert to 16kHz mono 16-bit PCM for Whisper.
+            try:
+                import soundfile as sf
+                audio_np, orig_sr = sf.read(io.BytesIO(audio_bytes))
+                # Convert to mono if stereo
+                if audio_np.ndim > 1:
+                    audio_np = audio_np.mean(axis=1)
+                # Resample to 16kHz if needed
+                if orig_sr != 16000 and len(audio_np) > 0:
+                    from scipy.signal import resample
+                    audio_np = resample(audio_np, int(len(audio_np) * 16000 / orig_sr))
+                # Convert to int16
+                audio_16k = (np.clip(audio_np, -1, 1) * 32767).astype(np.int16)
+                transcript = transcribe_audio(audio_16k.tobytes(), 16000)
+            except Exception as e:
+                # Fallback: try reading as raw WAV
+                try:
+                    import wave
+                    with wave.open(io.BytesIO(audio_bytes), "rb") as w:
+                        pcm = w.readframes(w.getnframes())
+                        transcript = transcribe_audio(pcm, w.getframerate())
+                except Exception:
+                    st.error(f"Audio processing error: {e}")
+                    transcript = ""
+
+        if transcript:
+            st.markdown(f"🗣️ *{transcript}*")
+        else:
+            st.warning("Could not transcribe audio. Please speak clearly and try again.")
+            transcript = ""
+
+    if transcript:
+        # Process through the RAG chain
+        st.session_state.messages.append({"role": "user", "content": f"🎤 {transcript}"})
+
+        with st.chat_message("assistant"):
+            with st.spinner("🤔 Thinking..."):
+                try:
+                    response = st.session_state.rag_chain.invoke({"input": transcript})
+                    answer = response["answer"]
+                except Exception as e:
+                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
+
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+
+        st.rerun()
+
+# ── Text input ─────────────────────────────────────────────────────
 if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -143,8 +261,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
 # ── Clear chat button ──────────────────────────────────────────────
-if st.button("🗑️ Clear Chat"):
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. How can I help you today?"}
-    ]
-    st.rerun()
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything — by text or voice."}
+        ]
+        st.rerun()
