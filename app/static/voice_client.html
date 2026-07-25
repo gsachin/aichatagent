@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Assistant — University Admissions</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+                 Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+
+  .container {
+    text-align: center;
+    max-width: 420px;
+    width: 90%;
+    padding: 2.5rem 2rem;
+    background: #1e293b;
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+  }
+
+  .subtitle {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin-bottom: 2rem;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #64748b;
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .dot.idle    { background: #64748b; }
+  .dot.active  { background: #22c55e; animation: pulse 1.2s ease-in-out infinite; }
+  .dot.error   { background: #ef4444; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
+  .status-text {
+    font-size: 0.9rem;
+    color: #94a3b8;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.85rem 1.5rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    color: #fff;
+  }
+  .btn:active { transform: scale(0.97); }
+
+  .btn-start {
+    background: #2563eb;
+  }
+  .btn-start:hover { background: #1d4ed8; }
+
+  .btn-stop {
+    background: #dc2626;
+  }
+  .btn-stop:hover { background: #b91c1c; }
+
+  .btn:disabled {
+    background: #334155;
+    color: #64748b;
+    cursor: not-allowed;
+  }
+
+  .info {
+    margin-top: 1.25rem;
+    font-size: 0.75rem;
+    color: #475569;
+  }
+
+  .log {
+    margin-top: 1rem;
+    font-size: 0.78rem;
+    color: #64748b;
+    min-height: 1.2em;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>University Admissions Voice Assistant</h1>
+  <p class="subtitle">Local AI — ask about UMD or FDU admissions</p>
+
+  <div class="status-row">
+    <span class="dot idle" id="dot"></span>
+    <span class="status-text" id="statusLabel">Ready</span>
+  </div>
+
+  <button class="btn btn-start" id="btn" disabled>Initializing…</button>
+
+  <div class="log" id="log"></div>
+  <p class="info">
+    Uses <code>ws://localhost:8000/ws/voice</code> &middot; 16 kHz mono PCM
+  </p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── DOM refs ─────────────────────────────────────────────────── */
+  const btn   = document.getElementById("btn");
+  const dot   = document.getElementById("dot");
+  const label = document.getElementById("statusLabel");
+  const logEl = document.getElementById("log");
+
+  /* ── State ────────────────────────────────────────────────────── */
+  let stream     = null;      // MediaStream from getUserMedia
+  let audioCtx   = null;      // AudioContext for capture + playback
+  let processor  = null;      // ScriptProcessorNode for PCM extraction
+  let sourceNode = null;      // MediaStreamAudioSourceNode
+  let ws         = null;      // WebSocket to /ws/voice
+
+  let playing    = false;     // user-facing on/off
+  let playbackNext = 0;       // scheduled playback time offset
+
+  const SAMPLE_RATE  = 16000;
+  const CHUNK_MS     = 20;
+  const CHUNK_FRAMES = Math.round(SAMPLE_RATE * CHUNK_MS / 1000); // 320
+
+  /* ── Helpers ──────────────────────────────────────────────────── */
+  function setUI(state) {
+    switch (state) {
+      case "idle":
+        dot.className = "dot idle";
+        label.textContent = "Ready";
+        btn.textContent = "Start";
+        btn.className = "btn btn-start";
+        btn.disabled = false;
+        break;
+      case "active":
+        dot.className = "dot active";
+        label.textContent = "Listening…";
+        btn.textContent = "Stop";
+        btn.className = "btn btn-stop";
+        btn.disabled = false;
+        break;
+      case "connecting":
+        dot.className = "dot idle";
+        label.textContent = "Connecting…";
+        btn.textContent = "Stop";
+        btn.className = "btn btn-stop";
+        btn.disabled = true;
+        break;
+      case "error":
+        dot.className = "dot error";
+        label.textContent = "Error";
+        btn.textContent = "Start";
+        btn.className = "btn btn-start";
+        btn.disabled = false;
+        break;
+    }
+  }
+
+  function say(msg) {
+    logEl.textContent = msg;
+    console.log("[voice_client]", msg);
+  }
+
+  /* ── Playback ─────────────────────────────────────────────────── */
+  function playPcmChunk(pcmBuffer) {
+    if (!audioCtx) return;
+
+    /* Convert 16-bit PCM (byte array) to Float32 */
+    var numSamples = pcmBuffer.byteLength / 2;
+    var floatBuf   = new Float32Array(numSamples);
+
+    var dv = new DataView(pcmBuffer);
+    for (var i = 0; i < numSamples; i++) {
+      floatBuf[i] = dv.getInt16(i * 2, true) / 32768;
+    }
+
+    var buf = audioCtx.createBuffer(1, numSamples, SAMPLE_RATE);
+    buf.getChannelData(0).set(floatBuf);
+
+    var src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+
+    var now = audioCtx.currentTime;
+    if (playbackNext < now) { playbackNext = now; }
+    src.start(playbackNext);
+    playbackNext += numSamples / SAMPLE_RATE;
+  }
+
+  /* ── WebSocket ────────────────────────────────────────────────── */
+  function connectWs() {
+    var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = protocol + "//" + location.host + "/ws/voice";
+
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = function () {
+      say("WebSocket connected");
+      setUI("active");
+    };
+
+    ws.onmessage = function (evt) {
+      if (evt.data instanceof ArrayBuffer && evt.data.byteLength > 0) {
+        playPcmChunk(evt.data);
+      }
+    };
+
+    ws.onerror = function () {
+      say("WebSocket error");
+      setUI("error");
+    };
+
+    ws.onclose = function () {
+      say("WebSocket closed");
+      if (playing) { stopAll(); }
+    };
+  }
+
+  /* ── Microphone capture ───────────────────────────────────────── */
+  function pcmResampleAndSend(audioData, inputSampleRate) {
+    /* audioData is a Float32Array of raw samples at inputSampleRate.
+     * If the input rate differs from our target, do a simple linear
+     * resample before converting to 16-bit PCM. */
+    var ratio = inputSampleRate / SAMPLE_RATE;
+
+    var samples;
+    if (ratio === 1) {
+      samples = audioData;
+    } else {
+      var outLen = Math.round(audioData.length / ratio);
+      samples = new Float32Array(outLen);
+      for (var i = 0; i < outLen; i++) {
+        var srcIdx = i * ratio;
+        var lo = Math.floor(srcIdx);
+        var hi = Math.min(lo + 1, audioData.length - 1);
+        var frac = srcIdx - lo;
+        samples[i] = audioData[lo] * (1 - frac) + audioData[hi] * frac;
+      }
+    }
+
+    /* Convert Float32 (-1..1) → 16-bit PCM bytes (little-endian) */
+    var byteBuf = new ArrayBuffer(samples.length * 2);
+    var dv = new DataView(byteBuf);
+    for (var j = 0; j < samples.length; j++) {
+      var s = Math.max(-1, Math.min(1, samples[j]));
+      dv.setInt16(j * 2, (s < 0 ? s * 0x8000 : s * 0x7FFF) | 0, true);
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(byteBuf);
+    }
+  }
+
+  function onAudioProcess(evt) {
+    if (!playing || !ws || ws.readyState !== WebSocket.OPEN) return;
+    /* evt.inputBuffer is a single-channel AudioBuffer captured by
+     * the ScriptProcessorNode. Its sample rate matches the AudioContext. */
+    var channelData = evt.inputBuffer.getChannelData(0);
+    pcmResampleAndSend(channelData, audioCtx.sampleRate);
+  }
+
+  async function startMic() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+    playbackNext = audioCtx.currentTime;
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount:    { ideal: 1 },
+        sampleRate:      { ideal: SAMPLE_RATE },
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl:  false
+      }
+    });
+
+    sourceNode = audioCtx.createMediaStreamSource(stream);
+
+    /* ScriptProcessorNode: bufferSize must be one of 256, 512, 1024, 2048, 4096, 8192, 16384.
+     * We pick 4096 as a reasonable balance — chunks are sent as they arrive. */
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = onAudioProcess;
+
+    sourceNode.connect(processor);
+    processor.connect(audioCtx.destination);  /* required to keep the node alive */
+
+    var actualRate = audioCtx.sampleRate;
+    say("Mic active — AudioContext rate: " + actualRate + " Hz" +
+        (actualRate !== SAMPLE_RATE ? " (resampling to " + SAMPLE_RATE + " Hz)" : ""));
+  }
+
+  /* ── Start / Stop ─────────────────────────────────────────────── */
+  async function startAll() {
+    playing = true;
+    setUI("connecting");
+    playbackNext = 0;
+    try {
+      await startMic();
+    } catch (err) {
+      say("Mic error: " + err.message);
+      setUI("error");
+      playing = false;
+      return;
+    }
+    connectWs();
+  }
+
+  function stopAll() {
+    playing = false;
+
+    if (ws) {
+      try { ws.close(); } catch (_) {}
+      ws = null;
+    }
+
+    if (processor) {
+      try { processor.disconnect(); } catch (_) {}
+      processor = null;
+    }
+    if (sourceNode) {
+      try { sourceNode.disconnect(); } catch (_) {}
+      sourceNode = null;
+    }
+    if (stream) {
+      try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (_) {}
+      stream = null;
+    }
+    if (audioCtx) {
+      try { audioCtx.close(); } catch (_) {}
+      audioCtx = null;
+    }
+
+    playbackNext = 0;
+    setUI("idle");
+    say("Stopped");
+  }
+
+  /* ── Button handler ───────────────────────────────────────────── */
+  btn.addEventListener("click", function () {
+    if (playing) {
+      stopAll();
+    } else {
+      /* no await — startAll handles errors internally */
+      startAll();
+    }
+  });
+
+  /* ── Init ─────────────────────────────────────────────────────── */
+  /* Check browser support, then enable the button. */
+  (function init() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      say("getUserMedia not available — use Chrome, Edge, or Firefox");
+      setUI("error");
+      btn.disabled = true;
+      return;
+    }
+    if (!window.WebSocket) {
+      say("WebSocket not available");
+      setUI("error");
+      btn.disabled = true;
+      return;
+    }
+    if (!(window.AudioContext || window.webkitAudioContext)) {
+      say("AudioContext not available");
+      setUI("error");
+      btn.disabled = true;
+      return;
+    }
+    setUI("idle");
+  })();
+})();
+</script>
+
+</body>
+</html>

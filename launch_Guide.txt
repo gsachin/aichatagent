@@ -1,0 +1,200 @@
+python admissions_bot.py
+
+
+Example questions:
+- What are the admission requirements for UMD?
+- Tell me about FDU tuition fees
+- What programs does University of Maryland offer?
+- Compare UMD and FDU
+
+
+ http://localhost:8501
+
+
+
+---
+Step 1: Start Ollama
+
+Open Start Menu, search for Ollama, launch it. You'll see the 🦙 icon appear in the system tray (bottom-right).
+
+Step 2: Open Terminal
+
+Press Win + R, type cmd, hit Enter.
+
+Step 3: Run the app
+
+Type these two commands:
+
+cd D:\university_project_demo
+streamlit run app.py
+
+Step 4: Open browser
+
+Go to: http://localhost:8501
+
+---
+That's it — 4 steps. The first load takes ~15 seconds (building the vector store), then the chat is ready. To stop it, press Ctrl+C in the terminal.
+
+--------------------------------------------------------
+
+
+tunnel url
+
+"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://localhost:8501
+
+---
+Before you start
+
+Make sure Ollama 🦙 is running in your system tray. If not, open it from the Start Menu.
+
+---
+Step 1: Open first terminal
+
+Press Win + R, type cmd, hit Enter.
+
+cd D:\university_project_demo
+streamlit run app.py
+
+Wait until you see: You can now view your Streamlit app in your browser.
+
+---
+Step 2: Open second terminal
+
+Press Win + R, type cmd, hit Enter (keep the first one running).
+
+"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://localhost:8501
+
+---
+Step 3: Get the public URL
+
+In the second terminal, look for this line:
+
+|  Your quick Tunnel has been created! Visit it at:
+|  https://xxxxxxxx.trycloudflare.com
+
+---
+Step 4: Share the URL
+
+Copy that https://xxxxxxxx.trycloudflare.com link and share it. Anyone with the link can use your chatbot from anywhere.
+
+---
+Step 5: Stop
+
+When done, press Ctrl+C in both terminals.
+
+---
+Quick summary card
+
+┌──────────┬────────────────────────────────────────────────┬───────────┐
+│ Terminal │                    Command                     │    Job    │
+├──────────┼────────────────────────────────────────────────┼───────────┤
+│ Terminal │ cd D:\university_project_demo then streamlit   │ Runs the  │
+│  1       │ run app.py                                     │ chatbot   │
+├──────────┼────────────────────────────────────────────────┼───────────┤
+│ Terminal │ "C:\Program Files                              │ Creates   │
+│  2       │ (x86)\cloudflared\cloudflared.exe" tunnel      │ public    │
+│          │ --url http://localhost:8501                    │ URL       │
+├──────────┼────────────────────────────────────────────────┼───────────┤
+│          │                                                │ Share     │
+│ Browser  │ Copy the trycloudflare.com URL from Terminal 2 │ with      │
+│          │                                                │ anyone    │
+└──────────┴────────────────────────────────────────────────┴───────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Done. Now you just double-click launch.bat — one action starts everything.
+
+---
+What happens automatically
+
+┌──────┬──────────────────────────────────────────────────┐
+│ Step │                      Action                      │
+├──────┼──────────────────────────────────────────────────┤
+│ 1    │ Checks Ollama 🦙 → starts it if not running      │
+├──────┼──────────────────────────────────────────────────┤
+│ 2    │ Checks PDF is present                            │
+├──────┼──────────────────────────────────────────────────┤
+│ 3    │ Checks Python packages → installs if missing     │
+├──────┼──────────────────────────────────────────────────┤
+│ 4    │ Opens Streamlit in a new terminal window         │
+├──────┼──────────────────────────────────────────────────┤
+│ 5    │ Waits 12s for Streamlit to boot                  │
+├──────┼──────────────────────────────────────────────────┤
+│ 6    │ Opens Cloudflare Tunnel in a new terminal window │
+├──────┼──────────────────────────────────────────────────┤
+│ 7    │ Opens browser to localhost:8501                  │
+└──────┴──────────────────────────────────────────────────┘
+
+---
+You'll see 3 windows open
+
+┌────────────────────────────────┬───────────────────────────────────────┐
+│             Window             │                 Shows                 │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Streamlit (green title)        │ The app running — don't touch         │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Cloudflare Tunnel (green       │ Your public URL — copy this           │
+│ title)                         │                                       │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Browser                        │ localhost:8501 — test it yourself     │
+│                                │ first                                 │
+└────────────────────────────────┴───────────────────────────────────────┘
+
+---
+To share
+
+Copy the https://xxxx.trycloudflare.com URL from the Cloudflare Tunnel window and send it to anyone. That's it.
+
+To stop everything, close all 3 windows.
+
+
+Done. Two files:
+
+---
+Quick reference
+
+┌───────────────────┬──────────────┬─────────────────────────────────────┐
+│       File        │   Use when   │            What it does             │
+├───────────────────┼──────────────┼─────────────────────────────────────┤
+│ launch.bat        │ Jtp://localhost:8501  │
+│                   │ yourself     │                                  ├───────────────────┼───────────────────────┤
+│ launch_tunnel.bat │ Demo to      │ Starts app + Cloudflare → public │                   │ ouse                  │
+└───────────────────┴──────────────┴──────────────────────────────────
+---                                                                   How to use
+                                                                      Local only (your machin
+Double-click:  launch.bat                                             
+Public demo (share with anyone):                                      Double-click:  launch_t
+Then copy the URL from the Cloudflare Tunnel window                   
+Both do the health checks automatically (Ollama, PDF, packages). Just double-click and go.
+
+✻ Brewed for 18s · 2 shells still running

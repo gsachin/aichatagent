@@ -1,0 +1,23 @@
+# University Admissions Voice Assistant — Python dependencies
+# Install: pip install -r requirements.txt
+
+# ── Web framework + ASGI server ──────────────────────────────────────
+fastapi
+uvicorn[standard]
+
+# ── WebSocket (client + server) ──────────────────────────────────────
+websockets
+
+# ── Async HTTP (used by test suite) ──────────────────────────────────
+httpx
+
+# ── AI / ML Inference ────────────────────────────────────────────────
+torch
+ollama
+chromadb
+
+# ── Voice AI Pipeline (Pipecat) ──────────────────────────────────────
+pipecat-ai[whisper,kokoro]
+
+# ── Database (lead capture — Phase 6) ────────────────────────────────
+psycopg2-binary
