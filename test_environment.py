@@ -61,7 +61,7 @@ def check_vram_budget() -> bool:
             print("  [SKIP] No CUDA GPU")
             return False
 
-        total_gb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         used_gb = torch.cuda.memory_allocated(0) / (1024**3)
         free_gb = total_gb - used_gb
 

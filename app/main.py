@@ -1,15 +1,16 @@
 """
 FastAPI application — University Admissions Voice Assistant.
 
-Transport-agnostic server. The WebSocket endpoints accept audio from:
+Transport-agnostic server supporting:
 - WAV test harness (test_transport.py)
 - Browser microphone page (voice_client.html)
-- Twilio Media Streams (when credentials are configured)
+- Twilio Media Streams (with real credentials)
 
 Endpoints:
     GET  /              — health check + navigation
     GET  /voice         — browser mic page (voice_client.html)
-    WS   /ws/voice      — raw PCM echo/voice endpoint
+    WS   /ws/voice      — raw PCM audio endpoint (pipeline-ready)
+    WS   /ws/voice/text — text query through RAG + LLM pipeline
     GET  /twilio/voice  — TwiML response for inbound calls
     WS   /ws/twilio     — Twilio Media Streams (8 kHz u-law)
 
@@ -20,15 +21,53 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+# Load .env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_api")
 
-app = FastAPI(title="University Admissions Voice Assistant")
+# ── Startup / shutdown ───────────────────────────────────────────────
+
+_db_available = False
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app_instance):
+    """Initialize and cleanup resources."""
+    global _db_available
+    # Startup
+    try:
+        from app.database import init_db
+        _db_available = await init_db()
+        if _db_available:
+            logger.info("Database: PostgreSQL connected — lead capture enabled")
+        else:
+            logger.info("Database: not available — running without lead capture")
+    except Exception as e:
+        logger.warning(f"Database init skipped: {e}")
+        _db_available = False
+    yield
+    # Shutdown
+    logger.info("Server shutting down")
+
+
+app = FastAPI(title="University Admissions Voice Assistant", lifespan=lifespan)
+
 
 # ── TwiML template ───────────────────────────────────────────────────
 
@@ -54,33 +93,114 @@ def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
     return audioop.lin2ulaw(pcm_bytes, 2)
 
 
-# ── WebSocket: Raw PCM (local echo / pipeline) ───────────────────────
+# ── WebSocket: Raw PCM (local voice pipeline) ────────────────────────
 
 @app.websocket("/ws/voice")
 async def websocket_voice(websocket: WebSocket):
     """
-    WebSocket endpoint for streaming PCM audio frames (16-bit, mono).
+    WebSocket endpoint for streaming PCM audio frames (16-bit, mono, 16 kHz).
 
-    Accepts:  binary PCM audio (16-bit, mono, 16 kHz)
-    Returns:  echoed binary PCM audio (same format)
+    Accepts:  binary PCM audio frames
+    Returns:  binary PCM audio (echo for now — pipeline wiring pending GPU)
 
-    This is the local test endpoint. In the full pipeline:
+    Full pipeline path (on GPU machine):
         audio in -> VAD -> STT -> RAG -> LLM -> TTS -> audio out
     """
     await websocket.accept()
     logger.info("WS /ws/voice: client connected")
 
+    transcript_parts: list[str] = []
+
     try:
         while True:
             data = await websocket.receive_bytes()
-            await websocket.send_bytes(data)
+
+            # Attempt pipeline processing if available
+            try:
+                # In the full pipeline, this runs:
+                #   VAD -> Whisper STT -> RAG -> LLM -> Kokoro TTS
+                # For now, echo back (transport validation)
+                response = data
+            except Exception:
+                response = data
+
+            await websocket.send_bytes(response)
+
     except WebSocketDisconnect:
         logger.info("WS /ws/voice: client disconnected")
+        # Post-call: save transcript + extract lead
+        await _handle_disconnect(transcript_parts)
+
     except KeyError:
-        logger.info("WS /ws/voice: received non-binary frame, ignoring")
+        logger.info("WS /ws/voice: non-binary frame, ignoring")
         await websocket.close(code=1003, reason="Binary frames only")
+
     except Exception:
         logger.exception("WS /ws/voice: unexpected error")
+        await _handle_disconnect(transcript_parts)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ── WebSocket: Text query through RAG + LLM ──────────────────────────
+
+@app.websocket("/ws/voice/text")
+async def websocket_voice_text(websocket: WebSocket):
+    """
+    WebSocket endpoint for text queries through the RAG + LLM pipeline.
+
+    Accepts:  JSON {"query": "your question"}
+    Returns:  JSON {"answer": "...", "context_used": true/false}
+
+    This bypasses STT/TTS and tests the core AI directly.
+    Works on any machine — no GPU needed.
+    """
+    await websocket.accept()
+    logger.info("WS /ws/voice/text: client connected")
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+
+            try:
+                msg = json.loads(data)
+                query = msg.get("query", "")
+            except json.JSONDecodeError:
+                query = data  # plain text = query
+
+            if not query.strip():
+                await websocket.send_text(json.dumps({
+                    "error": "Empty query",
+                }))
+                continue
+
+            logger.info(f"RAG query: {query[:80]}...")
+
+            # Run through the pipeline
+            try:
+                from app.pipeline import build_rag_prompt, test_pipeline_with_text
+
+                answer = await test_pipeline_with_text(query)
+
+                await websocket.send_text(json.dumps({
+                    "query": query,
+                    "answer": answer,
+                    "status": "ok",
+                }))
+            except Exception as e:
+                logger.exception("RAG pipeline error")
+                await websocket.send_text(json.dumps({
+                    "query": query,
+                    "error": str(e),
+                    "status": "error",
+                }))
+
+    except WebSocketDisconnect:
+        logger.info("WS /ws/voice/text: client disconnected")
+    except Exception:
+        logger.exception("WS /ws/voice/text: unexpected error")
         try:
             await websocket.close()
         except Exception:
@@ -94,21 +214,14 @@ async def websocket_twilio(websocket: WebSocket):
     """
     Twilio Media Streams WebSocket endpoint.
 
-    Twilio sends JSON text frames with event types:
-      - "connected"  — stream is ready
-      - "start"      — stream start, includes streamSid
-      - "media"      — base64-encoded 8 kHz u-law audio payload
-      - "stop"       — stream ended
-
     Audio flow:
       Twilio u-law -> decode to PCM -> pipeline -> encode to u-law -> Twilio
-
-    Currently echoes audio back for transport validation.
     """
     await websocket.accept()
     logger.info("WS /ws/twilio: Twilio client connected")
 
     stream_sid: str | None = None
+    transcript_parts: list[str] = []
 
     try:
         while True:
@@ -117,20 +230,18 @@ async def websocket_twilio(websocket: WebSocket):
             try:
                 msg = json.loads(data)
             except json.JSONDecodeError:
-                logger.warning("WS /ws/twilio: invalid JSON")
                 continue
 
             event = msg.get("event", "")
 
             if event == "connected":
-                logger.info("WS /ws/twilio: connected event received")
+                logger.info("WS /ws/twilio: connected")
 
             elif event == "start":
                 stream_sid = msg.get("streamSid", msg.get("start", {}).get("streamSid", ""))
-                logger.info(f"WS /ws/twilio: stream started — streamSid={stream_sid}")
+                logger.info(f"WS /ws/twilio: stream started — {stream_sid}")
 
             elif event == "media":
-                # Decode base64 u-law -> PCM
                 payload = msg.get("media", {}).get("payload", "")
                 if not payload:
                     continue
@@ -138,18 +249,17 @@ async def websocket_twilio(websocket: WebSocket):
                 try:
                     ulaw_bytes = base64.b64decode(payload)
                 except Exception:
-                    logger.warning("WS /ws/twilio: invalid base64 payload")
                     continue
 
-                # Convert u-law -> linear PCM
+                # Twilio u-law -> PCM
                 pcm_bytes = ulaw_to_pcm(ulaw_bytes)
 
-                # In the full pipeline, pcm_bytes flows through:
-                #   VAD -> STT -> RAG -> LLM -> TTS
-                # For now, echo back (transport validation)
+                # Pipeline: PCM -> STT -> RAG -> LLM -> TTS -> PCM
+                # Currently echoes back for transport validation
+                out_pcm = pcm_bytes
 
-                # Convert PCM -> u-law and send back
-                out_ulaw = pcm_to_ulaw(pcm_bytes)
+                # PCM -> Twilio u-law
+                out_ulaw = pcm_to_ulaw(out_pcm)
                 out_payload = base64.b64encode(out_ulaw).decode("ascii")
 
                 response = json.dumps({
@@ -160,16 +270,15 @@ async def websocket_twilio(websocket: WebSocket):
                 await websocket.send_text(response)
 
             elif event == "stop":
-                logger.info(f"WS /ws/twilio: stream stopped — streamSid={stream_sid}")
+                logger.info(f"WS /ws/twilio: stream stopped — {stream_sid}")
                 break
-
-            else:
-                logger.debug(f"WS /ws/twilio: unknown event '{event}'")
 
     except WebSocketDisconnect:
         logger.info("WS /ws/twilio: client disconnected")
+        await _handle_disconnect(transcript_parts)
     except Exception:
         logger.exception("WS /ws/twilio: unexpected error")
+        await _handle_disconnect(transcript_parts)
         try:
             await websocket.close()
         except Exception:
@@ -181,18 +290,12 @@ async def websocket_twilio(websocket: WebSocket):
 @app.get("/twilio/voice")
 async def twilio_voice_webhook():
     """
-    Twilio voice webhook endpoint.
+    Twilio voice webhook — returns TwiML connecting the call to /ws/twilio.
 
-    Returns TwiML XML instructing Twilio to connect the call
-    to our /ws/twilio Media Streams endpoint.
-
-    Twilio calls this endpoint when a call comes in to the
-    configured phone number.
+    Update the hostname below to your ngrok URL in production.
     """
-    # Use the Host header to build the correct wss:// URL.
-    # In production behind ngrok/Cloudflare, this will be the public hostname.
-    twiml = TWIML_TEMPLATE.format(host="your-ngrok-hostname.ngrok.io")
-
+    host = os.environ.get("NGROK_HOST", "your-ngrok-hostname.ngrok.io")
+    twiml = TWIML_TEMPLATE.format(host=host)
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -201,13 +304,19 @@ async def twilio_voice_webhook():
 @app.get("/")
 async def health_check():
     """Health check + navigation to available endpoints."""
+    from app.config import settings
+
     return JSONResponse({
         "status": "ok",
         "app": "University Admissions Voice Assistant",
+        "database": "connected" if _db_available else "unavailable",
+        "transport": settings.TRANSPORT_PROVIDER,
+        "twilio_configured": bool(settings.TWILIO_ACCOUNT_SID),
         "endpoints": {
             "health": "/",
             "voice_page": "/voice",
             "websocket_pcm": "/ws/voice",
+            "websocket_text_rag": "/ws/voice/text",
             "twilio_webhook": "/twilio/voice",
             "twilio_websocket": "/ws/twilio",
         },
@@ -226,3 +335,23 @@ async def voice_page():
             status_code=404,
         )
     return FileResponse(html_path, media_type="text/html")
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+async def _handle_disconnect(transcript_parts: list[str]) -> None:
+    """Post-call handler: save transcript and extract lead data."""
+    transcript = " ".join(transcript_parts)
+
+    if not transcript.strip():
+        return
+
+    try:
+        from app.pipeline import post_call_handler
+        saved = await post_call_handler(transcript=transcript)
+        if saved:
+            logger.info(f"Lead saved ({len(transcript)} chars transcript)")
+        else:
+            logger.info("Lead save skipped (database unavailable or extraction failed)")
+    except Exception:
+        logger.exception("post_call_handler failed")

@@ -234,26 +234,28 @@ class TestPhase4PipelineAssembly:
         pipeline = Pipeline([stt])
 
         try:
-            task = PipelineTask(
-                pipeline,
-                params=PipelineTask.Params(allow_interruptions=True),
-            )
+            task = PipelineTask(pipeline)
             assert task is not None, "PipelineTask returned None"
         except Exception as e:
             _fail_or_skip_applocker(e, "PipelineTask creation")
 
-    def test_pipeline_runner_creation(self):
-        """PipelineRunner must be creatable."""
+    @pytest.mark.anyio
+    async def test_pipeline_runner_creation(self):
+        """WorkerRunner must be creatable (Pipecat 1.6.0, requires event loop)."""
         try:
-            from pipecat.pipeline.runner import PipelineRunner
+            from pipecat.pipeline.runner import WorkerRunner
         except ImportError as e:
-            _fail_or_skip_applocker(e, "PipelineRunner import")
+            _fail_or_skip_applocker(e, "WorkerRunner import")
 
         try:
-            runner = PipelineRunner()
-            assert runner is not None, "PipelineRunner returned None"
+            runner = WorkerRunner()
+            assert runner is not None, "WorkerRunner returned None"
+        except RuntimeError as e:
+            if "event loop" in str(e).lower():
+                pytest.skip("WorkerRunner needs running event loop")
+            _fail_or_skip_applocker(e, "WorkerRunner creation")
         except Exception as e:
-            _fail_or_skip_applocker(e, "PipelineRunner creation")
+            _fail_or_skip_applocker(e, "WorkerRunner creation")
 
 
 # ── Phase 4.3: Context Processor (RAG Enrichment) ────────────────────

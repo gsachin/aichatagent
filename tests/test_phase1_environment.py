@@ -78,7 +78,7 @@ class TestPhase1CudaGpu:
         if not torch.cuda.is_available():
             pytest.skip("No CUDA GPU detected")
 
-        total_mb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        total_mb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         assert total_mb >= 5.5, (
             f"GPU has only {total_mb:.1f} GB VRAM — need ≥5.5 GB "
             f"for Qwen 2.5 6B + Whisper + Kokoro"

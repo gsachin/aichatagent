@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Test artifacts
+tests/test_results/*.wav
+test_out.wav
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# ChromaDB (large binary files)
+chroma_local_db/
+
+# Pytest
+.pytest_cache/

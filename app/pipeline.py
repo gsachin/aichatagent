@@ -57,7 +57,7 @@ def _vram_info() -> str:
         return "VRAM: N/A"
     try:
         import torch
-        total = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         used = torch.cuda.memory_allocated(0) / (1024**3)
         return f"VRAM: {used:.2f} GB used / {total:.2f} GB total"
     except Exception:
@@ -260,13 +260,10 @@ async def create_local_voice_pipeline(transport=None):
     # ---- 6. Create Task & Runner -------------------------------------
     try:
         from pipecat.pipeline.task import PipelineTask
-        from pipecat.pipeline.runner import PipelineRunner
+        from pipecat.pipeline.runner import WorkerRunner
 
-        task = PipelineTask(
-            pipeline,
-            params=PipelineTask.Params(allow_interruptions=True),
-        )
-        runner = PipelineRunner()
+        task = PipelineTask(pipeline)
+        runner = WorkerRunner()
 
         logger.info(f"  [OK] Pipeline assembled: {len(processors)} processors")
         logger.info(f"  Pipeline: {' → '.join(type(p).__name__ for p in processors)}")
