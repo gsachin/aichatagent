@@ -76,7 +76,20 @@ def load_rag_chain():
 
     loader = PyPDFLoader(pdf_path)
     raw_docs = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+    # Strip repeating PDF header from each page before chunking.
+    # This prevents the embeddings from clustering on header text
+    # rather than the actual unique content.
+    import re
+    _header_pat = re.compile(
+        r'UMD\s+&\s+FDU\s+[-—]\s+University\s+Profile\s+Report\s*\n?',
+        re.IGNORECASE
+    )
+    for doc in raw_docs:
+        doc.page_content = _header_pat.sub('', doc.page_content).strip()
+
+    # Larger chunks with less overlap — captures more unique content per chunk
+    # so headers (now stripped) can't dominate the embedding vector.
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=100)
     chunks = splitter.split_documents(raw_docs)
 
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
@@ -85,23 +98,28 @@ def load_rag_chain():
         embedding=embeddings,
         persist_directory="./chroma_local_db"
     )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    # Use MMR (Maximal Marginal Relevance) for diverse retrieval.
+    retriever = vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.5}
+    )
 
-    # Use the VRAM-optimized Qwen model
-    llm = ChatOllama(model="qwen2.5:7b", temperature=0.0, num_ctx=2048)
+    # Use the VRAM-optimized Qwen instruct model
+    llm = ChatOllama(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
 
     system_prompt = (
-        "You are a warm, helpful, and highly precise University Admissions Advisor. "
-        "Your goal is to guide students through their inquiries using ONLY the provided university profile context.\n\n"
-        "CONVERSATIONAL TONE RULES:\n"
-        "1. Be encouraging, professional, and approachable.\n"
-        "2. Avoid mechanical language. Use natural transitions.\n"
-        "3. Keep responses concise and easy to read.\n"
-        "4. When responding to voice input, keep answers brief and spoken-word friendly.\n\n"
-        "STRICT FACTUAL CONSTRAINTS:\n"
-        "1. Rely EXCLUSIVELY on the provided context. If a detail isn't in the text, politely say so.\n"
-        "2. Never confuse details between UMD and FDU.\n"
-        "3. Present structural information (tuition, deadlines, courses) in Markdown.\n\n"
+        "You are a helpful University Admissions Advisor. "
+        "Answer questions using the provided university profile context.\n\n"
+        "RULES:\n"
+        "1. Use facts from the context. When the context has relevant data, "
+        "present it clearly — use Markdown for tables and figures.\n"
+        "2. NEVER invent numbers, fees, URLs, or program names. "
+        "Only cite dollar amounts and figures that appear in the context.\n"
+        "3. Keep UMD and FDU information clearly separated. "
+        "Label which university each fact belongs to.\n"
+        "4. If the context truly has NO relevant data for a question, "
+        "say: \"I don't have that specific information in the university profile.\"\n"
+        "5. Be concise and conversational.\n\n"
         "Context:\n{context}"
     )
 
@@ -166,6 +184,23 @@ def text_to_audio_bytes(text: str, voice: str = "af_heart") -> bytes:
         wf.writeframes(audio_int16.tobytes())
     buf.seek(0)
     return buf.read()
+
+
+def truncate_for_tts(text: str, max_chars: int = 800) -> str:
+    """Truncate text at a sentence boundary for natural-sounding TTS."""
+    if len(text) <= max_chars:
+        return text
+    # Find the last sentence-ending punctuation before the limit
+    truncated = text[:max_chars]
+    for punct in (". ", "? ", "! ", ".\n", "?\n", "!\n"):
+        last = truncated.rfind(punct)
+        if last > max_chars * 0.6:  # Only use if reasonably close to limit
+            return text[:last + 1]
+    # Fallback: break at last space
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        return text[:last_space] + "..."
+    return truncated + "..."
 
 
 # ── Transcribe audio ────────────────────────────────────────────────
@@ -288,8 +323,7 @@ if audio_value is not None:
             if st.session_state.tts_enabled:
                 with st.spinner("🔊 Generating audio..."):
                     try:
-                        # Truncate long text to keep TTS generation time reasonable
-                        tts_text = answer[:500] + "..." if len(answer) > 500 else answer
+                        tts_text = truncate_for_tts(answer)
                         audio_for_msg = text_to_audio_bytes(tts_text)
                     except Exception as e:
                         st.warning(f"Audio generation skipped: {e}")
