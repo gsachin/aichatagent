@@ -17,6 +17,10 @@ torch
 ollama
 chromadb
 
+# ONNX Runtime — GPU version for CUDA-accelerated Kokoro TTS (~2x speedup).
+# Swap to 'onnxruntime' (CPU-only) if no NVIDIA GPU is available.
+onnxruntime-gpu
+
 # ── Voice AI Pipeline (Pipecat) ──────────────────────────────────────
 pipecat-ai[whisper,kokoro]
 
