@@ -57,71 +57,23 @@ st.caption("Ask me anything about UMD or FDU — type or use your voice.")
 @st.cache_resource(show_spinner=False)
 def load_rag_chain():
     """Initialize the full RAG pipeline and return the chain."""
-    from langchain_community.document_loaders import PyPDFLoader
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_community.vectorstores import Chroma
-    from langchain_ollama import OllamaEmbeddings, ChatOllama
+    from langchain_ollama import ChatOllama
     from langchain_classic.chains import create_retrieval_chain
     from langchain_classic.chains.combine_documents import create_stuff_documents_chain
     from langchain_core.prompts import ChatPromptTemplate
 
-    pdf_path = os.path.join(os.getcwd(), "content", "sample_data", "UMD_and_FDU_University_Profile_Report.pdf")
-    if not os.path.exists(pdf_path):
-        alt = "content/sample_data/UMD_and_FDU_University_Profile_Report.pdf"
-        if os.path.exists(alt):
-            pdf_path = alt
-        else:
-            st.error(f"PDF not found. Make sure the file exists at: {pdf_path}")
-            st.stop()
+    # Use shared RAG module — single source of truth for all interfaces
+    from app.rag import get_retriever, SYSTEM_PROMPT
 
-    loader = PyPDFLoader(pdf_path)
-    raw_docs = loader.load()
-    # Strip repeating PDF header from each page before chunking.
-    # This prevents the embeddings from clustering on header text
-    # rather than the actual unique content.
-    import re
-    _header_pat = re.compile(
-        r'UMD\s+&\s+FDU\s+[-—]\s+University\s+Profile\s+Report\s*\n?',
-        re.IGNORECASE
-    )
-    for doc in raw_docs:
-        doc.page_content = _header_pat.sub('', doc.page_content).strip()
-
-    # Larger chunks with less overlap — captures more unique content per chunk
-    # so headers (now stripped) can't dominate the embedding vector.
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=100)
-    chunks = splitter.split_documents(raw_docs)
-
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
-    vector_store = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory="./chroma_local_db"
-    )
-    # Use MMR (Maximal Marginal Relevance) for diverse retrieval.
-    retriever = vector_store.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.5}
-    )
+    retriever = get_retriever()
+    if retriever is None:
+        st.error("Failed to initialize vector store. Check that the PDF exists.")
+        st.stop()
 
     # Use the VRAM-optimized Qwen instruct model
     llm = ChatOllama(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
 
-    system_prompt = (
-        "You are a helpful University Admissions Advisor. "
-        "Answer questions using the provided university profile context.\n\n"
-        "RULES:\n"
-        "1. Use facts from the context. When the context has relevant data, "
-        "present it clearly — use Markdown for tables and figures.\n"
-        "2. NEVER invent numbers, fees, URLs, or program names. "
-        "Only cite dollar amounts and figures that appear in the context.\n"
-        "3. Keep UMD and FDU information clearly separated. "
-        "Label which university each fact belongs to.\n"
-        "4. If the context truly has NO relevant data for a question, "
-        "say: \"I don't have that specific information in the university profile.\"\n"
-        "5. Be concise and conversational.\n\n"
-        "Context:\n{context}"
-    )
+    system_prompt = SYSTEM_PROMPT
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),

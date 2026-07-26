@@ -25,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 # Load .env
@@ -299,6 +299,56 @@ async def twilio_voice_webhook():
     return Response(content=twiml, media_type="application/xml")
 
 
+# ── HTTP: Twilio WhatsApp webhook ─────────────────────────────────────
+
+WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Message>{answer}</Message>
+</Response>"""
+
+
+@app.post("/twilio/whatsapp")
+async def twilio_whatsapp_webhook(
+    Body: str = Form(default=""),
+    From: str = Form(default=""),
+    WaId: str = Form(default=""),
+):
+    """
+    Twilio WhatsApp webhook — receives incoming WhatsApp messages,
+    runs them through the RAG pipeline, and returns the answer.
+
+    Configure this URL in Twilio Console:
+        https://<your-tunnel>/twilio/whatsapp
+    """
+    if not Body.strip():
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(
+            answer="Hello! Send me a question about UMD or FDU admissions."
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    logger.info(f"WhatsApp from {From} (WaId={WaId}): {Body[:100]}")
+
+    # Run RAG in thread pool — ollama.chat() is blocking
+    import asyncio as _asyncio
+    from app.pipeline import run_rag_query_sync
+
+    try:
+        answer = await _asyncio.to_thread(run_rag_query_sync, Body)
+    except Exception as e:
+        logger.exception("WhatsApp RAG failed")
+        answer = None
+
+    if not answer:
+        answer = "Sorry, I couldn't process your question right now. Please try again."
+
+    # Escape XML special characters
+    answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
+    logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
+    return Response(content=twiml, media_type="application/xml")
+
+
 # ── HTTP: Health check ───────────────────────────────────────────────
 
 @app.get("/")
@@ -319,6 +369,7 @@ async def health_check():
             "websocket_text_rag": "/ws/voice/text",
             "twilio_webhook": "/twilio/voice",
             "twilio_websocket": "/ws/twilio",
+            "whatsapp_webhook": "/twilio/whatsapp",
         },
     })
 

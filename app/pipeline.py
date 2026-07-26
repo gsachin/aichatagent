@@ -117,29 +117,23 @@ def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> str:
 def build_rag_prompt(transcript: str) -> str:
     """
     Enrich the transcribed user query with ChromaDB context.
-    Returns the full prompt string to send to the LLM.
+    Uses shared RAG module for consistent retrieval quality.
 
     This function is called between STT output and LLM input.
     """
+    from app.rag import retrieve_context, SYSTEM_PROMPT
+
     context = retrieve_context(transcript)
 
     if context:
-        prompt = (
-            "You are a helpful university admissions assistant. "
-            "Answer the user's question using ONLY the provided context. "
-            "If the context does not contain the answer, say: "
-            "'I don't have that information in my knowledge base.'\n\n"
-            f"Context:\n{context}\n\n"
-            f"Student's question: {transcript}"
-        )
+        prompt = SYSTEM_PROMPT.format(context=context)
     else:
         prompt = (
             "You are a helpful university admissions assistant. "
             "Answer the user's question to the best of your ability. "
             "If you're unsure, say so.\n\n"
-            f"Student's question: {transcript}"
         )
-
+    prompt += f"Student's question: {transcript}"
     return prompt
 
 
@@ -299,6 +293,15 @@ async def post_call_handler(transcript: str, phone_number: str = "") -> bool:
     except Exception:
         logger.exception("post_call_handler failed")
         return False
+
+
+def run_rag_query_sync(user_text: str) -> str | None:
+    """
+    Synchronous RAG query — safe to call from asyncio.to_thread().
+    Uses shared RAG module for consistent quality across all interfaces.
+    """
+    from app.rag import query_rag
+    return query_rag(user_text)
 
 
 async def test_pipeline_with_text(user_text: str) -> str | None:
