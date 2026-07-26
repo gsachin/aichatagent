@@ -21,6 +21,11 @@ chromadb
 # Swap to 'onnxruntime' (CPU-only) if no NVIDIA GPU is available.
 onnxruntime-gpu
 
+# ── Speech-to-Text ────────────────────────────────────────────────────
+# openai-whisper used for WhatsApp voice note transcription.
+# Avoids faster-whisper's PyAV DLL blocked by AppLocker on this machine.
+openai-whisper
+
 # ── Voice AI Pipeline (Pipecat) ──────────────────────────────────────
 pipecat-ai[whisper,kokoro]
 

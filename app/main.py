@@ -17,16 +17,18 @@ Endpoints:
 Run: python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 """
 
-import asyncio
-import base64
-import json
-import logging
 import os
 import sys
-from pathlib import Path
 
-from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+# ── Bypass AppLocker DLL blocks (MUST be before any other imports) ──
+# The xxhash DLL is blocked by Windows Application Control policy.
+# LangChain → langsmith → xxhash triggers the block.
+# These env vars disable langsmith tracing to avoid the import chain.
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGCHAIN_ENDPOINT", "")
+os.environ.setdefault("LANGCHAIN_API_KEY", "")
+os.environ.setdefault("LANGCHAIN_PROJECT", "")
+os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "0")
 
 # Load .env
 try:
@@ -34,6 +36,15 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+import asyncio
+import base64
+import json
+import logging
+from pathlib import Path
+
+from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_api")
@@ -299,6 +310,82 @@ async def twilio_voice_webhook():
     return Response(content=twiml, media_type="application/xml")
 
 
+# ── WhatsApp voice transcription ───────────────────────────────────────
+
+# Lazily loaded Whisper model (cached after first use)
+_stt_model = None
+
+
+def _get_stt_model():
+    """Load openai-whisper model — cached across requests.
+    Uses openai-whisper instead of faster-whisper because the PyAV DLL
+    (required by faster-whisper) is blocked by AppLocker on this machine.
+    """
+    global _stt_model
+    if _stt_model is not None:
+        return _stt_model
+    import whisper
+    _stt_model = whisper.load_model("tiny")  # smallest model, fast on CPU
+    logger.info("Whisper tiny model loaded")
+    return _stt_model
+
+
+async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
+    """
+    Download WhatsApp voice note from Twilio and transcribe via Whisper.
+    WhatsApp sends audio as OGG/Opus or MP4/AAC — soundfile handles both.
+    Returns transcribed text, or empty string on failure.
+    """
+    import asyncio as _asyncio
+    import io as _io
+    import tempfile
+    import urllib.request
+
+    try:
+        # Download audio from Twilio
+        logger.info(f"Downloading audio: {media_url[:80]}...")
+        req = urllib.request.Request(media_url)
+        # Twilio requires basic auth for media access
+        from app.config import settings
+        auth_str = base64.b64encode(
+            f"{settings.TWILIO_ACCOUNT_SID}:{settings.TWILIO_AUTH_TOKEN}".encode()
+        ).decode()
+        req.add_header("Authorization", f"Basic {auth_str}")
+
+        audio_bytes = await _asyncio.to_thread(
+            lambda: urllib.request.urlopen(req, timeout=30).read()
+        )
+        logger.info(f"Downloaded {len(audio_bytes)} bytes of audio")
+
+        # Convert to 16kHz mono PCM using soundfile (supports OGG/MP4/WAV)
+        import soundfile as sf
+        import numpy as np
+
+        audio_np, orig_sr = sf.read(_io.BytesIO(audio_bytes))
+        if audio_np.ndim > 1:
+            audio_np = audio_np.mean(axis=1)  # Stereo → mono
+
+        # Resample to 16kHz if needed (Whisper expects 16kHz)
+        if orig_sr != 16000 and len(audio_np) > 0:
+            from scipy.signal import resample
+            target_len = int(len(audio_np) * 16000 / orig_sr)
+            audio_np = resample(audio_np, target_len)
+
+        logger.info(f"Audio: {len(audio_np)/16000:.1f}s @ 16kHz")
+
+        # Transcribe with openai-whisper (expects float32 array)
+        model = _get_stt_model()
+        result = model.transcribe(audio_np.astype(np.float32), language="en")
+        transcript = result["text"].strip()
+
+        logger.info(f"Transcribed ({len(transcript)} chars): {transcript[:100]}...")
+        return transcript
+
+    except Exception as e:
+        logger.exception(f"Voice transcription failed: {e}")
+        return ""
+
+
 # ── HTTP: Twilio WhatsApp webhook ─────────────────────────────────────
 
 WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -310,27 +397,43 @@ WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(
     Body: str = Form(default=""),
+    MediaUrl0: str = Form(default=""),
+    MediaContentType0: str = Form(default=""),
     From: str = Form(default=""),
     WaId: str = Form(default=""),
 ):
     """
-    Twilio WhatsApp webhook — receives incoming WhatsApp messages,
+    Twilio WhatsApp webhook — receives incoming text OR voice messages,
     runs them through the RAG pipeline, and returns the answer.
+
+    Supports:
+    - Text messages (Body field)
+    - Voice notes (MediaUrl0 — auto-downloaded + transcribed via Whisper)
 
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
     """
+    import asyncio as _asyncio
+    from app.pipeline import run_rag_query_sync
+
+    # ── Handle voice notes (MediaUrl0) ───────────────────────────
+    if not Body.strip() and MediaUrl0.strip():
+        logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
+        Body = await _transcribe_whatsapp_audio(MediaUrl0, MediaContentType0)
+        if not Body:
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(
+                answer="I couldn't understand the audio. Please try again or type your question."
+            )
+            return Response(content=twiml, media_type="application/xml")
+
+    # ── Handle text (or transcribed voice) ───────────────────────
     if not Body.strip():
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer="Hello! Send me a question about UMD or FDU admissions."
+            answer="Hello! Send me a question about UMD or FDU admissions, or send a voice note."
         )
         return Response(content=twiml, media_type="application/xml")
 
     logger.info(f"WhatsApp from {From} (WaId={WaId}): {Body[:100]}")
-
-    # Run RAG in thread pool — ollama.chat() is blocking
-    import asyncio as _asyncio
-    from app.pipeline import run_rag_query_sync
 
     try:
         answer = await _asyncio.to_thread(run_rag_query_sync, Body)
