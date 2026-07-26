@@ -38,7 +38,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Voice Mode")
     st.markdown("🎤 **Click the mic button** below the chat to ask questions by voice.")
-    st.markdown("🔊 Responses can be read aloud (TTS coming soon).")
+    st.session_state.setdefault("tts_enabled", True)
+    tts_enabled = st.checkbox("🔊 Speak responses aloud", value=st.session_state.tts_enabled)
+    st.session_state.tts_enabled = tts_enabled
     st.markdown("---")
     st.markdown("### Powered by")
     st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
@@ -86,7 +88,7 @@ def load_rag_chain():
     retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
     # Use the VRAM-optimized Qwen model
-    llm = ChatOllama(model="qwen3.6:latest", temperature=0.0, num_ctx=2048)
+    llm = ChatOllama(model="qwen2.5:7b", temperature=0.0, num_ctx=2048)
 
     system_prompt = (
         "You are a warm, helpful, and highly precise University Admissions Advisor. "
@@ -135,13 +137,35 @@ def _has_cuda() -> bool:
 
 
 @st.cache_resource(show_spinner=False)
-def load_tts_service():
-    """Load Kokoro TTS service for text-to-speech output."""
+def load_tts():
+    """Load Kokoro TTS engine (local onnx, no internet needed)."""
     try:
-        from pipecat.services.kokoro.tts import KokoroTTSService
-        return KokoroTTSService(voice_id="af_heart")
+        from kokoro_onnx import Kokoro
+        cache_dir = os.path.expanduser(r"~\.cache\pipecat\kokoro-onnx")
+        model_path = os.path.join(cache_dir, "kokoro-v1.0.onnx")
+        voices_path = os.path.join(cache_dir, "voices-v1.0.bin")
+        return Kokoro(model_path, voices_path)
     except Exception:
         return None
+
+
+def text_to_audio_bytes(text: str, voice: str = "af_heart") -> bytes:
+    """Convert text to WAV audio bytes using Kokoro TTS."""
+    kokoro = load_tts()
+    if kokoro is None:
+        raise RuntimeError("Kokoro TTS not available")
+    audio, sr = kokoro.create(text, voice=voice, speed=1.0)
+    # Convert float32 → int16 PCM, then wrap in WAV container
+    audio_int16 = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    import wave
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(audio_int16.tobytes())
+    buf.seek(0)
+    return buf.read()
 
 
 # ── Transcribe audio ────────────────────────────────────────────────
@@ -186,8 +210,16 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Voice input (audio_input) ──────────────────────────────────────
-audio_value = st.audio_input("🎤 Click to ask by voice")
+# ── Voice input (audio_input) with loop guard ────────────────────
+# Dynamic key prevents infinite loop: st.audio_input persists data
+# across st.rerun() — changing the key creates a fresh widget each time.
+if "voice_key" not in st.session_state:
+    st.session_state.voice_key = 0
+
+audio_value = st.audio_input(
+    "🎤 Click to ask by voice",
+    key=f"voice_{st.session_state.voice_key}"
+)
 
 if audio_value is not None:
     # Show what was recorded
@@ -244,6 +276,16 @@ if audio_value is not None:
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
 
+            # ── TTS audio playback ──────────────────────────────
+            if st.session_state.tts_enabled:
+                with st.spinner("🔊 Generating audio..."):
+                    try:
+                        audio_bytes = text_to_audio_bytes(answer)
+                        st.audio(audio_bytes, format="audio/wav", autoplay=True)
+                    except Exception:
+                        pass  # Silently fall back to text-only
+
+        st.session_state.voice_key += 1  # Reset widget to break rerun loop
         st.rerun()
 
 # ── Text input ─────────────────────────────────────────────────────
@@ -262,6 +304,15 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
 
         st.markdown(answer)
         st.session_state.messages.append({"role": "assistant", "content": answer})
+
+        # ── TTS audio playback ──────────────────────────────────
+        if st.session_state.tts_enabled:
+            with st.spinner("🔊 Generating audio..."):
+                try:
+                    audio_bytes = text_to_audio_bytes(answer)
+                    st.audio(audio_bytes, format="audio/wav", autoplay=True)
+                except Exception:
+                    pass  # Silently fall back to text-only
 
 # ── Clear chat button ──────────────────────────────────────────────
 col1, col2 = st.columns([1, 4])

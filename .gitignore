@@ -11,6 +11,7 @@ venv/
 # Test artifacts
 tests/test_results/*.wav
 test_out.wav
+test_tts_output.wav
 
 # IDE
 .vscode/
