@@ -205,10 +205,18 @@ if "messages" not in st.session_state:
         {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything — by text or voice."}
     ]
 
+# Track which audio messages have been auto-played (prevent replay on rerun)
+if "played_audio_idx" not in st.session_state:
+    st.session_state.played_audio_idx = -1
+
 # ── Display chat history ───────────────────────────────────────────
-for msg in st.session_state.messages:
+for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        # Auto-play new audio that hasn't been played yet
+        if msg.get("audio") and i > st.session_state.played_audio_idx:
+            st.audio(msg["audio"], format="audio/wav", autoplay=True)
+            st.session_state.played_audio_idx = i
 
 # ── Voice input (audio_input) with loop guard ────────────────────
 # Dynamic key prevents infinite loop: st.audio_input persists data
@@ -274,16 +282,23 @@ if audio_value is not None:
                     answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
 
             st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
 
-            # ── TTS audio playback ──────────────────────────────
+            # ── Generate TTS audio (store in message for chat history playback) ─
+            audio_for_msg = None
             if st.session_state.tts_enabled:
                 with st.spinner("🔊 Generating audio..."):
                     try:
-                        audio_bytes = text_to_audio_bytes(answer)
-                        st.audio(audio_bytes, format="audio/wav", autoplay=True)
-                    except Exception:
-                        pass  # Silently fall back to text-only
+                        # Truncate long text to keep TTS generation time reasonable
+                        tts_text = answer[:500] + "..." if len(answer) > 500 else answer
+                        audio_for_msg = text_to_audio_bytes(tts_text)
+                    except Exception as e:
+                        st.warning(f"Audio generation skipped: {e}")
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": answer,
+                "audio": audio_for_msg
+            })
 
         st.session_state.voice_key += 1  # Reset widget to break rerun loop
         st.rerun()
@@ -303,16 +318,23 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
 
         st.markdown(answer)
-        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-        # ── TTS audio playback ──────────────────────────────────
+        # ── Generate TTS audio (store in message for chat history playback) ─
+        audio_for_msg = None
         if st.session_state.tts_enabled:
             with st.spinner("🔊 Generating audio..."):
                 try:
-                    audio_bytes = text_to_audio_bytes(answer)
-                    st.audio(audio_bytes, format="audio/wav", autoplay=True)
-                except Exception:
-                    pass  # Silently fall back to text-only
+                    # Truncate long text to keep TTS generation time reasonable
+                    tts_text = answer[:500] + "..." if len(answer) > 500 else answer
+                    audio_for_msg = text_to_audio_bytes(tts_text)
+                except Exception as e:
+                    st.warning(f"Audio generation skipped: {e}")
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer,
+            "audio": audio_for_msg
+        })
 
 # ── Clear chat button ──────────────────────────────────────────────
 col1, col2 = st.columns([1, 4])
