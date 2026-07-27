@@ -12,6 +12,9 @@ venv/
 tests/test_results/*.wav
 test_out.wav
 test_tts_output.wav
+test_voice_output.wav
+test_voice_pipeline.wav
+app/static/audio/
 
 # IDE
 .vscode/
