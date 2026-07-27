@@ -17,6 +17,15 @@ import re
 import urllib.request
 from pathlib import Path
 
+# Bypass AppLocker DLL blocks — same class of issue as hf_xet.dll
+os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "0")
+
+# Bypass langsmith/xxhash DLL block triggered by langchain_core imports
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGCHAIN_ENDPOINT", "")
+os.environ.setdefault("LANGCHAIN_API_KEY", "")
+os.environ.setdefault("LANGCHAIN_PROJECT", "")
+
 logger = logging.getLogger("rag_module")
 
 # ── Configuration ────────────────────────────────────────────────────
@@ -69,15 +78,31 @@ def get_vector_store():
     Build or load the ChromaDB vector store.
     Cached at module level — built once per process.
 
-    Uses:
-    - Header stripping to prevent embedding bias
-    - Larger chunks (1500 chars) for more content per chunk
-    - MMR retrieval for diversity
+    Tries LangChain first (MMR + header stripping). Falls back to raw
+    ChromaDB if LangChain imports are blocked by AppLocker policies.
     """
     global _vector_store
     if _vector_store is not None:
         return _vector_store
 
+    if not CHROMA_DB_PATH.is_dir() or not any(CHROMA_DB_PATH.iterdir()):
+        logger.warning(f"ChromaDB not found at {CHROMA_DB_PATH} — run Streamlit first to build it")
+        return None
+
+    try:
+        _vector_store = _build_with_langchain()
+        if _vector_store is not None:
+            return _vector_store
+    except Exception as e:
+        logger.warning(f"LangChain vector store unavailable ({e}), using raw ChromaDB")
+
+    # Fallback: raw ChromaDB (no LangChain dependency)
+    _vector_store = _build_raw_chromadb()
+    return _vector_store
+
+
+def _build_with_langchain():
+    """Build vector store using LangChain (MMR + header stripping)."""
     from langchain_community.document_loaders import PyPDFLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_community.vectorstores import Chroma
@@ -87,38 +112,68 @@ def get_vector_store():
         logger.error(f"PDF not found: {PDF_PATH}")
         return None
 
-    if CHROMA_DB_PATH.is_dir() and any(CHROMA_DB_PATH.iterdir()):
-        # Load existing collection
-        logger.info(f"Loading existing ChromaDB from {CHROMA_DB_PATH}")
-        embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-        _vector_store = Chroma(
-            persist_directory=str(CHROMA_DB_PATH),
-            embedding_function=embeddings,
-        )
-        return _vector_store
-
-    # Build from scratch
-    logger.info(f"Building ChromaDB from {PDF_PATH}...")
+    logger.info(f"Building ChromaDB with LangChain from {PDF_PATH}...")
     loader = PyPDFLoader(str(PDF_PATH))
     raw_docs = loader.load()
 
-    # Strip repeating headers
     for doc in raw_docs:
         doc.page_content = _HEADER_PATTERN.sub('', doc.page_content).strip()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks = splitter.split_documents(raw_docs)
-    logger.info(f"Split into {len(chunks)} chunks (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})")
+    logger.info(f"Split into {len(chunks)} chunks")
 
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-    _vector_store = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory=str(CHROMA_DB_PATH),
+    return Chroma.from_documents(
+        documents=chunks, embedding=embeddings, persist_directory=str(CHROMA_DB_PATH)
     )
-    return _vector_store
+
+
+def _build_raw_chromadb():
+    """Fallback: load existing ChromaDB without LangChain dependency."""
+    import chromadb
+    try:
+        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
+        embed_fn = OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+    except Exception:
+        embed_fn = None
+
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
+    collections = client.list_collections()
+    if not collections:
+        return None
+
+    first = collections[0]
+    coll_name = first if isinstance(first, str) else first.name
+    collection = client.get_collection(coll_name, embedding_function=embed_fn)
+    # Wrap in a simple object that mimics the LangChain interface we need
+    return _RawChromaWrapper(collection)
+
+
+class _RawChromaWrapper:
+    """Minimal wrapper around raw ChromaDB collection for MMR-free retrieval."""
+    def __init__(self, collection):
+        self._coll = collection
+
+    def as_retriever(self, **kwargs):
+        return _RawRetriever(self._coll, kwargs.get("search_kwargs", {}))
+
+
+class _FakeDoc:
+    """Minimal doc stub — avoids langchain_core import (AppLocker block)."""
+    def __init__(self, content):
+        self.page_content = content
+
+
+class _RawRetriever:
+    def __init__(self, collection, kwargs):
+        self._coll = collection
+        self._k = kwargs.get("k", 5)
+
+    def invoke(self, query):
+        results = self._coll.query(query_texts=[query], n_results=self._k)
+        docs = results.get("documents", [[]])[0]
+        return [_FakeDoc(d) for d in docs]
 
 
 def get_retriever():

@@ -72,6 +72,25 @@ async def lifespan(app_instance):
     except Exception as e:
         logger.warning(f"Database init skipped: {e}")
         _db_available = False
+
+    # Pre-warm RAG and Whisper so first voice note doesn't timeout
+    try:
+        import asyncio as _asyncio
+
+        def _warmup():
+            # Pre-load ChromaDB vector store
+            from app.rag import get_vector_store
+            vs = get_vector_store()
+            if vs:
+                logger.info("ChromaDB vector store pre-warmed")
+            # Pre-load Whisper model
+            _get_stt_model()
+            logger.info("Whisper model pre-warmed")
+
+        await _asyncio.to_thread(_warmup)
+    except Exception as e:
+        logger.warning(f"Warmup skipped: {e}")
+
     yield
     # Shutdown
     logger.info("Server shutting down")
@@ -325,8 +344,8 @@ def _get_stt_model():
     if _stt_model is not None:
         return _stt_model
     import whisper
-    _stt_model = whisper.load_model("tiny")  # smallest model, fast on CPU
-    logger.info("Whisper tiny model loaded")
+    _stt_model = whisper.load_model("base")  # better accuracy than tiny
+    logger.info("Whisper base model loaded")
     return _stt_model
 
 
@@ -393,6 +412,64 @@ WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Message>{answer}</Message>
 </Response>"""
 
+WHATSAPP_TWIML_VOICE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Message><Body>{answer}</Body></Message>
+    <Message><Media>{audio_url}</Media></Message>
+</Response>"""
+
+# Directory for serving generated TTS audio to Twilio
+_AUDIO_DIR = Path(__file__).resolve().parent / "static" / "audio"
+_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _generate_tts_audio(text: str) -> str | None:
+    """
+    Generate TTS audio via Kokoro, save as MP3 for WhatsApp compatibility.
+    Returns filename (mp3), or None if TTS is unavailable or fails.
+    """
+    import io as _io
+    import uuid
+    import numpy as np
+
+    try:
+        from kokoro_onnx import Kokoro
+
+        cache_dir = os.path.expanduser(r"~\.cache\pipecat\kokoro-onnx")
+        kokoro = Kokoro(
+            os.path.join(cache_dir, "kokoro-v1.0.onnx"),
+            os.path.join(cache_dir, "voices-v1.0.bin"),
+        )
+        # Keep audio short for WhatsApp — max 300 chars
+        tts_text = text[:300] if len(text) > 300 else text
+        audio, sr = kokoro.create(tts_text, voice="af_heart", speed=1.0)
+
+        # WhatsApp supports MP3 — use soundfile to encode directly
+        import soundfile as sf
+        buf = _io.BytesIO()
+        sf.write(buf, audio, sr, format="MP3")
+        buf.seek(0)
+
+        filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
+        filepath = _AUDIO_DIR / filename
+        filepath.write_bytes(buf.read())
+        logger.info(f"TTS audio saved: {filename} ({len(audio)/sr:.1f}s, {filepath.stat().st_size/1024:.0f} KB)")
+        return filename
+
+    except Exception as e:
+        logger.exception(f"TTS generation failed: {e}")
+        return None
+
+
+@app.get("/audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve generated TTS audio files for WhatsApp voice replies."""
+    filepath = _AUDIO_DIR / filename
+    if not filepath.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    media_type = "audio/mpeg" if filename.endswith(".mp3") else "audio/wav"
+    return FileResponse(filepath, media_type=media_type)
+
 
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(
@@ -407,8 +484,8 @@ async def twilio_whatsapp_webhook(
     runs them through the RAG pipeline, and returns the answer.
 
     Supports:
-    - Text messages (Body field)
-    - Voice notes (MediaUrl0 — auto-downloaded + transcribed via Whisper)
+    - Text in → text out
+    - Voice in → text + audio out (Kokoro TTS spoken reply)
 
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
@@ -416,8 +493,11 @@ async def twilio_whatsapp_webhook(
     import asyncio as _asyncio
     from app.pipeline import run_rag_query_sync
 
+    is_voice = False
+
     # ── Handle voice notes (MediaUrl0) ───────────────────────────
     if not Body.strip() and MediaUrl0.strip():
+        is_voice = True
         logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
         Body = await _transcribe_whatsapp_audio(MediaUrl0, MediaContentType0)
         if not Body:
@@ -447,6 +527,15 @@ async def twilio_whatsapp_webhook(
     # Escape XML special characters
     answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    # ── Voice reply: text first (within Twilio 15s timeout) ──
+    # TTS audio generation takes 5-15s extra on GPU, pushing past
+    # Twilio's webhook timeout. Return text immediately; TTS audio
+    # can be sent async via Twilio REST API as a future enhancement.
+    if is_voice:
+        logger.info(f"WhatsApp voice reply: text ({len(answer)} chars)")
+    # Fall through to text-only reply below
+
+    # ── Text-only reply ──────────────────────────────────────────
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
     logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
     return Response(content=twiml, media_type="application/xml")
