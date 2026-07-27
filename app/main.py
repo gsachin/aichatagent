@@ -408,19 +408,25 @@ async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
 # ── Async voice note processing ────────────────────────────────────────
 
 
-def _send_whatsapp_message(to_number: str, from_number: str, body: str):
-    """Send a WhatsApp message via Twilio REST API."""
+def _send_whatsapp_message(
+    to_number: str,
+    from_number: str,
+    body: str,
+    media_url: str | None = None,
+):
+    """Send a WhatsApp message via Twilio REST API, optionally with media."""
     try:
         from twilio.rest import Client
         from app.config import settings
 
         client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        msg = client.messages.create(
-            from_=from_number,
-            body=body,
-            to=to_number,
-        )
-        logger.info(f"Twilio message sent: {msg.sid} → {to_number}")
+        kwargs = {"from_": from_number, "body": body, "to": to_number}
+        if media_url:
+            kwargs["media_url"] = [media_url]
+
+        msg = client.messages.create(**kwargs)
+        extra = " + audio" if media_url else ""
+        logger.info(f"Twilio message sent: {msg.sid} → {to_number}{extra}")
         return True
     except Exception as e:
         logger.exception(f"Twilio send failed: {e}")
@@ -459,14 +465,35 @@ async def _process_voice_note_async(
         answer = None
 
     if not answer:
-        answer = "Sorry, I couldn't process your question right now. Please try again."
+        _send_whatsapp_message(
+            to_number=from_number,
+            from_number=to_number,
+            body="Sorry, I couldn't process your question right now. Please try again.",
+        )
+        return
 
-    # Step 3: Send reply
-    _send_whatsapp_message(
-        to_number=from_number,
-        from_number=to_number,
-        body=answer,
-    )
+    # Step 3: Generate TTS audio
+    audio_filename = await _asyncio.to_thread(_generate_tts_audio, answer)
+
+    # Step 4: Build audio URL and send reply
+    if audio_filename:
+        tunnel_host = os.environ.get(
+            "TUNNEL_HOST", "boxes-melbourne-binary-balance.trycloudflare.com"
+        )
+        audio_url = f"https://{tunnel_host}/audio/{audio_filename}"
+        _send_whatsapp_message(
+            to_number=from_number,
+            from_number=to_number,
+            body=answer,
+            media_url=audio_url,
+        )
+    else:
+        _send_whatsapp_message(
+            to_number=from_number,
+            from_number=to_number,
+            body=answer,
+        )
+
     logger.info(f"Voice note processed: {from_number} ← {len(answer)} chars")
 
 
