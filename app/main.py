@@ -37,13 +37,13 @@ try:
 except ImportError:
     pass
 
-import asyncio
+import asyncio as _asyncio
 import base64
 import json
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO)
@@ -405,6 +405,71 @@ async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
         return ""
 
 
+# ── Async voice note processing ────────────────────────────────────────
+
+
+def _send_whatsapp_message(to_number: str, from_number: str, body: str):
+    """Send a WhatsApp message via Twilio REST API."""
+    try:
+        from twilio.rest import Client
+        from app.config import settings
+
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            from_=from_number,
+            body=body,
+            to=to_number,
+        )
+        logger.info(f"Twilio message sent: {msg.sid} → {to_number}")
+        return True
+    except Exception as e:
+        logger.exception(f"Twilio send failed: {e}")
+        return False
+
+
+async def _process_voice_note_async(
+    media_url: str,
+    content_type: str,
+    from_number: str,
+    to_number: str,
+):
+    """
+    Background task: process a WhatsApp voice note end-to-end.
+    1. Download + transcribe audio
+    2. Run RAG pipeline
+    3. Send answer via Twilio REST API
+    """
+    from app.pipeline import run_rag_query_sync
+
+    # Step 1: Transcribe
+    transcript = await _transcribe_whatsapp_audio(media_url, content_type)
+    if not transcript:
+        _send_whatsapp_message(
+            to_number=from_number,
+            from_number=to_number,
+            body="I couldn't understand the audio. Please try again or type your question.",
+        )
+        return
+
+    # Step 2: RAG
+    try:
+        answer = await _asyncio.to_thread(run_rag_query_sync, transcript)
+    except Exception:
+        logger.exception("Async RAG failed")
+        answer = None
+
+    if not answer:
+        answer = "Sorry, I couldn't process your question right now. Please try again."
+
+    # Step 3: Send reply
+    _send_whatsapp_message(
+        to_number=from_number,
+        from_number=to_number,
+        body=answer,
+    )
+    logger.info(f"Voice note processed: {from_number} ← {len(answer)} chars")
+
+
 # ── HTTP: Twilio WhatsApp webhook ─────────────────────────────────────
 
 WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -473,40 +538,42 @@ async def serve_audio(filename: str):
 
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(
+    background_tasks: BackgroundTasks,
     Body: str = Form(default=""),
     MediaUrl0: str = Form(default=""),
     MediaContentType0: str = Form(default=""),
     From: str = Form(default=""),
+    To: str = Form(default=""),
     WaId: str = Form(default=""),
 ):
     """
-    Twilio WhatsApp webhook — receives incoming text OR voice messages,
-    runs them through the RAG pipeline, and returns the answer.
+    Twilio WhatsApp webhook — receives incoming text OR voice messages.
 
-    Supports:
-    - Text in → text out
-    - Voice in → text + audio out (Kokoro TTS spoken reply)
+    - Text: synchronous RAG reply (fits in Twilio 15s timeout)
+    - Voice: returns acknowledgment immediately, processes async,
+      sends reply via Twilio REST API
 
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
     """
-    import asyncio as _asyncio
     from app.pipeline import run_rag_query_sync
 
-    is_voice = False
-
-    # ── Handle voice notes (MediaUrl0) ───────────────────────────
+    # ── Handle voice notes — async processing ──────────────────
     if not Body.strip() and MediaUrl0.strip():
-        is_voice = True
         logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
-        Body = await _transcribe_whatsapp_audio(MediaUrl0, MediaContentType0)
-        if not Body:
-            twiml = WHATSAPP_TWIML_TEMPLATE.format(
-                answer="I couldn't understand the audio. Please try again or type your question."
-            )
-            return Response(content=twiml, media_type="application/xml")
+        background_tasks.add_task(
+            _process_voice_note_async,
+            media_url=MediaUrl0,
+            content_type=MediaContentType0,
+            from_number=From,
+            to_number=To,
+        )
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(
+            answer="🎤 Processing your voice note... you'll get a reply shortly."
+        )
+        return Response(content=twiml, media_type="application/xml")
 
-    # ── Handle text (or transcribed voice) ───────────────────────
+    # ── Handle text ─────────────────────────────────────────────
     if not Body.strip():
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
             answer="Hello! Send me a question about UMD or FDU admissions, or send a voice note."
@@ -524,18 +591,8 @@ async def twilio_whatsapp_webhook(
     if not answer:
         answer = "Sorry, I couldn't process your question right now. Please try again."
 
-    # Escape XML special characters
     answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # ── Voice reply: text first (within Twilio 15s timeout) ──
-    # TTS audio generation takes 5-15s extra on GPU, pushing past
-    # Twilio's webhook timeout. Return text immediately; TTS audio
-    # can be sent async via Twilio REST API as a future enhancement.
-    if is_voice:
-        logger.info(f"WhatsApp voice reply: text ({len(answer)} chars)")
-    # Fall through to text-only reply below
-
-    # ── Text-only reply ──────────────────────────────────────────
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
     logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
     return Response(content=twiml, media_type="application/xml")

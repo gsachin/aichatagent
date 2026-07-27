@@ -31,3 +31,7 @@ pipecat-ai[whisper,kokoro]
 
 # ── Database (lead capture — Phase 6) ────────────────────────────────
 psycopg2-binary
+
+# ── Twilio WhatsApp Integration ───────────────────────────────────────
+# REST API client for sending async WhatsApp replies
+twilio
