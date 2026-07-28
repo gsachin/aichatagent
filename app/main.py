@@ -483,7 +483,7 @@ async def _process_voice_note_async(
             tunnel_host = tunnel_file.read_text().strip()
             logger.info(f"Tunnel host from file: {tunnel_host}")
 
-    # Step 5: Send reply
+    # Step 5: Send reply (text always; audio only if available)
     if audio_filename and tunnel_host:
         audio_url = f"https://{tunnel_host}/audio/{audio_filename}"
         _send_whatsapp_message(
@@ -492,14 +492,18 @@ async def _process_voice_note_async(
             body=answer,
             media_url=audio_url,
         )
+        logger.info(f"Voice reply sent: text + audio ({audio_filename})")
     else:
-        if audio_filename and not tunnel_host:
+        if not audio_filename:
+            logger.warning("TTS audio generation failed — sending text-only reply")
+        elif not tunnel_host:
             logger.warning("TUNNEL_HOST not set — sending text-only reply")
         _send_whatsapp_message(
             to_number=from_number,
             from_number=to_number,
             body=answer,
         )
+        logger.info("Voice reply sent: text-only")
 
     logger.info(f"Voice note processed: {from_number} ← {len(answer)} chars")
 
