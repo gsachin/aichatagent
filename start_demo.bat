@@ -1,103 +1,103 @@
 @echo off
-title University Admissions Advisor — Full Demo Launcher
+title University Admissions Advisor — Demo Launcher
 color 0B
+cd /d "%~dp0"
+
+:: Clean up old tunnel files
+del /q "%TEMP%\whatsapp_tunnel_url.txt" 2>NUL
+del /q "%TEMP%\streamlit_tunnel_url.txt" 2>NUL
 
 echo.
 echo ============================================================
-echo    University Admissions Advisor — DEMO MODE
-echo    Starts Streamlit + WhatsApp backend + Public URLs
+echo    University Admissions Advisor - DEMO MODE
 echo ============================================================
 echo.
 
-:: ── Step 1: Check Ollama ──────────────────────────────────────
-echo [1/4] Checking Ollama server...
+:: ── Check Ollama ─────────────────────────────────────────────
+echo [1/5] Checking Ollama...
 curl -s http://127.0.0.1:11434/api/tags >nul 2>&1
 if %errorlevel% NEQ 0 (
-    echo    [FAIL] Ollama is NOT running.
-    echo    Open Start Menu, launch Ollama, then re-run this script.
+    echo    [FAIL] Ollama NOT running. Launch from Start Menu.
     pause
     exit /b 1
 )
-echo    [OK] Ollama is running.
+echo    [OK] Ollama running
 
-:: ── Step 2: Check Python packages ─────────────────────────────
-echo [2/4] Checking Python packages...
-python -c "import streamlit, fastapi, uvicorn, langchain_ollama, chromadb, kokoro_onnx, whisper, soundfile" >nul 2>&1
+:: ── Check packages ───────────────────────────────────────────
+echo [2/5] Checking Python packages...
+python -c "import streamlit,fastapi,uvicorn,langchain_ollama,chromadb,kokoro_onnx,whisper,soundfile,twilio" >nul 2>&1
 if %errorlevel% NEQ 0 (
-    echo    Some packages missing. Install them first:
-    echo    pip install -r requirements.txt
+    echo    [FAIL] Run: pip install -r requirements.txt
     pause
     exit /b 1
 )
-echo    [OK] All Python packages present.
+echo    [OK] All packages present
 
-:: ── Step 3: Start Streamlit ───────────────────────────────────
-echo [3/4] Starting Streamlit (port 8501)...
-start "Streamlit — Chat UI" cmd /k "cd /d %~dp0 && python -m streamlit run app.py --server.headless true && pause"
+:: ── Start servers ────────────────────────────────────────────
+echo [3/5] Starting servers...
+start "Streamlit Chat UI" cmd /c "cd /d %~dp0 && title Streamlit - http://localhost:8501 && python -m streamlit run app.py --server.headless true"
+start "FastAPI WhatsApp Backend" cmd /c "cd /d %~dp0 && title FastAPI - port 8000 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-echo    Waiting for Streamlit to boot (20 seconds)...
-timeout /t 20 /nobreak >nul
+:: ── Start tunnels and capture URLs ───────────────────────────
+echo [4/5] Starting tunnels (wait 20 seconds)...
 
-:: ── Step 4: Start FastAPI ─────────────────────────────────────
-echo [4/4] Starting FastAPI WhatsApp backend (port 8000)...
-start "FastAPI — WhatsApp Backend" cmd /k "cd /d %~dp0 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 && pause"
-
-echo    Waiting for FastAPI to boot (10 seconds)...
-timeout /t 10 /nobreak >nul
-
-:: ── Step 5: Start Cloudflare Tunnels ──────────────────────────
-echo.
-echo ============================================================
-echo    Starting public tunnels...
-echo    Two new windows will open with public URLs.
-echo ============================================================
-echo.
-
-start "TUNNEL — Streamlit" cmd /k "echo STREAMLIT PUBLIC URL: && cloudflared tunnel --url http://localhost:8501"
+:: Start WhatsApp tunnel - redirect stderr to temp file
+start "WhatsApp Tunnel URL - WAIT" cmd /c "cd /d %~dp0 && cloudflared tunnel --url http://localhost:8000 2> %TEMP%\whatsapp_tunnel_raw.txt"
 timeout /t 3 /nobreak >nul
 
-start "TUNNEL — WhatsApp" cmd /k "echo WHATSAPP PUBLIC URL: && cloudflared tunnel --url http://localhost:8000"
+:: Start Streamlit tunnel
+start "Streamlit Tunnel URL - WAIT" cmd /c "cd /d %~dp0 && cloudflared tunnel --url http://localhost:8501 2> %TEMP%\streamlit_tunnel_raw.txt"
 
-:: ── Step 6: Open browser ──────────────────────────────────────
-echo.
-echo ============================================================
-echo    Opening Streamlit in your browser...
-echo ============================================================
+:: Wait for tunnels to get URLs
+timeout /t 20 /nobreak >nul
+
+:: ── Extract URLs ─────────────────────────────────────────────
+echo [5/5] Extracting URLs...
+
+:: Extract WhatsApp URL
+for /f "tokens=4" %%a in ('type "%TEMP%\whatsapp_tunnel_raw.txt" 2^>NUL ^| findstr "trycloudflare.com"') do (
+    echo %%a > "%TEMP%\whatsapp_tunnel_url.txt"
+    set WHATSAPP_URL=%%a
+)
+
+:: Extract Streamlit URL
+for /f "tokens=4" %%a in ('type "%TEMP%\streamlit_tunnel_raw.txt" 2^>NUL ^| findstr "trycloudflare.com"') do (
+    echo %%a > "%TEMP%\streamlit_tunnel_url.txt"
+    set STREAMLIT_URL=%%a
+)
+
+:: Set TUNNEL_HOST for this session
+for /f "tokens=*" %%a in ('type "%TEMP%\whatsapp_tunnel_url.txt" 2^>NUL') do set TUNNEL_HOST=%%a
+
+:: Write to project file so Python can read it
+echo %TUNNEL_HOST% > "%~dp0.whatsapp_tunnel"
+
+:: ── Open browser and Twilio Console ───────────────────────────
 start http://localhost:8501
+start https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn
 
-:: ── Step 7: Instructions ──────────────────────────────────────
+:: ── Display results ──────────────────────────────────────────
 echo.
 echo ============================================================
-echo    DEMO IS STARTING — READ BELOW
+echo    SETUP COMPLETE
 echo ============================================================
 echo.
-echo    WINDOWS OPENED:
-echo    ┌─────────────────────────────────────────────────────┐
-echo    │ 1. Streamlit — Chat UI (green title)               │
-echo    │ 2. FastAPI — WhatsApp backend (green title)        │
-echo    │ 3. TUNNEL Streamlit (get public URL from here)     │
-echo    │ 4. TUNNEL WhatsApp (get public URL from here)      │
-echo    │ 5. Browser — http://localhost:8501                 │
-echo    └─────────────────────────────────────────────────────┘
+echo    LOCAL:
+echo      Streamlit:  http://localhost:8501
 echo.
-echo    NEXT STEPS (you do these once):
+echo    PUBLIC (share with others):
+echo      Streamlit:  %STREAMLIT_URL%
+echo      WhatsApp:   %WHATSAPP_URL%
 echo.
-echo    Step A: Look at the "TUNNEL — WhatsApp" window.
-echo            Copy the https://xxxx.trycloudflare.com URL
+echo    TWILIO WEBHOOK URL (copy this):
+echo      %WHATSAPP_URL%/twilio/whatsapp
 echo.
-echo    Step B: Go to Twilio Console:
-echo            https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn
+echo    The Twilio Console is already open in your browser.
+echo    Paste the webhook URL above into:
+echo      "When a message comes in" -^> HTTP POST
 echo.
-echo    Step C: Set "When a message comes in" to:
-echo            https://xxxx.trycloudflare.com/twilio/whatsapp (HTTP POST)
-echo.
-echo    Step D: On your phone, WhatsApp the join code to +14155238886
-echo.
-echo    Step E: Start chatting!
-echo            - Browser: http://localhost:8501 (or the Streamlit tunnel URL)
-echo            - WhatsApp: Send message to sandbox number
-echo.
-echo    TO STOP: Close all 4 windows.
+echo ============================================================
+echo    TO STOP: Close all 4 terminal windows
 echo ============================================================
 echo.
 pause

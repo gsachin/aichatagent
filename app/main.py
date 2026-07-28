@@ -475,11 +475,16 @@ async def _process_voice_note_async(
     # Step 3: Generate TTS audio
     audio_filename = await _asyncio.to_thread(_generate_tts_audio, answer)
 
-    # Step 4: Build audio URL and send reply
-    if audio_filename:
-        tunnel_host = os.environ.get(
-            "TUNNEL_HOST", "boxes-melbourne-binary-balance.trycloudflare.com"
-        )
+    # Step 4: Resolve tunnel host (env var -> file written by start_demo.bat)
+    tunnel_host = os.environ.get("TUNNEL_HOST", "")
+    if not tunnel_host:
+        tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
+        if tunnel_file.is_file():
+            tunnel_host = tunnel_file.read_text().strip()
+            logger.info(f"Tunnel host from file: {tunnel_host}")
+
+    # Step 5: Send reply
+    if audio_filename and tunnel_host:
         audio_url = f"https://{tunnel_host}/audio/{audio_filename}"
         _send_whatsapp_message(
             to_number=from_number,
@@ -488,6 +493,8 @@ async def _process_voice_note_async(
             media_url=audio_url,
         )
     else:
+        if audio_filename and not tunnel_host:
+            logger.warning("TUNNEL_HOST not set — sending text-only reply")
         _send_whatsapp_message(
             to_number=from_number,
             from_number=to_number,
