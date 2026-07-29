@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS lead_calls (
 
 async def init_db() -> bool:
     """
-    Initialize the database: create the lead_calls table if it doesn't exist.
+    Initialize the database: create the lead_calls table if it doesn't exist,
+    plus all lead-management tables (leads, conversations, follow_ups, call_queue).
 
     Returns True on success, False if PostgreSQL is not available
     (allows the app to run without a database in development).
@@ -92,8 +93,12 @@ async def init_db() -> bool:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE_SQL)
+            # Also initialise lead-management tables
+            from app.leads.schema import ALL_TABLES_SQL
+
+            cur.execute(ALL_TABLES_SQL)
         conn.close()
-        logger.info("Database initialized: lead_calls table ready")
+        logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True
     except Exception:
         logger.warning(

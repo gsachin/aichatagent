@@ -36,6 +36,7 @@ echo    [OK] All packages present
 :: ── Start servers ────────────────────────────────────────────
 echo [3/5] Starting servers...
 start "Streamlit Chat UI" cmd /c "cd /d %~dp0 && title Streamlit - http://localhost:8501 && python -m streamlit run app.py --server.headless true"
+start "Admin Dashboard" cmd /c "cd /d %~dp0 && title Dashboard - http://localhost:8502 && python -m streamlit run dashboard.py --server.port 8502 --server.headless true"
 start "FastAPI WhatsApp Backend" cmd /c "cd /d %~dp0 && title FastAPI - port 8000 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
 :: ── Start tunnels and capture URLs ───────────────────────────
@@ -47,6 +48,9 @@ timeout /t 3 /nobreak >nul
 
 :: Start Streamlit tunnel
 start "Streamlit Tunnel URL - WAIT" cmd /c "cd /d %~dp0 && cloudflared tunnel --url http://localhost:8501 2> %TEMP%\streamlit_tunnel_raw.txt"
+
+:: Start Dashboard tunnel
+start "Dashboard Tunnel URL - WAIT" cmd /c "cd /d %~dp0 && cloudflared tunnel --url http://localhost:8502 2> %TEMP%\dashboard_tunnel_raw.txt"
 
 :: Wait for tunnels to get URLs
 timeout /t 20 /nobreak >nul
@@ -83,11 +87,12 @@ echo    SETUP COMPLETE
 echo ============================================================
 echo.
 echo    LOCAL:
-echo      Streamlit:  http://localhost:8501
+echo      Chat UI:     http://localhost:8501
+echo      Dashboard:   http://localhost:8502
 echo.
 echo    PUBLIC (share with others):
-echo      Streamlit:  %STREAMLIT_URL%
-echo      WhatsApp:   %WHATSAPP_URL%
+echo      Chat UI:     %STREAMLIT_URL%
+echo      WhatsApp:    %WHATSAPP_URL%
 echo.
 echo    TWILIO WEBHOOK URL (copy this):
 echo      %WHATSAPP_URL%/twilio/whatsapp
@@ -97,7 +102,7 @@ echo    Paste the webhook URL above into:
 echo      "When a message comes in" -^> HTTP POST
 echo.
 echo ============================================================
-echo    TO STOP: Close all 4 terminal windows
+echo    TO STOP: Close all 6 terminal windows
 echo ============================================================
 echo.
 pause

@@ -35,3 +35,9 @@ psycopg2-binary
 # ── Twilio WhatsApp Integration ───────────────────────────────────────
 # REST API client for sending async WhatsApp replies
 twilio
+
+# ── MCP Server (optional — falls back to REST if unavailable) ──────────
+mcp
+
+# ── Lead Management Dashboard ──────────────────────────────────────────
+pandas

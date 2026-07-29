@@ -55,6 +55,24 @@ class Settings:
     DB_USER: str = field(default_factory=lambda: _env("DB_USER", "postgres"))
     DB_PASSWORD: str = field(default_factory=lambda: _env("DB_PASSWORD", ""))
 
+    # ── Outbound call engine ────────────────────────────────────────
+    OUTBOUND_POLL_INTERVAL: int = field(
+        default_factory=lambda: int(_env("OUTBOUND_POLL_INTERVAL", "10"))
+    )
+    MAX_CALL_ATTEMPTS: int = field(
+        default_factory=lambda: int(_env("MAX_CALL_ATTEMPTS", "3"))
+    )
+
+    # ── Follow-up scheduler ─────────────────────────────────────────
+    FOLLOW_UP_POLL_INTERVAL: int = field(
+        default_factory=lambda: int(_env("FOLLOW_UP_POLL_INTERVAL", "30"))
+    )
+
+    # ── MCP server ──────────────────────────────────────────────────
+    MCP_ENABLED: bool = field(
+        default_factory=lambda: _env("MCP_ENABLED", "true").lower() == "true"
+    )
+
 
 # Module-level singleton
 settings = Settings()

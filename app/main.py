@@ -5,14 +5,23 @@ Transport-agnostic server supporting:
 - WAV test harness (test_transport.py)
 - Browser microphone page (voice_client.html)
 - Twilio Media Streams (with real credentials)
+- Twilio outbound calling (automatic lead dialling)
+- WhatsApp messaging + voice notes
+- MCP tools for AI-driven lead management
 
 Endpoints:
-    GET  /              — health check + navigation
-    GET  /voice         — browser mic page (voice_client.html)
-    WS   /ws/voice      — raw PCM audio endpoint (pipeline-ready)
-    WS   /ws/voice/text — text query through RAG + LLM pipeline
-    GET  /twilio/voice  — TwiML response for inbound calls
-    WS   /ws/twilio     — Twilio Media Streams (8 kHz u-law)
+    GET  /                       — health check + navigation
+    GET  /voice                  — browser mic page (voice_client.html)
+    WS   /ws/voice               — raw PCM audio endpoint (pipeline-ready)
+    WS   /ws/voice/text          — text query through RAG + LLM pipeline
+    GET  /twilio/voice           — TwiML response for inbound calls
+    WS   /ws/twilio              — Twilio Media Streams (8 kHz u-law)
+    WS   /ws/twilio-outbound     — Twilio Media Streams — outbound calls
+    POST /twilio/outbound/status — Outbound call status callback
+    POST /twilio/whatsapp        — WhatsApp webhook (text + voice notes)
+    GET  /audio/{filename}       — Serve generated TTS audio
+    GET  /mcp/sse                — MCP SSE transport
+    POST /mcp/messages           — MCP message handler
 
 Run: python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 """
@@ -43,7 +52,7 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Form, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +61,8 @@ logger = logging.getLogger("voice_api")
 # ── Startup / shutdown ───────────────────────────────────────────────
 
 _db_available = False
+_outbound_worker = None
+_follow_up_scheduler = None
 
 
 from contextlib import asynccontextmanager
@@ -60,10 +71,11 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app_instance):
     """Initialize and cleanup resources."""
-    global _db_available
+    global _db_available, _outbound_worker, _follow_up_scheduler
     # Startup
     try:
         from app.database import init_db
+
         _db_available = await init_db()
         if _db_available:
             logger.info("Database: PostgreSQL connected — lead capture enabled")
@@ -80,6 +92,7 @@ async def lifespan(app_instance):
         def _warmup():
             # Pre-load ChromaDB vector store
             from app.rag import get_vector_store
+
             vs = get_vector_store()
             if vs:
                 logger.info("ChromaDB vector store pre-warmed")
@@ -91,8 +104,40 @@ async def lifespan(app_instance):
     except Exception as e:
         logger.warning(f"Warmup skipped: {e}")
 
+    # Start outbound call worker
+    try:
+        from app.outbound.caller import OutboundCallWorker
+        from app.config import settings
+
+        _outbound_worker = OutboundCallWorker(
+            poll_interval=settings.OUTBOUND_POLL_INTERVAL
+        )
+        await _outbound_worker.start()
+        logger.info("Outbound call worker started")
+    except Exception as e:
+        logger.warning(f"Outbound call worker failed to start: {e}")
+        _outbound_worker = None
+
+    # Start follow-up scheduler
+    try:
+        from app.outbound.scheduler import FollowUpScheduler
+        from app.config import settings
+
+        _follow_up_scheduler = FollowUpScheduler(
+            poll_interval=settings.FOLLOW_UP_POLL_INTERVAL
+        )
+        await _follow_up_scheduler.start()
+        logger.info("Follow-up scheduler started")
+    except Exception as e:
+        logger.warning(f"Follow-up scheduler failed to start: {e}")
+        _follow_up_scheduler = None
+
     yield
     # Shutdown
+    if _outbound_worker:
+        _outbound_worker.stop()
+    if _follow_up_scheduler:
+        await _follow_up_scheduler.stop()
     logger.info("Server shutting down")
 
 
@@ -315,6 +360,241 @@ async def websocket_twilio(websocket: WebSocket):
             pass
 
 
+# ── WebSocket: Twilio Media Streams — outbound calls ─────────────────
+
+@app.websocket("/ws/twilio-outbound")
+async def websocket_twilio_outbound(websocket: WebSocket):
+    """
+    Twilio Media Streams WebSocket for OUTBOUND calls.
+
+    Runs the full STT → RAG → LLM → TTS pipeline:
+      1. Receive µ-law audio chunks from Twilio.
+      2. Accumulate until the caller stops speaking (VAD).
+      3. Transcribe with Whisper → query RAG + Qwen LLM.
+      4. Synthesise answer with Kokoro TTS → stream back as µ-law.
+    """
+    from app.voice_handler import VoiceCallSession
+
+    await websocket.accept()
+    logger.info("WS /ws/twilio-outbound: outbound call connected (AI pipeline active)")
+
+    stream_sid: str | None = None
+    transcript_parts: list[str] = []
+    session = VoiceCallSession()
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
+            event = msg.get("event", "")
+
+            if event == "connected":
+                logger.info("WS /ws/twilio-outbound: connected")
+
+            elif event == "start":
+                stream_sid = msg.get(
+                    "streamSid", msg.get("start", {}).get("streamSid", "")
+                )
+                logger.info(f"WS /ws/twilio-outbound: stream started — {stream_sid}")
+
+                # Send an initial AI greeting via TTS
+                try:
+                    from app.voice_handler import generate_ulaw_greeting
+
+                    greeting = (
+                        "Hi, I'm the admissions assistant. "
+                        "Ask me anything about UMD or FDU programs, "
+                        "tuition fees, or how to apply."
+                    )
+                    chunks = generate_ulaw_greeting(greeting)
+                    logger.info(
+                        f"AI greeting: {len(chunks)} chunks"
+                    )
+                    for chunk in chunks:
+                        out_payload = base64.b64encode(chunk).decode("ascii")
+                        response = json.dumps(
+                            {
+                                "event": "media",
+                                "streamSid": stream_sid or "",
+                                "media": {"payload": out_payload},
+                            }
+                        )
+                        await websocket.send_text(response)
+                    logger.info("AI greeting sent via TTS")
+                except Exception:
+                    logger.exception("Failed to send AI greeting (non-fatal)")
+
+            elif event == "media":
+                payload = msg.get("media", {}).get("payload", "")
+                if not payload:
+                    continue
+
+                try:
+                    ulaw_bytes = base64.b64decode(payload)
+                except Exception:
+                    continue
+
+                # Feed audio to VAD + utterance detector
+                utterance_ready = session.feed_audio(ulaw_bytes)
+
+                if utterance_ready:
+                    # Process the utterance through the full AI pipeline
+                    try:
+                        tts_chunks = await session.process_utterance()
+                    except Exception:
+                        logger.exception("VoiceCall: pipeline failed")
+                        tts_chunks = []
+
+                    # Send TTS audio chunks back through the WebSocket
+                    for chunk in tts_chunks:
+                        out_payload = base64.b64encode(chunk).decode("ascii")
+                        response = json.dumps(
+                            {
+                                "event": "media",
+                                "streamSid": stream_sid or "",
+                                "media": {"payload": out_payload},
+                            }
+                        )
+                        await websocket.send_text(response)
+
+            elif event == "stop":
+                logger.info(
+                    f"WS /ws/twilio-outbound: stream stopped — {stream_sid}"
+                )
+                break
+
+    except WebSocketDisconnect:
+        logger.info("WS /ws/twilio-outbound: client disconnected")
+        await _handle_disconnect(transcript_parts)
+        # Also log to outbound channel
+        transcript = " ".join(transcript_parts)
+        if transcript.strip():
+            try:
+                from app.leads.service import handle_post_interaction
+
+                await handle_post_interaction(
+                    phone_number="",
+                    transcript=transcript,
+                    channel="outbound_call",
+                )
+            except Exception:
+                logger.exception("Outbound call logging failed (non-fatal)")
+    except Exception:
+        logger.exception("WS /ws/twilio-outbound: unexpected error")
+        await _handle_disconnect(transcript_parts)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ── HTTP: Outbound call voice TwiML (fetched by Twilio) ──────────────
+
+@app.api_route("/twilio/outbound-voice", methods=["GET", "POST"])
+async def twilio_outbound_voice_webhook():
+    """
+    Twilio fetches this URL when an outbound call is answered.
+    Returns TwiML that connects to the Media Streams WebSocket.
+
+    Accepts both GET and POST because Twilio may use either method
+    depending on how the outbound call is initiated.
+    """
+    host = os.environ.get("TUNNEL_HOST", "")
+    if not host:
+        tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
+        if tunnel_file.is_file():
+            host = tunnel_file.read_text().strip()
+    if not host:
+        host = os.environ.get("NGROK_HOST", "localhost:8000")
+
+    from app.outbound.twiml import outbound_connect_twiml
+
+    twiml = outbound_connect_twiml(host)
+    logger.info(f"/twilio/outbound-voice: serving TwiML with host={host}")
+    return Response(content=twiml, media_type="application/xml")
+
+
+# ── HTTP: Outbound call status callback ──────────────────────────────
+
+
+@app.post("/twilio/outbound/status")
+async def twilio_outbound_status_callback(
+    CallSid: str = Form(default=""),
+    CallStatus: str = Form(default=""),
+    CallDuration: str = Form(default="0"),
+    To: str = Form(default=""),
+    From: str = Form(default=""),
+):
+    """
+    Twilio status callback for outbound calls.
+
+    Twilio POSTs to this URL when an outbound call completes (or fails).
+    We use it to update the call_queue entry and lead status.
+    """
+    logger.info(
+        f"Outbound status: SID={CallSid}, status={CallStatus}, duration={CallDuration}s"
+    )
+
+    if not CallSid:
+        return JSONResponse({"error": "missing CallSid"}, status_code=400)
+
+    try:
+        from app.leads.models import (
+            get_call_queue_by_sid,
+            get_lead_by_phone,
+            update_call_queue_status,
+            update_lead,
+        )
+
+        # 1. Update the call_queue entry by CallSid
+        queue_entry = await get_call_queue_by_sid(CallSid)
+        if queue_entry:
+            await update_call_queue_status(
+                queue_entry["id"],
+                "completed" if CallStatus == "completed" else "failed",
+                error_message="" if CallStatus == "completed" else f"Twilio status: {CallStatus}",
+            )
+            logger.info(f"Call queue entry {queue_entry['id']} updated to {CallStatus}")
+
+        # 2. Update the lead status
+        if CallStatus in ("completed", "no-answer", "busy", "failed", "canceled"):
+            phone = To or ""
+            if phone:
+                lead = await get_lead_by_phone(phone)
+                if lead:
+                    lead_id = lead["id"]
+                    if CallStatus == "completed":
+                        await update_lead(lead_id, status="completed")
+                        logger.info(f"Lead {lead_id} marked completed (outbound call)")
+                    elif CallStatus in ("no-answer", "busy", "failed"):
+                        attempts = lead.get("call_attempts", 0)
+                        from app.config import settings
+
+                        if attempts < settings.MAX_CALL_ATTEMPTS:
+                            await update_lead(
+                                lead_id, status="pending", call_attempts=attempts
+                            )
+                            from app.leads.models import add_to_call_queue
+
+                            await add_to_call_queue(lead_id=lead_id)
+                            logger.info(
+                                f"Lead {lead_id} re-queued (attempt {attempts}/{settings.MAX_CALL_ATTEMPTS})"
+                            )
+                        else:
+                            await update_lead(lead_id, status="failed")
+                            logger.info(f"Lead {lead_id} marked failed (max attempts)")
+
+    except Exception:
+        logger.exception("Failed to process outbound status callback")
+
+    return JSONResponse({"status": "ok"})
+
+
 # ── HTTP: TwiML voice webhook ────────────────────────────────────────
 
 @app.get("/twilio/voice")
@@ -507,6 +787,39 @@ async def _process_voice_note_async(
 
     logger.info(f"Voice note processed: {from_number} ← {len(answer)} chars")
 
+    # Log conversation to new leads subsystem
+    try:
+        from app.leads.service import log_interaction
+
+        await log_interaction(
+            phone_number=from_number,
+            channel="whatsapp",
+            transcript=f"User (voice): {transcript}\nAssistant: {answer}",
+        )
+    except Exception:
+        logger.exception("Failed to log voice-note conversation (non-fatal)")
+
+
+# ── WhatsApp conversation logger ──────────────────────────────────────
+
+async def _log_whatsapp_conversation(phone_number: str, transcript: str):
+    """
+    Log a WhatsApp interaction to the new leads + conversations tables.
+
+    Safe to call as a background task — failures are logged but never
+    propagated, so they won't affect the Twilio response.
+    """
+    try:
+        from app.leads.service import log_interaction
+
+        await log_interaction(
+            phone_number=phone_number,
+            channel="whatsapp",
+            transcript=transcript,
+        )
+    except Exception:
+        logger.exception("Failed to log WhatsApp conversation (non-fatal)")
+
 
 # ── HTTP: Twilio WhatsApp webhook ─────────────────────────────────────
 
@@ -631,9 +944,191 @@ async def twilio_whatsapp_webhook(
 
     answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    # Log conversation to new leads subsystem
+    background_tasks.add_task(
+        _log_whatsapp_conversation,
+        phone_number=From,
+        transcript=f"User: {Body}\nAssistant: {answer}",
+    )
+
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
     logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
     return Response(content=twiml, media_type="application/xml")
+
+
+# ── REST API: Dashboard data ──────────────────────────────────────────
+
+
+@app.post("/api/leads")
+async def api_create_lead(req: Request):
+    """Create a new lead."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    from app.leads.models import create_lead
+
+    result = await create_lead(
+        phone_number=body.get("phone_number", ""),
+        name=body.get("name", ""),
+        email=body.get("email", ""),
+        program_interest=body.get("program_interest", ""),
+        source=body.get("source", "manual"),
+        notes=body.get("notes", ""),
+    )
+    return result or JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+
+@app.get("/api/leads")
+async def api_list_leads(
+    status: str = "",
+    source: str = "",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List leads with optional filters."""
+    from app.leads.models import list_leads
+
+    result = await list_leads(
+        status=status or None,
+        source=source or None,
+        limit=min(limit, 200),
+        offset=offset,
+    )
+    return result
+
+
+@app.get("/api/leads/{lead_id}")
+async def api_get_lead(lead_id: str):
+    """Get a single lead by ID."""
+    from app.leads.models import get_lead
+
+    result = await get_lead(lead_id)
+    if result:
+        return result
+    return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+
+@app.put("/api/leads/{lead_id}")
+async def api_update_lead(lead_id: str, req: Request):
+    """Update a lead."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    from app.leads.models import update_lead
+
+    # Build kwargs, filtering out None values
+    kwargs = {}
+    for field in ["name", "email", "program_interest", "status", "source", "notes"]:
+        if field in body and body[field] is not None:
+            kwargs[field] = body[field]
+    if "call_attempts" in body:
+        kwargs["call_attempts"] = int(body["call_attempts"])
+    if "next_follow_up" in body:
+        kwargs["next_follow_up"] = body["next_follow_up"]
+
+    result = await update_lead(lead_id, **kwargs)
+    if result:
+        return result
+    return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+
+@app.post("/api/leads/{lead_id}/call")
+async def api_trigger_call(lead_id: str):
+    """Queue an outbound call for a lead."""
+    from app.leads.models import add_to_call_queue, get_lead
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+    result = await add_to_call_queue(lead_id=lead_id)
+    if result:
+        return result
+    return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+
+@app.get("/api/conversations")
+async def api_list_conversations(
+    lead_id: str = "",
+    channel: str = "",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List conversations with optional filters."""
+    from app.leads.models import get_conversations
+
+    result = await get_conversations(
+        lead_id=lead_id or None,
+        channel=channel or None,
+        limit=min(limit, 200),
+        offset=offset,
+    )
+    return result
+
+
+@app.post("/api/follow-ups")
+async def api_schedule_follow_up(req: Request):
+    """Schedule a follow-up action."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    from app.leads.models import schedule_follow_up
+
+    result = await schedule_follow_up(
+        lead_id=body.get("lead_id", ""),
+        scheduled_at=body.get("scheduled_at", ""),
+        type=body.get("type", "call"),
+        notes=body.get("notes", ""),
+    )
+    if result:
+        return result
+    return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+
+@app.get("/api/stats")
+async def api_get_stats():
+    """Return dashboard KPIs."""
+    from app.leads.models import get_lead_stats
+
+    return await get_lead_stats()
+
+
+# ── MCP: SSE transport ────────────────────────────────────────────────
+
+
+@app.get("/mcp/sse")
+async def mcp_sse_endpoint(req: Request):
+    """
+    MCP SSE endpoint — AI clients connect here to receive tool listings
+    and stream results.
+    """
+    try:
+        from app.mcp.server import handle_sse_request
+
+        return await handle_sse_request(req)
+    except Exception as e:
+        logger.exception("MCP SSE endpoint failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/mcp/messages")
+async def mcp_messages_endpoint(req: Request):
+    """
+    MCP JSON-RPC message handler — AI clients POST tool calls here.
+    """
+    try:
+        from app.mcp.server import handle_messages_request
+
+        return await handle_messages_request(req)
+    except Exception as e:
+        logger.exception("MCP messages endpoint failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── HTTP: Health check ───────────────────────────────────────────────
@@ -649,6 +1144,9 @@ async def health_check():
         "database": "connected" if _db_available else "unavailable",
         "transport": settings.TRANSPORT_PROVIDER,
         "twilio_configured": bool(settings.TWILIO_ACCOUNT_SID),
+        "twilio_phone": settings.TWILIO_PHONE_NUMBER or "(not set)",
+        "outbound_worker": "active" if _outbound_worker and _outbound_worker._running else "inactive",
+        "mcp_enabled": settings.MCP_ENABLED,
         "endpoints": {
             "health": "/",
             "voice_page": "/voice",
@@ -656,7 +1154,11 @@ async def health_check():
             "websocket_text_rag": "/ws/voice/text",
             "twilio_webhook": "/twilio/voice",
             "twilio_websocket": "/ws/twilio",
+            "twilio_outbound_ws": "/ws/twilio-outbound",
+            "twilio_outbound_status": "/twilio/outbound/status",
             "whatsapp_webhook": "/twilio/whatsapp",
+            "mcp_sse": "/mcp/sse",
+            "mcp_messages": "/mcp/messages",
         },
     })
 
@@ -686,6 +1188,7 @@ async def _handle_disconnect(transcript_parts: list[str]) -> None:
 
     try:
         from app.pipeline import post_call_handler
+
         saved = await post_call_handler(transcript=transcript)
         if saved:
             logger.info(f"Lead saved ({len(transcript)} chars transcript)")
@@ -693,3 +1196,15 @@ async def _handle_disconnect(transcript_parts: list[str]) -> None:
             logger.info("Lead save skipped (database unavailable or extraction failed)")
     except Exception:
         logger.exception("post_call_handler failed")
+
+    # Also log to the new leads subsystem
+    try:
+        from app.leads.service import handle_post_interaction
+
+        await handle_post_interaction(
+            phone_number="",
+            transcript=transcript,
+            channel="inbound_call",
+        )
+    except Exception:
+        logger.exception("New leads-system logging failed (non-fatal)")
