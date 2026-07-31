@@ -29,3 +29,12 @@ chroma_local_db/
 
 # Pytest
 .pytest_cache/
+
+# Cloudflare tunnel hostname (changes every restart)
+.whatsapp_tunnel
+
+# Windows NUL device artifact
+NUL
+
+# Task tracking (local only)
+pendingtask*.md
