@@ -325,16 +325,22 @@ async def websocket_voice_text(websocket: WebSocket):
 @app.websocket("/ws/twilio")
 async def websocket_twilio(websocket: WebSocket):
     """
-    Twilio Media Streams WebSocket endpoint.
+    Twilio Media Streams WebSocket endpoint for INBOUND calls.
 
-    Audio flow:
-      Twilio u-law -> decode to PCM -> pipeline -> encode to u-law -> Twilio
+    Runs the full STT → RAG → LLM → TTS pipeline:
+      1. Receive µ-law audio chunks from Twilio.
+      2. Accumulate until the caller stops speaking (VAD).
+      3. Transcribe with Whisper → query RAG + Qwen LLM.
+      4. Synthesise answer with Kokoro TTS → stream back as µ-law.
     """
+    from app.voice_handler import VoiceCallSession
+
     await websocket.accept()
-    logger.info("WS /ws/twilio: Twilio client connected")
+    logger.info("WS /ws/twilio: inbound call connected (AI pipeline active)")
 
     stream_sid: str | None = None
     transcript_parts: list[str] = []
+    session = VoiceCallSession()
 
     try:
         while True:
@@ -354,6 +360,29 @@ async def websocket_twilio(websocket: WebSocket):
                 stream_sid = msg.get("streamSid", msg.get("start", {}).get("streamSid", ""))
                 logger.info(f"WS /ws/twilio: stream started — {stream_sid}")
 
+                # Send an initial AI greeting via TTS
+                try:
+                    from app.voice_handler import generate_ulaw_greeting
+
+                    greeting = (
+                        "Hi, I'm the admissions assistant. "
+                        "Ask me anything about UMD or FDU programs, "
+                        "tuition fees, or how to apply."
+                    )
+                    chunks = generate_ulaw_greeting(greeting)
+                    logger.info(f"AI greeting: {len(chunks)} chunks")
+                    for chunk in chunks:
+                        out_payload = base64.b64encode(chunk).decode("ascii")
+                        response = json.dumps({
+                            "event": "media",
+                            "streamSid": stream_sid or "",
+                            "media": {"payload": out_payload},
+                        })
+                        await websocket.send_text(response)
+                    logger.info("AI greeting sent via TTS")
+                except Exception:
+                    logger.exception("Failed to send AI greeting (non-fatal)")
+
             elif event == "media":
                 payload = msg.get("media", {}).get("payload", "")
                 if not payload:
@@ -364,23 +393,26 @@ async def websocket_twilio(websocket: WebSocket):
                 except Exception:
                     continue
 
-                # Twilio u-law -> PCM
-                pcm_bytes = ulaw_to_pcm(ulaw_bytes)
+                # Feed audio to VAD + utterance detector
+                utterance_ready = session.feed_audio(ulaw_bytes)
 
-                # Pipeline: PCM -> STT -> RAG -> LLM -> TTS -> PCM
-                # Currently echoes back for transport validation
-                out_pcm = pcm_bytes
+                if utterance_ready:
+                    # Process the utterance through the full AI pipeline
+                    try:
+                        tts_chunks = await session.process_utterance()
+                    except Exception:
+                        logger.exception("VoiceCall: pipeline failed")
+                        tts_chunks = []
 
-                # PCM -> Twilio u-law
-                out_ulaw = pcm_to_ulaw(out_pcm)
-                out_payload = base64.b64encode(out_ulaw).decode("ascii")
-
-                response = json.dumps({
-                    "event": "media",
-                    "streamSid": stream_sid or "",
-                    "media": {"payload": out_payload},
-                })
-                await websocket.send_text(response)
+                    # Send TTS audio chunks back through the WebSocket
+                    for chunk in tts_chunks:
+                        out_payload = base64.b64encode(chunk).decode("ascii")
+                        response = json.dumps({
+                            "event": "media",
+                            "streamSid": stream_sid or "",
+                            "media": {"payload": out_payload},
+                        })
+                        await websocket.send_text(response)
 
             elif event == "stop":
                 logger.info(f"WS /ws/twilio: stream stopped — {stream_sid}")
@@ -388,9 +420,9 @@ async def websocket_twilio(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WS /ws/twilio: client disconnected")
-        await _handle_disconnect(transcript_parts)
     except Exception:
         logger.exception("WS /ws/twilio: unexpected error")
+    finally:
         await _handle_disconnect(transcript_parts)
         try:
             await websocket.close()
@@ -603,22 +635,26 @@ async def twilio_outbound_status_callback(
                     if CallStatus == "completed":
                         await update_lead(lead_id, status="completed")
                         logger.info(f"Lead {lead_id} marked completed (outbound call)")
+                    elif CallStatus == "canceled":
+                        await update_lead(lead_id, status="pending")
+                        logger.info(f"Lead {lead_id} call canceled — kept pending")
                     elif CallStatus in ("no-answer", "busy", "failed"):
                         attempts = lead.get("call_attempts", 0)
+                        new_attempts = attempts + 1
                         from app.config import settings
 
-                        if attempts < settings.MAX_CALL_ATTEMPTS:
+                        if new_attempts < settings.MAX_CALL_ATTEMPTS:
                             await update_lead(
-                                lead_id, status="pending", call_attempts=attempts
+                                lead_id, status="pending", call_attempts=new_attempts
                             )
                             from app.leads.models import add_to_call_queue
 
                             await add_to_call_queue(lead_id=lead_id)
                             logger.info(
-                                f"Lead {lead_id} re-queued (attempt {attempts}/{settings.MAX_CALL_ATTEMPTS})"
+                                f"Lead {lead_id} re-queued (attempt {new_attempts}/{settings.MAX_CALL_ATTEMPTS})"
                             )
                         else:
-                            await update_lead(lead_id, status="failed")
+                            await update_lead(lead_id, status="failed", call_attempts=new_attempts)
                             logger.info(f"Lead {lead_id} marked failed (max attempts)")
 
     except Exception:
@@ -633,11 +669,11 @@ async def twilio_outbound_status_callback(
 async def twilio_voice_webhook():
     """
     Twilio voice webhook — returns TwiML connecting the call to /ws/twilio.
-
-    Update the hostname below to your ngrok URL in production.
+    Uses the live Cloudflare tunnel host (same as outbound calls).
     """
-    host = os.environ.get("NGROK_HOST", "your-ngrok-hostname.ngrok.io")
+    host = _resolve_tunnel_host()
     twiml = TWIML_TEMPLATE.format(host=host)
+    logger.info(f"/twilio/voice: serving TwiML with host={host}")
     return Response(content=twiml, media_type="application/xml")
 
 

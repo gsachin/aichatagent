@@ -125,7 +125,22 @@ echo xxxxx.trycloudflare.com > D:\university_project_demo\.whatsapp_tunnel
 
 Replace `xxxxx.trycloudflare.com` with your actual tunnel hostname.
 
-### Step 5 (Optional): Start Streamlit Chat UI
+### Step 5: Configure Twilio Console Webhooks
+Open the [Twilio Console](https://console.twilio.com/) and configure these webhooks:
+
+#### Inbound Voice Calls
+1. Go to **Phone Numbers → Manage → Active Numbers** → click your number (`+19788198953`)
+2. Under **Voice & Fax**:
+   - **"A call comes in"**: Set to **Webhook** → `https://<tunnel>/twilio/voice` → **HTTP GET**
+3. Click **Save**
+
+#### WhatsApp (if using)
+1. Go to **Messaging → Try it out → Send a WhatsApp message**
+2. **"When a message comes in"**: Set to `https://<tunnel>/twilio/whatsapp` → **HTTP POST**
+
+> ⚠️ **Important**: Both inbound voice calls and WhatsApp messages will fail if these webhooks aren't set.
+
+### Step 6 (Optional): Start Streamlit Chat UI
 Open a **third terminal** and run:
 ```bash
 cd D:\university_project_demo
