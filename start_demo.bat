@@ -93,6 +93,7 @@ echo.
 echo    PUBLIC (share with others):
 echo      Chat UI:     %STREAMLIT_URL%
 echo      WhatsApp:    %WHATSAPP_URL%
+echo      Quick Call:  %WHATSAPP_URL%/call
 echo.
 echo    TWILIO WEBHOOK URL (copy this):
 echo      %WHATSAPP_URL%/twilio/whatsapp

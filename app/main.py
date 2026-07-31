@@ -12,6 +12,7 @@ Transport-agnostic server supporting:
 Endpoints:
     GET  /                       — health check + navigation
     GET  /voice                  — browser mic page (voice_client.html)
+    GET  /call                   — quick outbound call page (quick_call.html)
     WS   /ws/voice               — raw PCM audio endpoint (pipeline-ready)
     WS   /ws/voice/text          — text query through RAG + LLM pipeline
     GET  /twilio/voice           — TwiML response for inbound calls
@@ -20,6 +21,8 @@ Endpoints:
     POST /twilio/outbound/status — Outbound call status callback
     POST /twilio/whatsapp        — WhatsApp webhook (text + voice notes)
     GET  /audio/{filename}       — Serve generated TTS audio
+    POST /api/quick-call         — One-shot create lead + queue outbound call
+    GET  /api/call-queue         — Poll call status for a lead
     GET  /mcp/sse                — MCP SSE transport
     POST /mcp/messages           — MCP message handler
 
@@ -57,6 +60,19 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_api")
+
+
+def _resolve_tunnel_host():
+    import os as _os
+    from pathlib import Path as _Path
+    host = _os.environ.get("TUNNEL_HOST", "")
+    if host:
+        return host
+    tf = _Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
+    if tf.is_file():
+        return tf.read_text().strip()
+    return _os.environ.get("NGROK_HOST", "localhost:8000")
+
 
 # ── Startup / shutdown ───────────────────────────────────────────────
 
@@ -142,6 +158,28 @@ async def lifespan(app_instance):
 
 
 app = FastAPI(title="University Admissions Voice Assistant", lifespan=lifespan)
+
+
+# ── Shared helpers ────────────────────────────────────────────────────
+
+
+def _resolve_tunnel_host() -> str:
+    """
+    Resolve the public tunnel hostname for Twilio callbacks.
+
+    Checks, in order: TUNNEL_HOST env var, .whatsapp_tunnel file,
+    NGROK_HOST env var (legacy), then falls back to localhost:8000.
+    Returns just the hostname (no scheme), e.g. "foo.trycloudflare.com".
+    """
+    tunnel_host = os.environ.get("TUNNEL_HOST", "")
+    if tunnel_host:
+        return tunnel_host
+
+    tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
+    if tunnel_file.is_file():
+        return tunnel_file.read_text().strip()
+
+    return os.environ.get("NGROK_HOST", "localhost:8000")
 
 
 # ── TwiML template ───────────────────────────────────────────────────
@@ -504,13 +542,7 @@ async def twilio_outbound_voice_webhook():
     Accepts both GET and POST because Twilio may use either method
     depending on how the outbound call is initiated.
     """
-    host = os.environ.get("TUNNEL_HOST", "")
-    if not host:
-        tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-        if tunnel_file.is_file():
-            host = tunnel_file.read_text().strip()
-    if not host:
-        host = os.environ.get("NGROK_HOST", "localhost:8000")
+    host = _resolve_tunnel_host()
 
     from app.outbound.twiml import outbound_connect_twiml
 
@@ -755,13 +787,10 @@ async def _process_voice_note_async(
     # Step 3: Generate TTS audio
     audio_filename = await _asyncio.to_thread(_generate_tts_audio, answer)
 
-    # Step 4: Resolve tunnel host (env var -> file written by start_demo.bat)
-    tunnel_host = os.environ.get("TUNNEL_HOST", "")
-    if not tunnel_host:
-        tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-        if tunnel_file.is_file():
-            tunnel_host = tunnel_file.read_text().strip()
-            logger.info(f"Tunnel host from file: {tunnel_host}")
+    # Step 4: Resolve tunnel host
+    tunnel_host = _resolve_tunnel_host()
+    if tunnel_host and tunnel_host != "localhost:8000":
+        logger.info(f"Tunnel host: {tunnel_host}")
 
     # Step 5: Send reply (text always; audio only if available)
     if audio_filename and tunnel_host:
@@ -1051,6 +1080,116 @@ async def api_trigger_call(lead_id: str):
     return JSONResponse({"error": "Database unavailable"}, status_code=503)
 
 
+@app.post("/api/quick-call")
+async def api_quick_call(req: Request):
+    """
+    One-shot convenience endpoint: create (or upsert) a lead and
+    immediately queue an outbound call.  Returns both the lead and
+    call_queue entry in a single response.
+
+    Body: {"phone_number": "+91...", "name": "Optional"}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    phone = body.get("phone_number", "").strip()
+    if not phone:
+        return JSONResponse({"error": "phone_number is required"}, status_code=400)
+
+    from app.leads.models import add_to_call_queue, upsert_lead_by_phone
+
+    lead = await upsert_lead_by_phone(
+        phone_number=phone,
+        name=body.get("name", ""),
+        source="quick-call",
+    )
+    if not lead:
+        return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+    queue_entry = await add_to_call_queue(lead_id=lead["id"])
+    if not queue_entry:
+        return JSONResponse({"error": "Failed to queue call"}, status_code=503)
+
+    return {
+        "lead": lead,
+        "call_queue": queue_entry,
+        "tunnel_host": _resolve_tunnel_host(),
+    }
+
+
+@app.get("/api/call-queue")
+async def api_get_call_queue_status(lead_id: str = ""):
+    """
+    Get the most recent call_queue entry for a lead.
+    Used by the quick-call page to poll for status.
+
+    Query: ?lead_id=<uuid>
+    Returns: {status, call_sid, error_message, ...} or {error}
+    """
+    if not lead_id:
+        return JSONResponse({"error": "lead_id query parameter required"}, status_code=400)
+
+    from app.leads.models import get_lead
+
+    # Get the lead first to verify it exists, then find its latest call
+    lead = await get_lead(lead_id)
+    if not lead:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+    # Query the most recent call_queue entry for this lead
+    try:
+        import psycopg2
+        import os as _os
+
+        DATABASE_URL = _os.environ.get("DATABASE_URL", "")
+        DB_HOST = _os.environ.get("DB_HOST", "localhost")
+        DB_PORT = _os.environ.get("DB_PORT", "5432")
+        DB_NAME = _os.environ.get("DB_NAME", "admissions")
+        DB_USER = _os.environ.get("DB_USER", "postgres")
+        DB_PASSWORD = _os.environ.get("DB_PASSWORD", "")
+
+        if DATABASE_URL:
+            conn_str = DATABASE_URL
+        else:
+            conn_str = (
+                f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
+                f"user={DB_USER} password={DB_PASSWORD}"
+            )
+
+        conn = psycopg2.connect(conn_str)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, lead_id, status, call_sid, scheduled_at, "
+                "started_at, completed_at, error_message, created_at "
+                "FROM call_queue WHERE lead_id = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (lead_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return {"status": "queued", "lead_id": lead_id}
+
+        return {
+            "id": str(row[0]),
+            "lead_id": str(row[1]) if row[1] else "",
+            "status": row[2] or "queued",
+            "call_sid": row[3] or "",
+            "scheduled_at": row[4].isoformat() if hasattr(row[4], "isoformat") else str(row[4]) if row[4] else "",
+            "started_at": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]) if row[5] else "",
+            "completed_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]) if row[6] else "",
+            "error_message": row[7] or "",
+            "created_at": row[8].isoformat() if hasattr(row[8], "isoformat") else str(row[8]) if row[8] else "",
+        }
+    except Exception:
+        logger.exception("Failed to query call_queue status")
+        return {"error": "Database unavailable", "lead_id": lead_id}
+
+
 @app.get("/api/conversations")
 async def api_list_conversations(
     lead_id: str = "",
@@ -1150,6 +1289,7 @@ async def health_check():
         "endpoints": {
             "health": "/",
             "voice_page": "/voice",
+            "quick_call_page": "/call",
             "websocket_pcm": "/ws/voice",
             "websocket_text_rag": "/ws/voice/text",
             "twilio_webhook": "/twilio/voice",
@@ -1157,6 +1297,8 @@ async def health_check():
             "twilio_outbound_ws": "/ws/twilio-outbound",
             "twilio_outbound_status": "/twilio/outbound/status",
             "whatsapp_webhook": "/twilio/whatsapp",
+            "quick_call_api": "/api/quick-call",
+            "call_queue_status": "/api/call-queue",
             "mcp_sse": "/mcp/sse",
             "mcp_messages": "/mcp/messages",
         },
@@ -1172,6 +1314,21 @@ async def voice_page():
     if not html_path.is_file():
         return JSONResponse(
             {"message": "Voice client page not found.", "status": "error"},
+            status_code=404,
+        )
+    return FileResponse(html_path, media_type="text/html")
+
+
+# ── HTTP: Quick call page ─────────────────────────────────────────────
+
+
+@app.get("/call")
+async def quick_call_page():
+    """Serve the quick outbound call page."""
+    html_path = Path(__file__).resolve().parent / "static" / "quick_call.html"
+    if not html_path.is_file():
+        return JSONResponse(
+            {"message": "Quick call page not found.", "status": "error"},
             status_code=404,
         )
     return FileResponse(html_path, media_type="text/html")

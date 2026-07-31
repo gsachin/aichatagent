@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quick Call — University Admissions</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+                 Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; background: #0f172a; color: #e2e8f0;
+  }
+  .container {
+    text-align: center; max-width: 460px; width: 90%;
+    padding: 2.5rem 2rem; background: #1e293b;
+    border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+  }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .subtitle { font-size: 0.85rem; color: #94a3b8; margin-bottom: 2rem; }
+  .status-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 0.5rem; margin-bottom: 1.5rem;
+  }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    display: inline-block; flex-shrink: 0;
+    background: #475569; transition: background 0.3s;
+  }
+  .dot.queued    { background: #f59e0b; animation: pulse 1s infinite; }
+  .dot.ringing   { background: #3b82f6; animation: pulse 0.6s infinite; }
+  .dot.in-progress, .dot.completed { background: #22c55e; }
+  .dot.failed, .dot.busy, .dot.no-answer { background: #ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .status-label { font-size: 0.95rem; font-weight: 500; color: #cbd5e1; }
+  .form-group { margin-bottom: 1rem; text-align: left; }
+  .form-group label {
+    display: block; font-size: 0.8rem; color: #94a3b8;
+    margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .form-group input {
+    width: 100%; padding: 0.7rem 0.9rem; font-size: 1rem;
+    border: 1px solid #334155; border-radius: 8px;
+    background: #0f172a; color: #e2e8f0; outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-group input:focus { border-color: #3b82f6; }
+  .form-group input::placeholder { color: #64748b; }
+  .btn {
+    width: 100%; padding: 0.8rem; font-size: 1rem; font-weight: 600;
+    border: none; border-radius: 10px; cursor: pointer;
+    transition: all 0.2s; margin-top: 0.5rem; color: #fff;
+  }
+  .btn-call { background: #3b82f6; }
+  .btn-call:hover:not(:disabled) { background: #2563eb; }
+  .btn-call:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+  .log {
+    margin-top: 1.5rem; background: #0f172a; border-radius: 8px;
+    padding: 0.9rem; font-size: 0.8rem; text-align: left;
+    color: #94a3b8; max-height: 180px; overflow-y: auto;
+    font-family: "Cascadia Code","Fira Code","Consolas",monospace; line-height: 1.4;
+  }
+  .log .line { margin-bottom: 0.15rem; }
+  .log .line.success { color: #4ade80; }
+  .log .line.error   { color: #f87171; }
+  .log .line.info    { color: #60a5fa; }
+  .info-box {
+    margin-top: 1.2rem; padding: 0.75rem; background: #0f172a;
+    border-radius: 8px; font-size: 0.78rem; color: #94a3b8; line-height: 1.5;
+  }
+  .info-box code {
+    background: #1e293b; padding: 0.15rem 0.4rem; border-radius: 4px;
+    color: #facc15; font-size: 0.75rem; word-break: break-all;
+  }
+  .error-msg { color: #f87171; font-size: 0.82rem; margin-top: 0.5rem; display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>&#x1F4DE; Quick Outbound Call</h1>
+  <p class="subtitle">Enter a phone number — the AI admissions assistant will call it</p>
+
+  <div class="status-row">
+    <span class="dot" id="dot"></span>
+    <span class="status-label" id="statusLabel">Ready</span>
+  </div>
+
+  <div class="form-group">
+    <label>Phone Number *</label>
+    <input type="tel" id="phoneInput" placeholder="+917016872149" autofocus>
+  </div>
+  <div class="form-group">
+    <label>Name (optional)</label>
+    <input type="text" id="nameInput" placeholder="e.g. Rahul">
+  </div>
+
+  <button class="btn btn-call" id="callBtn" onclick="makeCall()">&#x1F4DE; Call Now</button>
+  <div class="error-msg" id="errorMsg"></div>
+
+  <div class="log" id="logBox">
+    <div class="line info">&#x279C; Ready. Enter a number and click "Call Now".</div>
+  </div>
+
+  <div class="info-box" id="infoBox" style="display:none">
+    <strong>&#x1F517; Share this page:</strong><br>
+    <code id="shareUrl"></code><br><br>
+    <strong>&#x1F4CB; Twilio WhatsApp Webhook:</strong><br>
+    <code id="webhookUrl"></code>
+  </div>
+</div>
+
+<script>
+var phoneInput = document.getElementById("phoneInput");
+var nameInput  = document.getElementById("nameInput");
+var callBtn    = document.getElementById("callBtn");
+var dot        = document.getElementById("dot");
+var statusLabel = document.getElementById("statusLabel");
+var logBox     = document.getElementById("logBox");
+var errorMsg   = document.getElementById("errorMsg");
+var infoBox    = document.getElementById("infoBox");
+var shareUrl   = document.getElementById("shareUrl");
+var webhookUrl = document.getElementById("webhookUrl");
+var pollTimer  = null;
+
+function log(msg, cls) {
+  var div = document.createElement("div");
+  div.className = "line " + (cls || "");
+  div.textContent = new Date().toLocaleTimeString() + "  " + msg;
+  logBox.appendChild(div);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function setUI(state) {
+  var states = {
+    idle:        { dot: "",            label: "Ready",                    btn: true,  btnText: "📞 Call Now" },
+    queued:      { dot: "queued",      label: "Queued — waiting...",  btn: false, btnText: "⏳ Queued" },
+    ringing:     { dot: "ringing",     label: "📞 Ringing...",  btn: false, btnText: "📞 Ringing…" },
+    "in-progress": { dot: "in-progress", label: "✅ Connected — AI speaking…", btn: false, btnText: "🔊 Active" },
+    completed:   { dot: "completed",   label: "✅ Call completed",    btn: true,  btnText: "📞 Call Again" },
+    failed:      { dot: "failed",      label: "❌ Call failed",       btn: true,  btnText: "📞 Retry" },
+    busy:        { dot: "failed",      label: "📵 Line busy",   btn: true,  btnText: "📞 Retry" },
+    "no-answer": { dot: "failed",      label: "📵 No answer",   btn: true,  btnText: "📞 Retry" },
+  };
+  var s = states[state] || states.idle;
+  dot.className = "dot " + s.dot;
+  statusLabel.textContent = s.label;
+  callBtn.disabled = !s.btn;
+  callBtn.textContent = s.btnText;
+  if (state === "completed" || state === "failed" || state === "busy" || state === "no-answer") {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+}
+
+async function makeCall() {
+  var phone = phoneInput.value.trim();
+  if (!phone) { errorMsg.textContent = "Please enter a phone number."; errorMsg.style.display = "block"; return; }
+  errorMsg.style.display = "none";
+  setUI("queued");
+  log("Creating lead + queuing call for " + phone, "info");
+  try {
+    var resp = await fetch("/api/quick-call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone_number: phone, name: nameInput.value.trim() }),
+    });
+    var data = await resp.json();
+    if (data.error) { setUI("failed"); log("Error: " + data.error, "error"); return; }
+    var leadId = data.lead.id;
+    log("Lead: " + leadId.slice(0, 8) + "…", "success");
+    log("Call queued — worker picking up...", "success");
+    if (data.tunnel_host) {
+      infoBox.style.display = "block";
+      shareUrl.textContent = "https://" + data.tunnel_host + "/call";
+      webhookUrl.textContent = "https://" + data.tunnel_host + "/twilio/whatsapp";
+    }
+    pollStatus(leadId);
+  } catch (e) { setUI("failed"); log("Network error: " + e.message, "error"); }
+}
+
+async function pollStatus(leadId) {
+  if (pollTimer) clearInterval(pollTimer);
+  var lastStatus = "";
+  pollTimer = setInterval(async function() {
+    try {
+      var resp = await fetch("/api/call-queue?lead_id=" + leadId);
+      var data = await resp.json();
+      if (data.error) return;
+      var status = data.status || "queued";
+      if (status === lastStatus) return;
+      lastStatus = status;
+      if (status === "ringing")      { setUI("ringing"); log("📞 Phone is ringing…", "info"); }
+      else if (status === "in-progress") { setUI("in-progress"); log("✅ Call answered — AI speaking…", "success"); }
+      else if (status === "completed")   { setUI("completed"); log("✅ Call completed", "success"); }
+      else if (status === "failed")      { setUI("failed"); log("❌ Call failed: " + (data.error_message || "unknown"), "error"); }
+      else if (status === "busy")        { setUI("busy"); log("📵 Line busy", "error"); }
+      else if (status === "no-answer")   { setUI("no-answer"); log("📵 No answer", "error"); }
+    } catch (e) { /* silent retry */ }
+  }, 2000);
+}
+phoneInput.addEventListener("keydown", function(e) { if (e.key === "Enter") makeCall(); });
+nameInput.addEventListener("keydown", function(e) { if (e.key === "Enter") makeCall(); });
+</script>
+</body>
+</html>
