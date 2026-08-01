@@ -414,6 +414,10 @@ async def websocket_twilio(websocket: WebSocket):
                         })
                         await websocket.send_text(response)
 
+            elif event == "dtmf":
+                dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
+                logger.info(f"WS /ws/twilio: DTMF digit '{dtmf_digit}' — ignored (pipeline handles in-band audio)")
+
             elif event == "stop":
                 logger.info(f"WS /ws/twilio: stream stopped — {stream_sid}")
                 break
@@ -531,6 +535,10 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                             }
                         )
                         await websocket.send_text(response)
+
+            elif event == "dtmf":
+                dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
+                logger.info(f"WS /ws/twilio-outbound: DTMF digit '{dtmf_digit}' — ignored (pipeline handles in-band audio)")
 
             elif event == "stop":
                 logger.info(
