@@ -199,6 +199,26 @@ TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back or try our WhatsApp channel for immediate assistance.</Say>
 </Response>"""
 
+# IVR menu — shown before connecting to AI
+TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather numDigits="1" timeout="3" action="/twilio/voice/connect" method="GET">
+        <Say voice="Polly.Joanna">
+            Welcome to the University Admissions helpline.
+            Press 1 for UMD programs.
+            Press 2 for FDU programs.
+            Press 3 for tuition and fees information.
+            Press 4 to speak with our AI admissions assistant.
+            Or, simply start speaking to ask any question.
+        </Say>
+    </Gather>
+    <Say voice="Polly.Joanna">I didn't receive any input. Connecting you to the AI assistant now.</Say>
+    <Connect>
+        <Stream url="wss://{host}/ws/twilio" />
+    </Connect>
+    <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
+</Response>"""
+
 
 # ── u-law conversion utilities ───────────────────────────────────────
 
@@ -715,12 +735,24 @@ async def twilio_outbound_status_callback(
 @app.get("/twilio/voice")
 async def twilio_voice_webhook():
     """
-    Twilio voice webhook — returns TwiML connecting the call to /ws/twilio.
-    Uses the live Cloudflare tunnel host (same as outbound calls).
+    Twilio voice webhook — serves IVR menu first.
+    After the caller presses a digit (or timeout), connects to /ws/twilio.
     """
     host = _resolve_tunnel_host()
+    twiml = TWIML_IVR_TEMPLATE.format(host=host)
+    logger.info(f"/twilio/voice: serving IVR menu with host={host}")
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.get("/twilio/voice/connect")
+async def twilio_voice_connect(Digits: str = ""):
+    """
+    Called by Twilio after IVR <Gather> completes.
+    Connects the caller to the AI WebSocket stream.
+    """
+    host = _resolve_tunnel_host()
+    logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}")
     twiml = TWIML_TEMPLATE.format(host=host)
-    logger.info(f"/twilio/voice: serving TwiML with host={host}")
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -1556,10 +1588,18 @@ async def mcp_messages_endpoint(req: Request):
 # ── HTTP: Health check ───────────────────────────────────────────────
 
 @app.get("/")
-async def health_check():
-    """Health check + navigation to available endpoints."""
+async def health_check(request: Request):
+    """Serve landing page for browsers, JSON health check for API clients."""
     from app.config import settings
 
+    # Serve HTML landing page for browser requests
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        html_path = Path(__file__).resolve().parent / "static" / "index.html"
+        if html_path.is_file():
+            return FileResponse(html_path, media_type="text/html")
+
+    # JSON for API clients / curl
     return JSONResponse({
         "status": "ok",
         "app": "University Admissions Voice Assistant",
@@ -1573,6 +1613,7 @@ async def health_check():
             "health": "/",
             "voice_page": "/voice",
             "quick_call_page": "/call",
+            "dashboard_page": "/dashboard",
             "websocket_pcm": "/ws/voice",
             "websocket_text_rag": "/ws/voice/text",
             "twilio_webhook": "/twilio/voice",

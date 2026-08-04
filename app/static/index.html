@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>University Admissions Voice Assistant</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --blue: #3b82f6; --green: #22c55e;
+    --radius: 12px; --shadow: 0 4px 24px rgba(0,0,0,0.35);
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center}
+  header{text-align:center;padding:3rem 1rem 2rem}
+  header h1{font-size:2rem;margin-bottom:.5rem}
+  header p{color:var(--muted);font-size:1.1rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.25rem;max-width:900px;width:90%;padding:0 1rem 2rem}
+  .card{background:var(--card);border-radius:var(--radius);padding:2rem 1.5rem;text-align:center;text-decoration:none;color:var(--text);transition:transform .15s,background .2s;box-shadow:var(--shadow);border:1px solid var(--border)}
+  .card:hover{transform:translateY(-3px);background:#273449}
+  .card .icon{font-size:2.5rem;display:block;margin-bottom:.75rem}
+  .card h2{font-size:1.1rem;margin-bottom:.5rem}
+  .card p{font-size:.85rem;color:var(--muted);line-height:1.5}
+  .call-card{border:2px solid var(--green)}
+  .call-card .phone{font-size:2rem;font-weight:700;color:var(--green);margin:1rem 0;letter-spacing:.05em}
+  .status-bar{display:flex;gap:1.5rem;justify-content:center;padding:1rem;margin-bottom:1rem;flex-wrap:wrap}
+  .status-item{display:flex;align-items:center;gap:.4rem;font-size:.85rem;color:var(--muted)}
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+  footer{text-align:center;padding:2rem;color:var(--muted);font-size:.8rem;margin-top:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎓 University Admissions Voice Assistant</h1>
+  <p>AI-powered admissions counselor for UMD & FDU programs</p>
+</header>
+
+<div class="status-bar">
+  <div class="status-item"><span class="status-dot"></span> System Online</div>
+  <div class="status-item">📞 +19788198953</div>
+  <div class="status-item">📍 AI-Powered Voice + Chat</div>
+</div>
+
+<div class="grid">
+  <div class="card call-card">
+    <span class="icon">📞</span>
+    <h2>Call the AI Assistant</h2>
+    <div class="phone">+19788198953</div>
+    <p>Speak with our AI admissions counselor. Ask about programs, tuition, admissions, or application deadlines.</p>
+  </div>
+
+  <a href="/dashboard" class="card">
+    <span class="icon">📊</span>
+    <h2>Command Cockpit</h2>
+    <p>Live dashboard — active calls, lead pipeline, conversations, follow-up calendar, and batch dialer.</p>
+  </a>
+
+  <a href="/call" class="card">
+    <span class="icon">⚡</span>
+    <h2>Quick Call</h2>
+    <p>Enter a phone number and the AI will call the prospect immediately. Track live call status.</p>
+  </a>
+
+  <a href="/voice" class="card">
+    <span class="icon">🎤</span>
+    <h2>Voice Client</h2>
+    <p>Browser-based voice interface — speak directly to the AI through your computer microphone.</p>
+  </a>
+</div>
+
+<footer>
+  <p>All AI runs locally — Whisper STT · Qwen 2.5 7B · Kokoro TTS · ChromaDB RAG</p>
+  <p style="margin-top:.5rem">University of Maryland (UMD) & Fairleigh Dickinson University (FDU)</p>
+</footer>
+</body>
+</html>

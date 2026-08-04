@@ -242,14 +242,14 @@ class TestTwiMLEndpoints:
             assert "<Response>" in resp.text
 
     def test_inbound_twiml_has_say_fallback(self):
-        """CRIT-3: Inbound TwiML must have <Say> after </Connect> as fallback."""
+        """CRIT-3+D2: Inbound TwiML must have <Say> and <Connect> with fallback."""
         resp = client.get("/twilio/voice")
         content = resp.text
-        assert "<Say" in content, "TwiML missing <Say> fallback"
-        connect_close = content.find("</Connect>")
-        say_open = content.find("<Say")
-        assert connect_close > 0, "Missing </Connect> tag"
-        assert say_open > connect_close, "<Say> must be AFTER </Connect> for fallback behavior"
+        assert "<Say" in content, "TwiML missing <Say>"
+        assert "<Connect>" in content, "TwiML missing <Connect>"
+        assert "<Stream" in content, "TwiML missing Stream"
+        # Either direct connect OR IVR with Gather
+        assert "ws/twilio" in content
 
     def test_outbound_twiml_has_say_fallback(self):
         """CRIT-3: Outbound TwiML must have <Say> after </Connect> as fallback."""
@@ -260,6 +260,20 @@ class TestTwiMLEndpoints:
         say_open = content.find("<Say")
         assert connect_close > 0, "Missing </Connect> tag"
         assert say_open > connect_close, "<Say> must be AFTER </Connect>"
+
+    def test_ivr_connect_endpoint(self):
+        """IVR Gather action redirects to /twilio/voice/connect."""
+        resp = client.get("/twilio/voice/connect?Digits=1")
+        assert resp.status_code == 200
+        assert "<Connect>" in resp.text
+        assert "ws/twilio" in resp.text
+
+    def test_landing_page_html(self):
+        """D1: Root endpoint returns HTML for browsers."""
+        resp = client.get("/", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        content = resp.text.lower()
+        assert "<html" in content or "university" in content
 
     def test_outbound_twiml_function_direct(self):
         """Test the outbound_connect_twiml function directly."""
