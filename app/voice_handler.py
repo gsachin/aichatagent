@@ -40,26 +40,48 @@ logger = logging.getLogger("voice_handler")
 
 _stt_model = None
 _tts_engine = None
+_STT_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small.en")  # small.en or medium.en
 
 
 def _get_stt_model():
-    """Load openai-whisper once and cache."""
+    """Load faster-whisper on CUDA once and cache (numpy bypass avoids PyAV DLL)."""
     global _stt_model
     if _stt_model is not None:
         return _stt_model
-    import whisper
 
-    logger.info("Loading Whisper base model for voice calls...")
-    _stt_model = whisper.load_model("base")
-    logger.info("Whisper model ready")
+    from faster_whisper import WhisperModel
+
+    # Detect compute device
+    try:
+        from app.platform import detect_compute_device
+        platform = detect_compute_device()
+        device = platform["device"]
+        compute_type = platform["compute_type"]
+    except Exception:
+        device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+        compute_type = "int8" if device == "cuda" else "float32"
+
+    logger.info(f"Loading faster-whisper {_STT_MODEL_SIZE} on {device} ({compute_type})...")
+    _stt_model = WhisperModel(_STT_MODEL_SIZE, device=device, compute_type=compute_type)
+    logger.info(f"faster-whisper {_STT_MODEL_SIZE} ready on {device}")
     return _stt_model
 
 
 def _get_tts_engine():
-    """Load Kokoro ONNX once and cache."""
+    """Load Kokoro ONNX once and cache — GPU-accelerated via CUDA."""
     global _tts_engine
     if _tts_engine is not None:
         return _tts_engine
+
+    # Force CUDA execution provider for 5-10x faster TTS
+    import onnxruntime as ort
+    available = ort.get_available_providers()
+    if "CUDAExecutionProvider" in available:
+        os.environ["ONNX_PROVIDER"] = "CUDAExecutionProvider"
+        logger.info("Kokoro TTS: CUDA GPU enabled")
+    else:
+        logger.warning("Kokoro TTS: CUDA not available, using CPU (slow)")
+
     from kokoro_onnx import Kokoro
 
     cache_dir = os.path.expanduser(r"~\.cache\pipecat\kokoro-onnx")
@@ -259,22 +281,60 @@ class VoiceCallSession:
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
         return self._pcm_to_ulaw_chunks(tts_pcm), dialogue
 
+    # ── Domain dictionary for phone audio corrections ──────────────
+
+    _CORRECTIONS = {
+        "held you": "FDU", "hold you": "FDU", "hold u": "FDU",
+        "intuition": "tuition", "faze": "fees",
+        "you empty": "UMD", "you and the": "UMD", "empty": "UMD",
+        "emma": "MBA", "gp a": "GPA", "i elts": "IELTS",
+        "toefl": "TOEFL", "jimat": "GMAT", "g mat": "GMAT",
+    }
+
+    def _post_process_transcript(self, text: str) -> str:
+        """Apply domain corrections to fix common STT errors on phone audio."""
+        result = text
+        text_lower = result.lower()
+        for wrong, correct in self._CORRECTIONS.items():
+            if wrong in text_lower:
+                # Case-insensitive replacement
+                import re
+                result = re.sub(wrong, correct, result, flags=re.IGNORECASE)
+        return result.strip()
+
     # ── Internal ──────────────────────────────────────────────────
 
     async def _transcribe(self, audio_16k_int16: np.ndarray) -> str:
-        """Run Whisper STT in a thread (it blocks).
+        """Run faster-whisper STT in a thread (GPU via CTranslate2).
 
-        Whisper expects float32 audio in range [-1.0, 1.0], but we
-        receive int16.  Convert before calling the model.
+        Accepts int16 numpy array directly — no PyAV/file I/O needed,
+        which avoids the AppLocker DLL block on this machine.
         """
         try:
             model = _get_stt_model()
-            # Convert int16 → float32 for whisper compatibility
+            # Convert int16 → float32 for faster-whisper
             audio_float = audio_16k_int16.astype(np.float32) / 32768.0
-            result = await asyncio.to_thread(
-                lambda: model.transcribe(audio_float, language="en", fp16=False)
+
+            # faster-whisper API returns (segments, info) — different from openai-whisper
+            segments, info = await asyncio.to_thread(
+                lambda: model.transcribe(
+                    audio_float,
+                    language="en",
+                    beam_size=5,
+                    vad_filter=True,
+                    vad_parameters=dict(
+                        threshold=0.5,
+                        min_speech_duration_ms=250,
+                    ),
+                )
             )
-            return (result.get("text") or "").strip()
+            transcript = " ".join(seg.text.strip() for seg in segments)
+            transcript = self._post_process_transcript(transcript)
+            logger.info(
+                f"STT: \"{transcript[:100]}\" "
+                f"(lang={info.language}, prob={info.language_probability:.2f})"
+            )
+            return transcript
         except Exception:
             logger.exception("VoiceCall: STT failed")
             return ""
@@ -301,15 +361,33 @@ class VoiceCallSession:
             logger.exception("VoiceCall: LLM query failed")
             return ""
 
+    # Simple TTS cache — keyed by text hash, avoids re-synthesis of common phrases
+    _tts_cache: dict[int, tuple[np.ndarray, int]] = {}
+    _tts_cache_max = 50
+
     async def _synthesise(self, text: str) -> np.ndarray | None:
-        """Run Kokoro TTS in a thread, return float32 PCM array."""
+        """Run Kokoro TTS in a thread, return float32 PCM array. Cached for speed."""
         try:
             kokoro = _get_tts_engine()
-            # Keep it short for phone calls
             tts_text = text[:500] if len(text) > 500 else text
+
+            # Check cache
+            cache_key = hash(tts_text)
+            if cache_key in self._tts_cache:
+                cached_audio, cached_sr = self._tts_cache[cache_key]
+                logger.debug(f"TTS cache HIT: {tts_text[:60]}...")
+                return cached_audio.copy()
+
             audio, sr = await asyncio.to_thread(
                 kokoro.create, tts_text, voice="af_heart", speed=1.0
             )
+            # Store in cache
+            if len(self._tts_cache) >= self._tts_cache_max:
+                # Evict oldest
+                oldest = next(iter(self._tts_cache))
+                del self._tts_cache[oldest]
+            self._tts_cache[cache_key] = (audio.copy(), sr)
+
             logger.info(f"VoiceCall: TTS generated ({len(audio)/sr:.1f}s at {sr} Hz)")
             return audio
         except Exception:

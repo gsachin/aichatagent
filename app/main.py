@@ -726,22 +726,13 @@ async def twilio_voice_webhook():
 
 # ── WhatsApp voice transcription ───────────────────────────────────────
 
-# Lazily loaded Whisper model (cached after first use)
-_stt_model = None
+# Reuse the shared STT model from voice_handler (faster-whisper on CUDA)
 
 
 def _get_stt_model():
-    """Load openai-whisper model — cached across requests.
-    Uses openai-whisper instead of faster-whisper because the PyAV DLL
-    (required by faster-whisper) is blocked by AppLocker on this machine.
-    """
-    global _stt_model
-    if _stt_model is not None:
-        return _stt_model
-    import whisper
-    _stt_model = whisper.load_model("base")  # better accuracy than tiny
-    logger.info("Whisper base model loaded")
-    return _stt_model
+    """Reuse the shared faster-whisper model from voice_handler."""
+    from app.voice_handler import _get_stt_model as _vh_stt_model
+    return _vh_stt_model()
 
 
 async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
@@ -787,10 +778,13 @@ async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
 
         logger.info(f"Audio: {len(audio_np)/16000:.1f}s @ 16kHz")
 
-        # Transcribe with openai-whisper (expects float32 array)
+        # Transcribe with faster-whisper (numpy array, no PyAV needed)
         model = _get_stt_model()
-        result = model.transcribe(audio_np.astype(np.float32), language="en")
-        transcript = result["text"].strip()
+        audio_float = audio_np.astype(np.float32) / 32768.0
+        segments, info = model.transcribe(
+            audio_float, language="en", beam_size=5, vad_filter=True
+        )
+        transcript = " ".join(seg.text.strip() for seg in segments)
 
         logger.info(f"Transcribed ({len(transcript)} chars): {transcript[:100]}...")
         return transcript
