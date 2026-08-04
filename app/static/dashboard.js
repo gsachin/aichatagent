@@ -21,6 +21,27 @@ async function fetchJSON(path) {
   }
 }
 
+// Track API errors per endpoint for retry
+const _apiErrors = {};
+function showError(sectionId, message, retryFn) {
+  const el = document.getElementById(sectionId);
+  if (!el) return;
+  el.innerHTML = `<div class="error-banner"><span>⚠ ${message}</span><button onclick="(${retryFn.toString()})()">Retry</button></div>`;
+}
+
+// ===== SKELETON HELPERS =====
+function showSkeleton(containerId, type) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (type === 'stats') {
+    el.innerHTML = '<div class="skeleton-row">' + Array(5).fill('<div class="skeleton-card"></div>').join('') + '</div>';
+  } else if (type === 'pipeline') {
+    el.innerHTML = Array(5).fill('<div style="flex:1;min-width:180px"><div class="skeleton-line medium"></div><div class="skeleton-line" style="height:40px"></div><div class="skeleton-line short"></div><div class="skeleton-line short"></div></div>').join('');
+  } else if (type === 'table') {
+    el.innerHTML = Array(4).fill('<div class="skeleton-line medium"></div>').join('');
+  }
+}
+
 function timeAgo(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -64,13 +85,18 @@ async function init() {
   await Promise.all([loadStats(), loadLeads(), loadConversations()]);
 
   // Set up polling
-  setInterval(loadStats, 10000);
+  setInterval(loadSummary, 10000);
   setInterval(loadLeads, 30000);
   setInterval(loadConversations, 30000);
-  setInterval(pollActiveCalls, 5000);
+
+  // SSE for live calls
+  connectSSE();
 
   // Load settings
   loadSettings();
+
+  // Render calendar
+  renderCalendar();
 
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -79,9 +105,42 @@ async function init() {
 }
 
 // ===== DATA LOADERS =====
-async function loadStats() {
-  const data = await fetchJSON('/api/stats');
+async function loadSummary() {
+  const data = await fetchJSON('/api/dashboard/summary');
   if (!data) return;
+  const s = data.stats || data;
+  state.stats = s;
+
+  document.getElementById('statNewLeads').textContent = s.new_leads_today || 0;
+  document.getElementById('statDueFollowUps').textContent = s.due_follow_ups || 0;
+  document.getElementById('statHotLeads').textContent = s.hot_leads || 0;
+  document.getElementById('statTotalPipeline').textContent = s.total_pipeline || 0;
+
+  // Update active calls from SSE state
+  const activeCount = Object.keys(state.activeCalls).length;
+  document.getElementById('statActiveCalls').textContent = activeCount;
+  const dot = document.getElementById('dotActiveCalls');
+  if (activeCount > 0) { dot.classList.add('pulse'); }
+  else { dot.classList.remove('pulse'); }
+
+  // Update pipeline counts
+  if (data.pipeline) {
+    Object.entries(data.pipeline).forEach(([status, count]) => {
+      const el = document.getElementById(`count-${status}`);
+      if (el) el.textContent = count;
+    });
+  }
+
+  // Recent activity from summary
+  if (data.recent_activity) {
+    state.conversations = data.recent_activity;
+    renderActivity();
+  }
+}
+
+async function loadStats() {
+  // Legacy fallback
+  const data = await fetchJSON('/api/stats');
 
   const health = await fetchJSON('/');
   state.stats = data;
@@ -99,11 +158,23 @@ async function loadStats() {
   }
 }
 
-async function loadLeads() {
-  const data = await fetchJSON('/api/leads?limit=200');
-  if (!data) return;
+async function loadLeads(searchTerm) {
+  let url = '/api/leads?limit=200';
+  if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
+  const data = await fetchJSON(url);
+  if (data === null) {
+    showError('pipelineBoard', 'Failed to load leads', () => loadLeads());
+    return;
+  }
   state.leads = Array.isArray(data) ? data : [];
   renderPipeline();
+}
+
+// Search handler
+let _searchTimer = null;
+function onSearchInput(val) {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => loadLeads(val), 300);
 }
 
 async function loadConversations() {
@@ -139,9 +210,25 @@ async function loadSettings() {
 }
 
 // ===== RENDER: PIPELINE BOARD =====
+const leadScores = {}; // Cache of lead_id -> score data
+const tempMap = { hot: '🔥 Hot', warm: '🟡 Warm', cool: '🟠 Cool', cold: '🔴 Cold', dead: '⚫ Dead' };
+const tempClass = { hot: 'badge-hot', warm: 'badge-warm', cool: 'badge-cool', cold: 'badge-cold', dead: '' };
+const scoreColor = (s) => s >= 8 ? 'var(--green)' : s >= 5 ? 'var(--yellow)' : 'var(--red)';
+
+async function loadLeadScores(leadIds) {
+  // Fetch scores in batches (don't hammer the API)
+  const toFetch = leadIds.filter(id => !leadScores[id]);
+  if (toFetch.length === 0) return;
+  for (const id of toFetch.slice(0, 20)) {
+    try {
+      const data = await fetchJSON(`/api/leads/${id}/score`);
+      if (data) leadScores[id] = data;
+    } catch(e) {}
+  }
+}
+
 function renderPipeline() {
   const leads = state.leads;
-  // Group by status
   const groups = { pending: [], in_progress: [], completed: [], failed: [], unreachable: [] };
   leads.forEach(l => {
     const s = l.status || 'pending';
@@ -149,23 +236,29 @@ function renderPipeline() {
     else groups.pending.push(l);
   });
 
+  // Trigger score loading for visible leads
+  const allIds = leads.map(l => l.id).filter(Boolean);
+  loadLeadScores(allIds);
+
   Object.entries(groups).forEach(([status, items]) => {
-    // Update count
     const countEl = document.getElementById(`count-${status}`);
     if (countEl) countEl.textContent = items.length;
 
-    // Render cards
     const cardsEl = document.getElementById(`cards-${status}`);
     if (!cardsEl) return;
-    cardsEl.innerHTML = items.slice(0, 10).map(l => `
-      <div class="lead-card" onclick="openLeadDetail('${l.id}')" style="border-left-color: ${statusColor(status)}">
+    cardsEl.innerHTML = items.slice(0, 10).map(l => {
+      const sc = leadScores[l.id] || {};
+      const score = sc.score;
+      const temp = sc.temperature;
+      return `<div class="lead-card" onclick="openLeadDetail('${l.id}')" style="border-left-color: ${statusColor(status)}">
         <div class="lead-name">${escapeHtml(l.name || 'Unknown')}</div>
         <div class="lead-program">${escapeHtml(l.program_interest || '—')}</div>
         <div class="lead-meta">
-          <span>${escapeHtml(l.phone_number || '')}</span>
+          ${temp ? `<span class="badge ${tempClass[temp]||''}">${tempMap[temp]||temp}</span>` : ''}
+          ${score ? `<span class="badge" style="color:${scoreColor(score)}">⭐${score}</span>` : ''}
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
     if (items.length > 10) {
       cardsEl.innerHTML += `<div style="font-size:0.75rem;color:var(--text-muted);padding:0.5rem;text-align:center">+ ${items.length - 10} more</div>`;
     }
@@ -391,6 +484,162 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+// ===== SSE: LIVE CALL MONITOR =====
+function connectSSE() {
+  const es = new EventSource(`${API_BASE}/api/calls/live?stream=true`);
+  es.addEventListener('call_started', (e) => {
+    const data = JSON.parse(e.data);
+    state.activeCalls[data.call_sid] = data;
+    renderLiveCalls();
+    document.getElementById('statActiveCalls').textContent = Object.keys(state.activeCalls).length;
+  });
+  es.addEventListener('transcript', (e) => {
+    const data = JSON.parse(e.data);
+    if (state.activeCalls[data.call_sid]) {
+      if (!state.activeCalls[data.call_sid].transcripts) {
+        state.activeCalls[data.call_sid].transcripts = [];
+      }
+      state.activeCalls[data.call_sid].transcripts.push(data.dialogue || '');
+      renderLiveCalls();
+    }
+  });
+  es.addEventListener('call_ended', (e) => {
+    const data = JSON.parse(e.data);
+    delete state.activeCalls[data.call_sid];
+    renderLiveCalls();
+    document.getElementById('statActiveCalls').textContent = Object.keys(state.activeCalls).length;
+  });
+  es.onerror = () => { /* Reconnect handled by browser */ };
+  state._sse = es;
+}
+
+function renderLiveCalls() {
+  const container = document.getElementById('liveCallsContent');
+  const callIds = Object.keys(state.activeCalls);
+  if (!callIds.length) {
+    container.innerHTML = '<div class="empty-state"><span class="empty-icon">📞</span><p>No active calls right now</p><p class="empty-hint">Calls will appear here in real-time when active</p></div>';
+    return;
+  }
+  container.innerHTML = callIds.map(sid => {
+    const call = state.activeCalls[sid];
+    const transcripts = call.transcripts || [];
+    return `<div class="call-monitor-card">
+      <div class="call-header">
+        <span class="call-direction">${call.direction === 'outbound' ? '📤 Outbound' : '📞 Inbound'}</span>
+        <span class="call-duration">🟢 Active</span>
+      </div>
+      <div class="call-transcript">
+        ${transcripts.map(t => {
+          const lines = t.split('\n');
+          return lines.map(line => {
+            if (line.startsWith('Assistant:')) return `<div class="ai-line">${escapeHtml(line)}</div>`;
+            if (line.startsWith('Caller:')) return `<div class="caller-line">${escapeHtml(line)}</div>`;
+            return `<div>${escapeHtml(line)}</div>`;
+          }).join('');
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ===== CALENDAR TAB =====
+function renderCalendar() {
+  const el = document.getElementById('calendarView');
+  if (!el) return;
+
+  const now = new Date();
+  const daysToShow = 7;
+  let html = '<div class="calendar-grid">';
+
+  for (let i = 0; i < daysToShow; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+    const monthDay = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const isToday = i === 0;
+
+    // Find follow-ups for this day
+    const dayFollowUps = (state.leads || []).filter(l =>
+      l.next_follow_up && l.next_follow_up.startsWith(dateStr)
+    );
+
+    html += `<div class="calendar-day ${isToday ? 'today' : ''}">
+      <div class="cal-day-header">${dayName}</div>
+      <div class="cal-date">${monthDay}</div>
+      <div class="cal-count">${dayFollowUps.length} follow-up${dayFollowUps.length !== 1 ? 's' : ''}</div>
+      ${dayFollowUps.map(l => `
+        <div class="cal-item" onclick="openLeadDetail('${l.id}')">
+          ${l.next_follow_up?.includes('T') ? l.next_follow_up.slice(11,16) : ''} ${escapeHtml(l.name || l.phone_number)}
+        </div>
+      `).join('')}
+    </div>`;
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// Periodically refresh calendar
+setInterval(() => { renderCalendar(); }, 60000);
+
+// ===== REPORTS TAB =====
+function renderReports() {
+  const el = document.getElementById('reportsContent');
+  if (!el) return;
+  const leads = state.leads || [];
+  const convs = state.conversations || [];
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayConvs = convs.filter(c => c.created_at && c.created_at.startsWith(today));
+  const completedLeads = leads.filter(l => l.status === 'completed');
+  const totalCalls = convs.filter(c => c.channel === 'inbound_call' || c.channel === 'outbound_call');
+  const interested = convs.filter(c => c.outcome === 'interested');
+
+  el.innerHTML = `
+    <div class="stat-row" style="padding:0">
+      <div class="stat-card">
+        <div class="stat-number">${todayConvs.length}</div>
+        <div class="stat-label">📞 Calls Today</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">${totalCalls.length}</div>
+        <div class="stat-label">📊 Total Calls</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">${interested.length}</div>
+        <div class="stat-label">🎯 Interested</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">${completedLeads.length}</div>
+        <div class="stat-label">✅ Converted</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">${leads.length}</div>
+        <div class="stat-label">👥 Total Leads</div>
+      </div>
+    </div>
+    <div style="margin-top:1rem"><strong>Channel Breakdown</strong></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem">
+      ${['inbound_call','outbound_call','whatsapp','streamlit'].map(ch => {
+        const count = convs.filter(c => c.channel === ch).length;
+        const emoji = {inbound_call:'📞', outbound_call:'📤', whatsapp:'💬', streamlit:'🌐'}[ch]||'📝';
+        const label = {inbound_call:'Inbound Calls', outbound_call:'Outbound Calls', whatsapp:'WhatsApp', streamlit:'Web Chat'}[ch]||ch;
+        return `<div style="background:var(--bg-body);padding:0.6rem;border-radius:var(--radius);display:flex;justify-content:space-between">
+          <span>${emoji} ${label}</span><strong>${count}</strong>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+// Update reports when data changes
+const _origRenderActivity = renderActivity;
+renderActivity = function() {
+  _origRenderActivity();
+  renderReports();
+};
 
 // ===== STARTUP =====
 document.addEventListener('DOMContentLoaded', init);

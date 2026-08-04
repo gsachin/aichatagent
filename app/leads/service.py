@@ -315,3 +315,126 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
             break
 
     return False, ""
+
+
+# ── Lead Scoring & Classification ────────────────────────────────────
+
+from datetime import datetime, timezone, timedelta
+
+
+def calculate_lead_score(lead: dict, conversations: list[dict] | None = None) -> dict:
+    """
+    Calculate a 1.0–10.0 lead quality score.
+
+    Factors:
+      - Recency (25%): How recently was the lead contacted?
+      - Engagement (30%): How many conversations have they had?
+      - Response (25%): Did they answer calls? Show interest?
+      - Interest (20%): Did they explicitly express interest?
+
+    Returns: {"score": float, "temperature": str, "breakdown": dict}
+    """
+    now = datetime.now(timezone.utc)
+    convs = conversations or []
+
+    # ── Recency (0-10) ──────────────────────────────────────────
+    last_called = lead.get("last_called_at")
+    if last_called:
+        if isinstance(last_called, str):
+            last_called = datetime.fromisoformat(last_called.replace("Z", "+00:00"))
+        hours_since = (now - last_called).total_seconds() / 3600
+        if hours_since < 1:
+            recency = 10
+        elif hours_since < 24:
+            recency = 8
+        elif hours_since < 72:
+            recency = 5
+        elif hours_since < 168:  # 7 days
+            recency = 3
+        else:
+            recency = 1
+    else:
+        recency = 5  # Never contacted — neutral
+
+    # ── Engagement (0-10) ───────────────────────────────────────
+    conv_count = len(convs)
+    if conv_count >= 3:
+        engagement = 10
+    elif conv_count == 2:
+        engagement = 7
+    elif conv_count == 1:
+        engagement = 4
+    else:
+        engagement = 1  # No conversations yet
+
+    # ── Response (0-10) ─────────────────────────────────────────
+    outcomes = [c.get("outcome", "") for c in convs]
+    interested_count = sum(1 for o in outcomes if o == "interested")
+    answered_count = sum(1 for o in outcomes if o in ("interested", "info_given", "not_interested"))
+    if interested_count >= 2:
+        response = 10
+    elif interested_count == 1:
+        response = 8
+    elif answered_count >= 1:
+        response = 5
+    elif conv_count > 0:
+        response = 3
+    else:
+        response = 1
+
+    # ── Interest (0-10) ─────────────────────────────────────────
+    status = lead.get("status", "pending")
+    has_program = bool(lead.get("program_interest"))
+    has_follow_up = bool(lead.get("next_follow_up"))
+    notes = (lead.get("notes") or "").lower()
+    explicit_interest = any(w in notes for w in ("interested", "enroll", "sign up", "apply"))
+
+    interest = 5  # Base
+    if status == "in_progress":
+        interest += 2
+    elif status == "completed":
+        interest += 3
+    elif status in ("failed", "unreachable"):
+        interest -= 3
+    if has_program:
+        interest += 1
+    if has_follow_up:
+        interest += 1
+    if explicit_interest:
+        interest += 1
+    interest = max(1, min(10, interest))
+
+    # ── Weighted Score ──────────────────────────────────────────
+    score = round(
+        recency * 0.25 + engagement * 0.30 + response * 0.25 + interest * 0.20,
+        1,
+    )
+
+    # ── Temperature Classification ─────────────────────────────
+    hours_since_contact = 999
+    if last_called:
+        if isinstance(last_called, str):
+            last_called = datetime.fromisoformat(last_called.replace("Z", "+00:00"))
+        hours_since_contact = (now - last_called).total_seconds() / 3600
+
+    if hours_since_contact < 24:
+        temperature = "hot"
+    elif hours_since_contact < 72:
+        temperature = "warm"
+    elif hours_since_contact < 168:
+        temperature = "cool"
+    elif hours_since_contact < 720:  # 30 days
+        temperature = "cold"
+    else:
+        temperature = "dead"
+
+    return {
+        "score": score,
+        "temperature": temperature,
+        "breakdown": {
+            "recency": recency,
+            "engagement": engagement,
+            "response": response,
+            "interest": interest,
+        },
+    }

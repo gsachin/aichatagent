@@ -265,10 +265,11 @@ async def upsert_lead_by_phone(
 async def list_leads(
     status: str | None = None,
     source: str | None = None,
+    search: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """List leads, optionally filtered by status and/or source."""
+    """List leads, optionally filtered by status, source, and/or text search."""
     with _get_db() as conn:
         if conn is None:
             return []
@@ -286,6 +287,12 @@ async def list_leads(
             if source:
                 conditions.append("source = %s")
                 params.append(source)
+            if search:
+                conditions.append(
+                    "(phone_number ILIKE %s OR name ILIKE %s OR email ILIKE %s OR program_interest ILIKE %s)"
+                )
+                like = f"%{search}%"
+                params.extend([like, like, like, like])
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"

@@ -87,7 +87,10 @@
 
 <!-- ===== ROW 3: PIPELINE BOARD ===== -->
 <section class="panel" id="pipelineBoard">
-  <h2 class="panel-title">📋 Lead Pipeline</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+    <h2 class="panel-title" style="margin-bottom:0">📋 Lead Pipeline</h2>
+    <input type="text" id="pipelineSearch" placeholder="🔍 Search leads..." style="padding:0.4rem 0.75rem;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.85rem;width:220px" oninput="onSearchInput(this.value)">
+  </div>
   <div class="kanban" id="kanbanBoard">
     <div class="kanban-col" data-status="pending">
       <div class="kanban-col-header">🆕 New</div>

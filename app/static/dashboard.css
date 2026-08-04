@@ -236,6 +236,44 @@ body {
 .skeleton { background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius); }
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
+/* ===== CALENDAR ===== */
+.calendar-grid { display: flex; gap: 0.5rem; overflow-x: auto; }
+.calendar-day {
+  flex: 1; min-width: 110px; background: var(--bg-body); border-radius: var(--radius);
+  padding: 0.75rem; text-align: center;
+}
+.calendar-day.today { border: 2px solid var(--blue); }
+.cal-day-header { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
+.cal-date { font-size: 1.1rem; font-weight: 700; margin: 0.25rem 0; }
+.cal-count { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+.cal-item {
+  font-size: 0.75rem; padding: 0.2rem 0; cursor: pointer; color: var(--text-secondary);
+  border-top: 1px solid var(--border); text-align: left;
+}
+.cal-item:hover { color: var(--blue); }
+
+/* ===== LOADING SKELETONS ===== */
+.skeleton-row { display: flex; gap: 1rem; }
+.skeleton-card { flex: 1; height: 100px; background: linear-gradient(90deg, var(--bg-card) 25%, #273449 50%, var(--bg-card) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius-lg); }
+.skeleton-line { height: 16px; margin-bottom: 0.5rem; background: linear-gradient(90deg, var(--bg-card) 25%, #273449 50%, var(--bg-card) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; }
+.skeleton-line.short { width: 60%; }
+.skeleton-line.medium { width: 80%; }
+
+/* ===== ERROR BANNER ===== */
+.error-banner { background: #3b0a0a; border: 1px solid var(--red); color: #fca5a5; padding: 0.75rem 1rem; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.error-banner button { background: var(--red); color: #fff; border: none; padding: 0.3rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+.error-banner button:hover { background: #dc2626; }
+
+/* ===== IMPROVED EMPTY STATES ===== */
+.empty-state { text-align: center; padding: 2.5rem 2rem; color: var(--text-muted); }
+.empty-state .empty-icon { font-size: 2.5rem; display: block; margin-bottom: 0.75rem; opacity: 0.6; }
+.empty-state p { font-size: 0.9rem; margin-bottom: 0.25rem; }
+.empty-state .empty-action { margin-top: 1rem; }
+.empty-state .empty-action .btn { display: inline-block; width: auto; }
+
+/* ===== PIPELINE EMPTY ===== */
+.kanban-col-empty { text-align: center; padding: 1rem; color: var(--text-muted); font-size: 0.75rem; font-style: italic; }
+
 /* ===== RESPONSIVE ===== */
 @media (max-width: 1200px) {
   .stat-row { grid-template-columns: repeat(5, 1fr); }

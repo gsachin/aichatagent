@@ -51,6 +51,7 @@ except ImportError:
 
 import asyncio as _asyncio
 import base64
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -195,6 +196,7 @@ TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Connect>
         <Stream url="wss://{host}/ws/twilio" />
     </Connect>
+    <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back or try our WhatsApp channel for immediate assistance.</Say>
 </Response>"""
 
 
@@ -366,6 +368,17 @@ async def websocket_twilio(websocket: WebSocket):
                 stream_sid = msg.get("streamSid", msg.get("start", {}).get("streamSid", ""))
                 logger.info(f"WS /ws/twilio: stream started — {stream_sid}")
 
+                # Track for SSE live-call monitor
+                _active_call_sids[stream_sid] = {
+                    "call_sid": stream_sid,
+                    "direction": "inbound",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "transcript": [],
+                }
+                _push_transcript_event("call_started", stream_sid, {
+                    "direction": "inbound",
+                })
+
                 # Send an initial AI greeting via TTS
                 try:
                     from app.voice_handler import generate_ulaw_greeting
@@ -413,6 +426,12 @@ async def websocket_twilio(websocket: WebSocket):
                     # Save transcript for post-call lead extraction
                     if dialogue:
                         transcript_parts.append(dialogue)
+                        # Push to SSE for live dashboard
+                        if stream_sid and stream_sid in _active_call_sids:
+                            _active_call_sids[stream_sid]["transcript"].append(dialogue)
+                            _push_transcript_event("transcript", stream_sid, {
+                                "dialogue": dialogue,
+                            })
 
                     # Send TTS audio chunks back through the WebSocket
                     for chunk in tts_chunks:
@@ -430,6 +449,9 @@ async def websocket_twilio(websocket: WebSocket):
 
             elif event == "stop":
                 logger.info(f"WS /ws/twilio: stream stopped — {stream_sid}")
+                if stream_sid and stream_sid in _active_call_sids:
+                    _active_call_sids[stream_sid]["ended_at"] = datetime.now(timezone.utc).isoformat()
+                    _push_transcript_event("call_ended", stream_sid)
                 break
 
     except WebSocketDisconnect:
@@ -486,6 +508,17 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 )
                 logger.info(f"WS /ws/twilio-outbound: stream started — {stream_sid}")
 
+                # Track for SSE live-call monitor
+                _active_call_sids[stream_sid] = {
+                    "call_sid": stream_sid,
+                    "direction": "outbound",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "transcript": [],
+                }
+                _push_transcript_event("call_started", stream_sid, {
+                    "direction": "outbound",
+                })
+
                 # Send an initial AI greeting via TTS
                 try:
                     from app.voice_handler import generate_ulaw_greeting
@@ -537,6 +570,12 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     # Save transcript for post-call lead extraction
                     if dialogue:
                         transcript_parts.append(dialogue)
+                        # Push to SSE for live dashboard
+                        if stream_sid and stream_sid in _active_call_sids:
+                            _active_call_sids[stream_sid]["transcript"].append(dialogue)
+                            _push_transcript_event("transcript", stream_sid, {
+                                "dialogue": dialogue,
+                            })
 
                     # Send TTS audio chunks back through the WebSocket
                     for chunk in tts_chunks:
@@ -558,6 +597,9 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 logger.info(
                     f"WS /ws/twilio-outbound: stream stopped — {stream_sid}"
                 )
+                if stream_sid and stream_sid in _active_call_sids:
+                    _active_call_sids[stream_sid]["ended_at"] = datetime.now(timezone.utc).isoformat()
+                    _push_transcript_event("call_ended", stream_sid)
                 break
 
     except WebSocketDisconnect:
@@ -1054,15 +1096,17 @@ async def api_create_lead(req: Request):
 async def api_list_leads(
     status: str = "",
     source: str = "",
+    search: str = "",
     limit: int = 50,
     offset: int = 0,
 ):
-    """List leads with optional filters."""
+    """List leads with optional filters + text search."""
     from app.leads.models import list_leads
 
     result = await list_leads(
         status=status or None,
         source=source or None,
+        search=search or None,
         limit=min(limit, 200),
         offset=offset,
     )
@@ -1158,6 +1202,21 @@ async def api_quick_call(req: Request):
         "call_queue": queue_entry,
         "tunnel_host": _resolve_tunnel_host(),
     }
+
+
+@app.get("/api/leads/{lead_id}/score")
+async def api_lead_score(lead_id: str):
+    """Get lead quality score (1-10) with breakdown and temperature."""
+    from app.leads.models import get_lead, get_conversations
+    from app.leads.service import calculate_lead_score
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+    conversations = await get_conversations(lead_id=lead_id) or []
+    score_data = calculate_lead_score(lead, conversations)
+    return {"lead_id": lead_id, **score_data}
 
 
 @app.get("/api/call-queue")
@@ -1285,7 +1344,7 @@ async def api_batch_quick_call(req: Request):
         "total": len(queued),
         "completed": 0,
         "results": [],
-        "created_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     return {
@@ -1304,6 +1363,120 @@ async def api_batch_quick_call_status(batch_id: str):
     if not job:
         return JSONResponse({"error": "Batch not found"}, status_code=404)
     return job
+
+
+# ── API: Live Calls (SSE) ────────────────────────────────────────────
+
+# In-memory transcript queue (shared by WebSocket handlers + SSE endpoint)
+_transcript_events: list[dict] = []
+_active_call_sids: dict[str, dict] = {}  # call_sid -> call metadata
+
+
+def _push_transcript_event(event_type: str, call_sid: str, data: dict | None = None):
+    """Push a transcript event to all SSE listeners."""
+    event = {
+        "event": event_type,
+        "call_sid": call_sid,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if data:
+        event.update(data)
+    _transcript_events.append(event)
+    # Keep only last 200 events
+    if len(_transcript_events) > 200:
+        _transcript_events[:] = _transcript_events[-200:]
+
+
+@app.get("/api/calls/live")
+async def api_calls_live(stream: bool = False):
+    """
+    Get active calls with transcript snippets.
+    Set ?stream=true for SSE (Server-Sent Events) real-time streaming.
+    """
+    if not stream:
+        call_sids = list(_active_call_sids.keys())
+        return {
+            "active_calls": call_sids,
+            "count": len(call_sids),
+            "details": _active_call_sids,
+        }
+
+    # SSE streaming mode
+    import asyncio as _asyncio
+    from starlette.responses import StreamingResponse
+
+    async def event_stream():
+        last_idx = max(0, len(_transcript_events) - 1)
+        while True:
+            while last_idx < len(_transcript_events):
+                evt = _transcript_events[last_idx]
+                yield f"event: {evt['event']}\ndata: {json.dumps(evt)}\n\n"
+                last_idx += 1
+            await _asyncio.sleep(1)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── API: Dashboard Summary ────────────────────────────────────────────
+
+
+@app.get("/api/dashboard/summary")
+async def api_dashboard_summary():
+    """Aggregated KPIs + recent activity in one call for the dashboard."""
+    from datetime import datetime
+    from app.leads.models import list_leads, get_conversations
+
+    try:
+        leads = await list_leads(limit=200) or []
+    except Exception:
+        leads = []
+    try:
+        conversations = await get_conversations(limit=20) or []
+    except Exception:
+        conversations = []
+
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Count today's new leads
+    new_today = sum(
+        1 for l in leads
+        if l.get("created_at") and str(l["created_at"]) >= today_start.isoformat()
+    )
+
+    # Hot leads
+    hot_leads = sum(
+        1 for l in leads
+        if l.get("status") in ("in_progress",)
+        and l.get("next_follow_up")
+    )
+
+    # Due follow-ups today
+    today_str = today_start.strftime("%Y-%m-%d")
+    due_today = sum(
+        1 for l in leads
+        if l.get("next_follow_up")
+        and str(l["next_follow_up"])[:10] == today_str
+    )
+
+    # Pipeline by status
+    pipeline = {}
+    for l in leads:
+        s = l.get("status", "pending")
+        pipeline[s] = pipeline.get(s, 0) + 1
+
+    return {
+        "stats": {
+            "active_calls": len(_active_call_sids),
+            "new_leads_today": new_today,
+            "due_follow_ups": due_today,
+            "hot_leads": hot_leads,
+            "total_pipeline": len(leads),
+        },
+        "pipeline": pipeline,
+        "recent_activity": conversations[:10],
+        "active_call_details": _active_call_sids,
+    }
 
 
 @app.get("/api/conversations")

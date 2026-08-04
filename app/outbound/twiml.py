@@ -23,6 +23,7 @@ def outbound_connect_twiml(host: str) -> str:
         "<Connect>"
         f"<Stream url=\"wss://{host}/ws/twilio-outbound\" />"
         "</Connect>"
+        "<Say voice=\"Polly.Joanna\">We seem to have lost the connection. An admissions counselor will follow up with you shortly. Thank you for your time.</Say>"
         "</Response>"
     )
 
