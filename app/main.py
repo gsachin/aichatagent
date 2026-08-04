@@ -57,6 +57,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_api")
@@ -158,6 +159,11 @@ async def lifespan(app_instance):
 
 
 app = FastAPI(title="University Admissions Voice Assistant", lifespan=lifespan)
+
+# Serve static files (CSS, JS, audio) for dashboard + voice client
+_static_dir = Path(__file__).resolve().parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 # ── Shared helpers ────────────────────────────────────────────────────
@@ -399,10 +405,14 @@ async def websocket_twilio(websocket: WebSocket):
                 if utterance_ready:
                     # Process the utterance through the full AI pipeline
                     try:
-                        tts_chunks = await session.process_utterance()
+                        tts_chunks, dialogue = await session.process_utterance()
                     except Exception:
                         logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks = []
+                        tts_chunks, dialogue = [], ""
+
+                    # Save transcript for post-call lead extraction
+                    if dialogue:
+                        transcript_parts.append(dialogue)
 
                     # Send TTS audio chunks back through the WebSocket
                     for chunk in tts_chunks:
@@ -519,10 +529,14 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 if utterance_ready:
                     # Process the utterance through the full AI pipeline
                     try:
-                        tts_chunks = await session.process_utterance()
+                        tts_chunks, dialogue = await session.process_utterance()
                     except Exception:
                         logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks = []
+                        tts_chunks, dialogue = [], ""
+
+                    # Save transcript for post-call lead extraction
+                    if dialogue:
+                        transcript_parts.append(dialogue)
 
                     # Send TTS audio chunks back through the WebSocket
                     for chunk in tts_chunks:
@@ -548,27 +562,10 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WS /ws/twilio-outbound: client disconnected")
-        await _handle_disconnect(transcript_parts)
-        # Also log to outbound channel
-        transcript = " ".join(transcript_parts)
-        if transcript.strip():
-            try:
-                from app.leads.service import handle_post_interaction
-
-                await handle_post_interaction(
-                    phone_number="",
-                    transcript=transcript,
-                    channel="outbound_call",
-                )
-            except Exception:
-                logger.exception("Outbound call logging failed (non-fatal)")
     except Exception:
         logger.exception("WS /ws/twilio-outbound: unexpected error")
+    finally:
         await _handle_disconnect(transcript_parts)
-        try:
-            await websocket.close()
-        except Exception:
-            pass
 
 
 # ── HTTP: Outbound call voice TwiML (fetched by Twilio) ──────────────
@@ -1234,6 +1231,81 @@ async def api_get_call_queue_status(lead_id: str = ""):
         return {"error": "Database unavailable", "lead_id": lead_id}
 
 
+# ── API: Batch Quick Call ────────────────────────────────────────────
+
+_batch_jobs: dict = {}  # in-memory batch job tracker
+
+
+@app.post("/api/quick-call/batch")
+async def api_batch_quick_call(req: Request):
+    """
+    Queue multiple outbound calls in one request.
+    Body: {"leads": [{"phone_number": "...", "name": "...", "program_interest": "..."}], "mode": "all_at_once"}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    leads_data = body.get("leads", [])
+    if not leads_data:
+        return JSONResponse({"error": "leads array is required"}, status_code=400)
+
+    from app.leads.models import add_to_call_queue, upsert_lead_by_phone
+    import uuid
+
+    batch_id = str(uuid.uuid4())[:8]
+    queued = []
+    errors = []
+
+    for lead in leads_data:
+        phone = lead.get("phone_number", "").strip()
+        if not phone:
+            errors.append({"phone": phone, "error": "phone_number required"})
+            continue
+        try:
+            entry = await upsert_lead_by_phone(
+                phone_number=phone,
+                name=lead.get("name", ""),
+                source=lead.get("source", "batch-dashboard"),
+            )
+            if not entry:
+                errors.append({"phone": phone, "error": "Database unavailable"})
+                continue
+            queue_entry = await add_to_call_queue(lead_id=entry["id"])
+            queued.append({
+                "lead_id": entry["id"],
+                "phone": phone,
+                "call_queue_id": queue_entry["id"] if queue_entry else None,
+            })
+        except Exception as e:
+            errors.append({"phone": phone, "error": str(e)})
+
+    _batch_jobs[batch_id] = {
+        "total": len(queued),
+        "completed": 0,
+        "results": [],
+        "created_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+    return {
+        "batch_id": batch_id,
+        "total": len(queued),
+        "queued": len(queued),
+        "skipped": len(errors),
+        "errors": errors,
+    }
+
+
+@app.get("/api/quick-call/batch/{batch_id}")
+async def api_batch_quick_call_status(batch_id: str):
+    """Poll batch call progress."""
+    job = _batch_jobs.get(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+    return job
+
+
 @app.get("/api/conversations")
 async def api_list_conversations(
     lead_id: str = "",
@@ -1375,6 +1447,18 @@ async def quick_call_page():
             {"message": "Quick call page not found.", "status": "error"},
             status_code=404,
         )
+    return FileResponse(html_path, media_type="text/html")
+
+
+# ── HTTP: Command Cockpit Dashboard ──────────────────────────────────
+
+
+@app.get("/dashboard")
+async def dashboard_page():
+    """Serve the Command Cockpit single-page dashboard."""
+    html_path = Path(__file__).resolve().parent / "static" / "dashboard.html"
+    if not html_path.is_file():
+        return JSONResponse({"error": "Dashboard page not found"}, status_code=404)
     return FileResponse(html_path, media_type="text/html")
 
 

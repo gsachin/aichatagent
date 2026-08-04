@@ -188,17 +188,18 @@ class VoiceCallSession:
             return True
         return False
 
-    async def process_utterance(self) -> list[bytes]:
+    async def process_utterance(self) -> tuple[list[bytes], str]:
         """
         Run the full pipeline on the accumulated audio:
 
            µ-law buffer → PCM WAV → Whisper STT → RAG + LLM → Kokoro TTS → µ-law chunks
 
-        Returns a list of µ-law byte chunks ready to stream back.
+        Returns a tuple of (ulaw_chunks, transcript_dialogue) where
+        transcript_dialogue is the full exchange (caller + AI) for logging.
         """
         if not self._audio_buffer:
             self.reset_utterance()
-            return []
+            return [], ""
 
         # ── Step 1: Decode µ-law → PCM WAV bytes ─────────────────
         combined_ulaw = b"".join(self._audio_buffer)
@@ -230,7 +231,7 @@ class VoiceCallSession:
 
         if not transcript or not transcript.strip():
             logger.info("VoiceCall: empty transcript — nothing to answer")
-            return []
+            return [], ""
 
         logger.info(f"VoiceCall: transcript = \"{transcript[:120]}\"")
 
@@ -240,18 +241,23 @@ class VoiceCallSession:
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         answer = await self._query_llm(transcript)
         if not answer:
-            return []
+            # Return transcript even if LLM fails — still useful for logging
+            dialogue = f"Caller: {transcript}\nAssistant: (no response)"
+            return [], dialogue
 
         self._conversation_history.append(f"Assistant: {answer}")
         logger.info(f"VoiceCall: answer ({len(answer)} chars) = \"{answer[:120]}...\"")
 
+        # Build dialogue for transcript logging
+        dialogue = f"Caller: {transcript}\nAssistant: {answer}"
+
         # ── Step 4: Kokoro TTS → PCM ──────────────────────────────
         tts_pcm = await self._synthesise(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
-            return []
+            return [], dialogue  # Transcript saved even if TTS fails
 
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
-        return self._pcm_to_ulaw_chunks(tts_pcm)
+        return self._pcm_to_ulaw_chunks(tts_pcm), dialogue
 
     # ── Internal ──────────────────────────────────────────────────
 

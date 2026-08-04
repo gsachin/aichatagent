@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admissions Command Cockpit</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<!-- ===== TOP BAR ===== -->
+<header class="topbar">
+  <h1>🎓 Admissions Command Cockpit</h1>
+  <div class="topbar-right">
+    <span class="system-status" id="systemStatus">🟢 System OK</span>
+    <span class="clock" id="clock"></span>
+  </div>
+</header>
+
+<!-- ===== ROW 1: STAT CARDS ===== -->
+<section class="stat-row" id="statRow">
+  <div class="stat-card" onclick="scrollToSection('liveCalls')">
+    <div class="stat-number" id="statActiveCalls">—</div>
+    <div class="stat-label">📞 Active Calls</div>
+    <div class="stat-dot" id="dotActiveCalls"></div>
+  </div>
+  <div class="stat-card" onclick="scrollToSection('pipelineBoard')">
+    <div class="stat-number" id="statNewLeads">—</div>
+    <div class="stat-label">🆕 New Leads Today</div>
+  </div>
+  <div class="stat-card" onclick="scrollToSection('pipelineBoard')">
+    <div class="stat-number" id="statDueFollowUps">—</div>
+    <div class="stat-label">⏰ Due Follow-ups</div>
+  </div>
+  <div class="stat-card" onclick="scrollToSection('pipelineBoard')">
+    <div class="stat-number" id="statHotLeads">—</div>
+    <div class="stat-label">🔥 Hot Leads</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number" id="statTotalPipeline">—</div>
+    <div class="stat-label">📊 Total Pipeline</div>
+  </div>
+</section>
+
+<!-- ===== ROW 2: LIVE CALLS + BATCH DIALER ===== -->
+<div class="row2">
+  <!-- LEFT: Live Call Monitor -->
+  <section class="panel panel-wide" id="liveCalls">
+    <h2 class="panel-title">📞 Live Call Monitor</h2>
+    <div id="liveCallsContent">
+      <div class="empty-state">
+        <span class="empty-icon">📞</span>
+        <p>No active calls right now</p>
+        <p class="empty-hint">Calls will appear here in real-time when active</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Quick Call -->
+  <section class="panel" id="quickCall">
+    <h2 class="panel-title">⚡ Quick Call</h2>
+    <div class="quick-call-form">
+      <label>Phone Numbers</label>
+      <textarea id="batchNumbers" rows="4" placeholder="+1234567890&#10;+1987654321&#10;(one per line, or comma-separated)"></textarea>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name (optional)</label>
+          <input type="text" id="batchName" placeholder="John Smith">
+        </div>
+        <div class="form-group">
+          <label>Program</label>
+          <input type="text" id="batchProgram" placeholder="MBA">
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="submitBatchCall()">📞 Call All Now</button>
+        <button class="btn btn-secondary" onclick="submitSingleCall()">📞 Call One</button>
+      </div>
+    </div>
+    <div id="batchStatus" class="hidden">
+      <h3>📊 Call Queue</h3>
+      <div id="batchProgress"></div>
+      <div id="batchResults"></div>
+    </div>
+  </section>
+</div>
+
+<!-- ===== ROW 3: PIPELINE BOARD ===== -->
+<section class="panel" id="pipelineBoard">
+  <h2 class="panel-title">📋 Lead Pipeline</h2>
+  <div class="kanban" id="kanbanBoard">
+    <div class="kanban-col" data-status="pending">
+      <div class="kanban-col-header">🆕 New</div>
+      <div class="kanban-col-count" id="count-pending">0</div>
+      <div class="kanban-cards" id="cards-pending"></div>
+    </div>
+    <div class="kanban-col" data-status="in_progress">
+      <div class="kanban-col-header">💬 Active</div>
+      <div class="kanban-col-count" id="count-in_progress">0</div>
+      <div class="kanban-cards" id="cards-in_progress"></div>
+    </div>
+    <div class="kanban-col" data-status="completed">
+      <div class="kanban-col-header">✅ Completed</div>
+      <div class="kanban-col-count" id="count-completed">0</div>
+      <div class="kanban-cards" id="cards-completed"></div>
+    </div>
+    <div class="kanban-col" data-status="failed">
+      <div class="kanban-col-header">❌ Not Interested</div>
+      <div class="kanban-col-count" id="count-failed">0</div>
+      <div class="kanban-cards" id="cards-failed"></div>
+    </div>
+    <div class="kanban-col" data-status="unreachable">
+      <div class="kanban-col-header">⚫ Unreachable</div>
+      <div class="kanban-col-count" id="count-unreachable">0</div>
+      <div class="kanban-cards" id="cards-unreachable"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ROW 4: RECENT ACTIVITY ===== -->
+<section class="panel" id="recentActivity">
+  <h2 class="panel-title">📜 Recent Activity <span class="panel-subtitle">Last 24 Hours</span></h2>
+  <div class="activity-table-wrapper">
+    <table class="activity-table" id="activityTable">
+      <thead>
+        <tr>
+          <th>Time</th><th>Type</th><th>Lead</th><th>Outcome</th><th>Duration</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="activityBody">
+        <tr class="empty-row"><td colspan="6">No recent activity</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== ROW 5: FOOTER TABS ===== -->
+<section class="panel" id="footerTabs">
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="tabConversations">📋 All Conversations</button>
+    <button class="tab-btn" data-tab="tabCalendar">📅 Follow-up Calendar</button>
+    <button class="tab-btn" data-tab="tabReports">📊 Reports</button>
+    <button class="tab-btn" data-tab="tabSettings">⚙️ Settings</button>
+  </nav>
+
+  <div class="tab-content active" id="tabConversations">
+    <div class="tab-search">
+      <input type="text" id="convSearch" placeholder="Search transcripts..." oninput="filterConversations()">
+      <select id="convChannel" onchange="filterConversations()">
+        <option value="All">All Channels</option>
+        <option value="inbound_call">📞 Inbound Calls</option>
+        <option value="outbound_call">📤 Outbound Calls</option>
+        <option value="whatsapp">💬 WhatsApp</option>
+        <option value="streamlit">🌐 Web Chat</option>
+      </select>
+    </div>
+    <div id="conversationsList"></div>
+  </div>
+
+  <div class="tab-content" id="tabCalendar">
+    <div id="calendarView"></div>
+  </div>
+
+  <div class="tab-content" id="tabReports">
+    <div id="reportsContent">
+      <div class="empty-state"><p>📊 Reports will appear here</p></div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tabSettings">
+    <div class="settings-grid">
+      <div class="setting-item"><strong>Tunnel URL:</strong> <code id="settingTunnel">—</code></div>
+      <div class="setting-item"><strong>Twilio Phone:</strong> <code id="settingPhone">—</code></div>
+      <div class="setting-item"><strong>Database:</strong> <span id="settingDb">—</span></div>
+      <div class="setting-item"><strong>Outbound Worker:</strong> <span id="settingWorker">—</span></div>
+    </div>
+  </div>
+</section>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
