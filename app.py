@@ -188,8 +188,18 @@ if "rag_chain" not in st.session_state:
         st.success("✅ Bot is ready! Type below or click 🎤 to speak.")
 
 if "messages" not in st.session_state:
+    greeting = "Hello! I'm your University Admissions Advisor."
+    # Check if we have lead info — if not, ask
+    st.session_state.setdefault("lead_collected", False)
+    st.session_state.setdefault("lead_name", "")
+    st.session_state.setdefault("lead_email", "")
+    st.session_state.setdefault("lead_phone", "")
+    st.session_state.setdefault("awaiting_field", None)  # 'name', 'email', 'phone', or None
+    if not st.session_state.lead_collected:
+        greeting += " Before we start, could you tell me your name?"
+        st.session_state.awaiting_field = "name"
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything — by text or voice."}
+        {"role": "assistant", "content": greeting}
     ]
 
 # Track which audio messages have been auto-played (prevent replay on rerun)
@@ -296,21 +306,64 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching..."):
+        # ── Lead info collection ──────────────────────────────
+        awaiting = st.session_state.get("awaiting_field")
+        answer = None
+
+        if awaiting == "name":
+            st.session_state.lead_name = prompt.strip()
+            st.session_state.awaiting_field = "email"
+            answer = f"Thanks {prompt.strip()}! And what's your email address? I'll use it to send you program details."
+        elif awaiting == "email":
+            if "@" in prompt and "." in prompt:
+                st.session_state.lead_email = prompt.strip()
+                st.session_state.awaiting_field = "phone"
+                answer = f"Got it! And your phone number? (So an admissions counselor can follow up with you)"
+            else:
+                answer = "That doesn't look like an email address. Could you share a valid email? (e.g., name@example.com)"
+        elif awaiting == "phone":
+            st.session_state.lead_phone = prompt.strip()
+            st.session_state.awaiting_field = None
+            st.session_state.lead_collected = True
+            # Try to save to backend
             try:
-                response = st.session_state.rag_chain.invoke({"input": prompt})
-                answer = response["answer"]
-            except Exception as e:
-                answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
+                import requests
+                requests.post("http://localhost:8000/api/leads", json={
+                    "phone_number": st.session_state.lead_phone,
+                    "name": st.session_state.lead_name,
+                    "email": st.session_state.lead_email,
+                    "source": "streamlit",
+                }, timeout=5)
+            except Exception:
+                pass
+            answer = f"Perfect! I have your info:\n- Name: {st.session_state.lead_name}\n- Email: {st.session_state.lead_email}\n- Phone: {prompt.strip()}\n\nIs this correct? (Type 'yes' or tell me what to change)"
+        elif prompt.strip().lower() in ("yes", "yeah", "yep", "correct", "right"):
+            if st.session_state.lead_collected:
+                answer = "Great! Your info is confirmed. How can I help you with UMD or FDU admissions today? Ask me anything about programs, tuition, or how to apply."
+            else:
+                # Do RAG
+                pass
+        elif not st.session_state.lead_collected and st.session_state.awaiting_field is None:
+            # Restart collection
+            st.session_state.awaiting_field = "name"
+            answer = "Before we continue, could you tell me your name?"
+
+        # ── RAG fallback ──────────────────────────────────────
+        if answer is None:
+            with st.spinner("Searching..."):
+                try:
+                    response = st.session_state.rag_chain.invoke({"input": prompt})
+                    answer = response["answer"]
+                except Exception as e:
+                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
 
         st.markdown(answer)
 
-        # ── Generate TTS audio (store in message for chat history playback) ─
+        # ── Generate TTS audio ─
         audio_for_msg = None
         if st.session_state.tts_enabled:
             with st.spinner("🔊 Generating audio..."):
                 try:
-                    # Truncate long text to keep TTS generation time reasonable
                     tts_text = answer[:500] + "..." if len(answer) > 500 else answer
                     audio_for_msg = text_to_audio_bytes(tts_text)
                 except Exception as e:

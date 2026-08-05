@@ -1071,18 +1071,70 @@ async def twilio_whatsapp_webhook(
 
     logger.info(f"WhatsApp from {From} (WaId={WaId}): {Body[:100]}")
 
-    try:
-        answer = await _asyncio.to_thread(run_rag_query_sync, Body)
-    except Exception as e:
-        logger.exception("WhatsApp RAG failed")
-        answer = None
+    # ── Lead info collection — check if lead has name/email ─────
+    from app.leads.models import get_lead_by_phone, upsert_lead_by_phone, update_lead
+    lead = await get_lead_by_phone(From)
+    if not lead:
+        lead = await upsert_lead_by_phone(phone_number=From, source="whatsapp")
 
-    if not answer:
-        answer = "Sorry, I couldn't process your question right now. Please try again."
+    lead_name = (lead or {}).get("name", "")
+    lead_email = (lead or {}).get("email", "")
+    lead_program = (lead or {}).get("program_interest", "")
 
-    answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Detect if message looks like providing info
+    msg_lower = Body.strip().lower()
+    has_email = "@" in Body and "." in Body.split("@")[-1] if "@" in Body else False
+    is_name_like = len(Body.split()) <= 3 and not has_email and "?" not in Body and len(Body) < 60
 
-    # Log conversation to new leads subsystem
+    # State machine for collecting missing info
+    if not lead_name and is_name_like and not has_email:
+        # User likely provided their name
+        await update_lead(lead["id"], name=Body.strip())
+        if not lead_email:
+            answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
+        else:
+            answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with UMD or FDU admissions?"
+    elif not lead_email and has_email:
+        # User provided their email
+        await update_lead(lead["id"], email=Body.strip())
+        if not lead_name:
+            answer = f"Got your email! And what's your name?"
+        else:
+            answer = f"Thanks! I've saved your email. How can I help you with admissions today?"
+    elif not lead_name:
+        # Missing name — ask for it
+        answer = "Hi! Before I help you, could you tell me your name?"
+    elif not lead_email:
+        # Missing email — ask for it
+        answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
+    else:
+        # All info present — confirm briefly then do RAG
+        confirm = f"I have you as {lead_name}"
+        if lead_email:
+            confirm += f", {lead_email}"
+        if lead_program:
+            confirm += f" — interested in {lead_program}"
+        confirm += ". Is that correct? (Type 'yes' or tell me what to change)"
+
+        # Only do RAG if user isn't confirming/changing their info
+        if msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
+            answer = "Great! How can I help you with UMD or FDU admissions today?"
+        elif msg_lower in ("no", "nope", "wrong", "change"):
+            answer = "No problem! What would you like to update? Your name, email, or program interest?"
+        elif "?" in Body or len(Body) > 30:
+            # User is asking a real question — do RAG
+            try:
+                answer = await _asyncio.to_thread(run_rag_query_sync, Body)
+                if answer:
+                    answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                else:
+                    answer = "Sorry, I couldn't find an answer to that. Can you rephrase?"
+            except Exception:
+                answer = "Sorry, I couldn't process your question. Please try again."
+        else:
+            answer = confirm
+
+    # Log conversation
     background_tasks.add_task(
         _log_whatsapp_conversation,
         phone_number=From,
@@ -1503,6 +1555,48 @@ async def api_dashboard_summary():
         "recent_activity": conversations[:10],
         "active_call_details": _active_call_sids,
     }
+
+
+# ── API: Demo Data Management ─────────────────────────────────────────
+
+
+@app.post("/api/demo/reset")
+async def api_demo_reset():
+    """Clear all data and reseed with fresh demo leads + conversations."""
+    try:
+        import psycopg2
+        from app.config import settings
+
+        conn = psycopg2.connect(settings.DATABASE_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("DELETE FROM conversations")
+        cur.execute("DELETE FROM call_queue")
+        cur.execute("DELETE FROM follow_ups")
+        cur.execute("DELETE FROM leads")
+        conn.close()
+
+        # Run the seed script
+        import subprocess, sys
+        seed_path = Path(__file__).resolve().parent.parent / "scripts" / "seed_demo_data.py"
+        result = subprocess.run([sys.executable, str(seed_path)], capture_output=True, text=True, timeout=30)
+        return {"status": "ok", "message": "Demo data reset", "output": result.stdout.strip()}
+    except Exception as e:
+        logger.exception("Demo reset failed")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/demo/seed")
+async def api_demo_seed():
+    """Load dummy data without clearing existing data."""
+    try:
+        import subprocess, sys
+        seed_path = Path(__file__).resolve().parent.parent / "scripts" / "seed_demo_data.py"
+        result = subprocess.run([sys.executable, str(seed_path)], capture_output=True, text=True, timeout=30)
+        return {"status": "ok", "message": "Dummy data loaded", "output": result.stdout.strip()}
+    except Exception as e:
+        logger.exception("Demo seed failed")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 @app.get("/api/conversations")

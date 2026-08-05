@@ -177,6 +177,14 @@
       <div class="setting-item"><strong>Database:</strong> <span id="settingDb">—</span></div>
       <div class="setting-item"><strong>Outbound Worker:</strong> <span id="settingWorker">—</span></div>
     </div>
+    <div style="margin-top:2rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:1rem">🧪 Demo Controls</h3>
+      <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="resetDemoData()" id="btnReset">🔄 Reset Demo Data</button>
+        <button class="btn btn-secondary" onclick="seedDemoData()" id="btnSeed">📥 Load Dummy Data</button>
+      </div>
+      <div id="demoStatus" style="margin-top:0.75rem;font-size:0.85rem"></div>
+    </div>
   </div>
 </section>
 

@@ -641,5 +641,46 @@ renderActivity = function() {
   renderReports();
 };
 
+// ===== DEMO CONTROLS =====
+async function resetDemoData() {
+  const btn = document.getElementById('btnReset');
+  const status = document.getElementById('demoStatus');
+  btn.disabled = true; btn.textContent = 'Resetting...';
+  status.innerHTML = '<span style="color:var(--yellow)">⏳ Clearing and reseeding demo data...</span>';
+  try {
+    const res = await fetch(`${API_BASE}/api/demo/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      status.innerHTML = '<span style="color:var(--green)">✅ Demo data reset! Reloading...</span>';
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      status.innerHTML = `<span style="color:var(--red)">❌ ${data.message}</span>`;
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:var(--red)">❌ Failed to reset</span>';
+  }
+  btn.disabled = false; btn.textContent = '🔄 Reset Demo Data';
+}
+
+async function seedDemoData() {
+  const btn = document.getElementById('btnSeed');
+  const status = document.getElementById('demoStatus');
+  btn.disabled = true; btn.textContent = 'Loading...';
+  status.innerHTML = '<span style="color:var(--yellow)">⏳ Loading dummy data...</span>';
+  try {
+    const res = await fetch(`${API_BASE}/api/demo/seed`, { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      status.innerHTML = '<span style="color:var(--green)">✅ Dummy data loaded! Reloading...</span>';
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      status.innerHTML = `<span style="color:var(--red)">❌ ${data.message}</span>`;
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:var(--red)">❌ Failed to load</span>';
+  }
+  btn.disabled = false; btn.textContent = '📥 Load Dummy Data';
+}
+
 // ===== STARTUP =====
 document.addEventListener('DOMContentLoaded', init);
