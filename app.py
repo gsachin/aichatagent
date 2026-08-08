@@ -54,21 +54,32 @@ with st.sidebar:
     if uploaded_file and st.button("📤 Upload Document", key="sidebar_upload_btn"):
         lead_id = st.session_state.get("lead_id", "")
         if not lead_id:
-            # Create a lead first
-            phone = f"streamlit_{st.session_state.get('user_name', 'user')}"
+            # Create a lead from session state or fallback
+            phone = st.session_state.get("lead_phone", f"streamlit_{st.session_state.get('lead_name', 'user')}")
+            name = st.session_state.get("lead_name", "")
+            email = st.session_state.get("lead_email", "")
+            prog = st.session_state.get("lead_program", "")
             try:
-                import requests, json as _json
+                import requests
                 resp = requests.post(
                     "http://localhost:8000/api/leads",
-                    json={"phone_number": phone, "source": "streamlit", "name": st.session_state.get("user_name", "")},
+                    json={
+                        "phone_number": phone,
+                        "name": name,
+                        "email": email,
+                        "program_interest": prog,
+                        "source": "streamlit",
+                    },
                     timeout=10,
                 )
                 if resp.ok:
                     lead = resp.json()
                     st.session_state["lead_id"] = lead["id"]
                     lead_id = lead["id"]
-            except Exception:
-                pass
+                else:
+                    st.error(f"Cannot create profile. Backend: {resp.status_code}")
+            except Exception as e:
+                st.error(f"Cannot connect to backend server at localhost:8000. Make sure it's running. ({e})")
         if lead_id:
             try:
                 import requests, uuid as _uuid
@@ -89,15 +100,17 @@ with st.sidebar:
                 if resp.ok:
                     data = resp.json()
                     if data.get("offer_letter"):
-                        st.success("✅ Document uploaded! Offer letter generated and sent.")
+                        offer = data["offer_letter"]
+                        st.success(f"✅ Document uploaded! Offer letter for {offer.get('program','')} generated and sent!")
+                        st.session_state["offer_generated"] = True
                     else:
-                        st.success("✅ Document uploaded successfully!")
+                        st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
                 else:
-                    st.error("Upload failed. Please try again.")
+                    st.error(f"Upload failed (HTTP {resp.status_code}). Please try again.")
             except Exception as e:
                 st.error(f"Upload error: {e}")
         else:
-            st.warning("Send a message in the chat first so we can create your profile.")
+            st.warning("Please complete the chat conversation first (name, email, phone) so we can create your profile.")
     st.markdown("---")
     st.markdown("### Powered by")
     st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
