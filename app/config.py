@@ -85,6 +85,9 @@ class Settings:
     OFFER_VALID_DAYS: int = field(
         default_factory=lambda: int(_env("OFFER_VALID_DAYS", "30"))
     )
+    OFFER_GUARD_MINUTES: int = field(
+        default_factory=lambda: int(_env("OFFER_GUARD_MINUTES", "1"))
+    )
     DEFAULT_PAYMENT_LINK: str = field(
         default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "https://pay.university.edu/admissions")
     )
