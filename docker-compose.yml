@@ -16,6 +16,30 @@ version: '3.9'
 
 services:
   # ──────────────────────────────────────────────────────────────────
+  # PostgreSQL 16 + pgvector — Admissions database
+  # ──────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: voice-assistant-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=elearning
+      - POSTGRES_PASSWORD=elearning_secret
+      - POSTGRES_DB=admissions
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "elearning", "-d", "admissions"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - voice-network
+
+  # ──────────────────────────────────────────────────────────────────
   # Ollama - LLM Service
   # ──────────────────────────────────────────────────────────────────
   ollama:
@@ -62,6 +86,8 @@ services:
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       ollama:
         condition: service_healthy
     networks:
@@ -121,4 +147,6 @@ networks:
 ################################################################################
 volumes:
   ollama_data:
+    driver: local
+  postgres_data:
     driver: local

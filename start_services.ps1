@@ -4,19 +4,31 @@
 .DESCRIPTION
     Kills stale services, releases ports, starts everything fresh,
     and updates the Cloudflare tunnel URL everywhere it is needed.
+    Includes GPU health check, Ollama model pre-warming, and
+    optional named Cloudflare tunnel for a permanent URL.
 .PARAMETER WithStreamlit
     Also launch Streamlit dashboard (port 8502) and main app (port 8501).
 .PARAMETER SkipTwilio
     Skip updating the Twilio webhook.
+.PARAMETER NamedTunnel
+    Use a named Cloudflare tunnel (permanent URL) instead of ephemeral quick tunnel.
+    Requires cloudflared to be authenticated (cloudflared tunnel login).
+.PARAMETER TunnelName
+    Name for the Cloudflare tunnel (default: "admissions-tunnel").
+    Only used when -NamedTunnel is specified.
 .EXAMPLE
     .\start_services.ps1
     .\start_services.ps1 -WithStreamlit
     .\start_services.ps1 -SkipTwilio
+    .\start_services.ps1 -NamedTunnel
+    .\start_services.ps1 -NamedTunnel -TunnelName "my-prod-tunnel"
 #>
 
 param(
     [switch]$WithStreamlit = $false,
-    [switch]$SkipTwilio = $false
+    [switch]$SkipTwilio = $false,
+    [switch]$NamedTunnel = $false,
+    [string]$TunnelName = "admissions-tunnel"
 )
 
 # ---- Config ---------------------------------------------------------------
@@ -38,12 +50,26 @@ function Write-Err    { Write-Host ("{0}  ERROR: {1}{2}" -f $RED, ($args -join '
 # ==== Step 1: Kill stale processes ========================================
 Write-Step "Step 1: Killing stale processes"
 
+# Aggressive cleanup -- belt and suspenders
 $cloudflaredProcs = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
 if ($cloudflaredProcs) {
     $cloudflaredProcs | Stop-Process -Force
-    Write-OK ("Killed {0} cloudflared process(es)" -f $cloudflaredProcs.Count)
+    Write-OK ("Killed {0} cloudflared process(es) via Stop-Process" -f $cloudflaredProcs.Count)
+}
+# Also use taskkill to catch any stragglers
+cmd /c "taskkill /F /IM cloudflared.exe 2>NUL" | Out-Null
+Start-Sleep -Seconds 1
+$remaining = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
+if ($remaining) {
+    Write-Warn ("{0} cloudflared process(es) still alive -- forcing..." -f $remaining.Count)
+    $remaining | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+$finalCheck = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
+if (-not $finalCheck) {
+    Write-OK "All cloudflared processes terminated"
 } else {
-    Write-OK "No cloudflared processes running"
+    Write-Err "Cannot kill cloudflared -- reboot may be needed"
 }
 
 foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort)) {
@@ -93,8 +119,106 @@ foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort)) 
     }
 }
 
-# ==== Step 3: Start FastAPI backend ========================================
-Write-Step "Step 3: Starting FastAPI backend (port $FastAPIPort)"
+# ==== Step 3: GPU / CUDA health check ======================================
+Write-Step "Step 3: GPU / CUDA health check"
+
+$gpuOk = $false
+$nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
+if ($nvidiaSmi) {
+    $gpuInfo = cmd /c "nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK ("GPU detected: {0}" -f ($gpuInfo -replace "`n", " | "))
+        $gpuOk = $true
+    } else {
+        Write-Warn "nvidia-smi found but query failed -- GPU may be unavailable"
+    }
+} else {
+    Write-Warn "nvidia-smi not found -- GPU/CUDA will NOT be available"
+    Write-Warn "STT and TTS will fall back to CPU (slow: 15-35s per utterance)"
+}
+
+# Verify CUDA is visible to Python / PyTorch
+if ($gpuOk) {
+    $cudaCheck = cmd /c "python -c `"import torch; print(f'CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \`"N/A\`"}')`" 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK ("PyTorch: {0}" -f $cudaCheck)
+    } else {
+        Write-Warn "PyTorch CUDA check failed -- GPU may not be usable from Python"
+    }
+}
+
+# ==== Step 4: Docker / PostgreSQL check ===================================
+Write-Step "Step 4: Docker / PostgreSQL check"
+
+$dbReady = $false
+
+# Check Docker is running
+$dockerRunning = $false
+$dockerCheck = docker info 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-OK "Docker Desktop is running"
+    $dockerRunning = $true
+} else {
+    Write-Warn "Docker Desktop is NOT running -- attempting to start..."
+    $dockerExe = Get-Command "docker" -ErrorAction SilentlyContinue
+    if (-not $dockerExe) {
+        Write-Warn "Docker CLI not found in PATH"
+    }
+    Start-Process -FilePath "C:\Program Files\Docker\Docker\Docker Desktop.exe" -WindowStyle Hidden -ErrorAction SilentlyContinue
+    Write-OK "Docker Desktop launching (this may take 30-60s)..."
+
+    # Wait for Docker to become responsive
+    $waitAttempt = 0
+    while ($waitAttempt -lt 45) {
+        Start-Sleep -Seconds 2
+        $waitAttempt++
+        docker info 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-OK ("Docker Desktop ready (after ~{0}s)" -f ($waitAttempt * 2))
+            $dockerRunning = $true
+            break
+        }
+    }
+}
+
+# Check PostgreSQL is reachable
+if ($dockerRunning) {
+    $pgCheck = docker exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
+    if ($LASTEXITCODE -eq 0 -and $pgCheck -match "accepting") {
+        Write-OK "PostgreSQL: accepting connections on localhost:5432"
+        $dbReady = $true
+    } else {
+        Write-Warn "PostgreSQL container not running -- attempting docker compose up..."
+        docker compose -f (Join-Path $ProjectRoot "docker-compose.yml") up -d postgres 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Start-Sleep -Seconds 5
+            $pgCheck2 = docker exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
+            if ($LASTEXITCODE -eq 0 -and $pgCheck2 -match "accepting") {
+                Write-OK "PostgreSQL started and accepting connections"
+                $dbReady = $true
+            }
+        } else {
+            # Try existing e-learning container
+            Write-Warn "docker compose failed -- checking for existing e-learning container..."
+            $elearningCheck = docker ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>$null
+            if ($elearningCheck -match "healthy") {
+                Write-OK "Found existing elearning-postgres container (healthy)"
+                $dbReady = $true
+            }
+        }
+    }
+}
+
+if (-not $dbReady) {
+    Write-Warn "PostgreSQL is NOT available -- server will start in database-less mode"
+    Write-Warn "Leads, calls, and follow-ups will NOT be persisted"
+    Write-Warn "Fix: ensure Docker Desktop is running with elearning-postgres container"
+} else {
+    Write-OK "Database pre-flight: PASSED"
+}
+
+# ==== Step 5: Start FastAPI backend ========================================
+Write-Step "Step 5: Starting FastAPI backend (port $FastAPIPort)"
 
 $ServerLog = Join-Path $env:TEMP "university_fastapi.log"
 $fastApiArgs = @{
@@ -108,7 +232,7 @@ $FastAPIProcess = Start-Process @fastApiArgs
 
 Write-OK ("FastAPI starting (PID {0}) - log: {1}" -f $FastAPIProcess.Id, $ServerLog)
 
-# Wait for server to be ready (use curl — Invoke-WebRequest unreliable in PS 5.1)
+# Wait for server to be ready (use curl -- Invoke-WebRequest unreliable in PS 5.1)
 $attempt = 0
 $serverReady = $false
 $healthUrl = "http://127.0.0.1:{0}/" -f $FastAPIPort
@@ -129,8 +253,38 @@ if (-not $serverReady) {
     exit 1
 }
 
-# ==== Step 4: Start Cloudflare tunnel ======================================
-Write-Step "Step 4: Starting Cloudflare tunnel"
+# ==== Step 6: Ollama model pre-warming ====================================
+Write-Step "Step 6: Ollama model pre-warming"
+
+$ollamaUp = $false
+$ollamaCheck = curl.exe -s -o NUL -w "%{http_code}" "http://127.0.0.1:11434/api/tags" 2>$null
+if ($ollamaCheck -eq "200") {
+    Write-OK "Ollama is running"
+    $ollamaUp = $true
+} else {
+    Write-Warn "Ollama not reachable on port 11434 -- skip pre-warming"
+}
+
+if ($ollamaUp) {
+    $modelList = curl.exe -s "http://127.0.0.1:11434/api/tags" 2>$null | python -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin).get('models',[])]; print('\n'.join(models))" 2>$null
+    if ($modelList) {
+        Write-OK ("Found models: {0}" -f ($modelList -split "`n" -join ", "))
+        foreach ($model in ($modelList -split "`n" | Where-Object { $_ })) {
+            Write-OK ("Pre-warming: {0} ..." -f $model)
+            $null = curl.exe -s -X POST "http://127.0.0.1:11434/api/generate" -H "Content-Type: application/json" -d "{`"model`":`"$model`",`"prompt`":`"ping`",`"keep_alive`":`"24h`",`"max_tokens`":1}" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK ("  {0} loaded into GPU (keep_alive=24h)" -f $model)
+            } else {
+                Write-Warn ("  Pre-warm failed for {0}" -f $model)
+            }
+        }
+    } else {
+        Write-Warn "No models found in Ollama -- run: ollama pull qwen2.5:7b"
+    }
+}
+
+# ==== Step 7: Start Cloudflare tunnel ======================================
+Write-Step "Step 7: Starting Cloudflare tunnel"
 
 $cloudflaredPath = Get-Command "cloudflared" -ErrorAction SilentlyContinue
 if (-not $cloudflaredPath) {
@@ -139,18 +293,54 @@ if (-not $cloudflaredPath) {
 }
 
 $TunnelLog = Join-Path $env:TEMP "university_cloudflared.log"
-# Use cmd /c to merge stderr into stdout (cloudflared logs to stderr)
-$tunnelCmd = "cloudflared tunnel --url http://localhost:{0} 2>&1" -f $FastAPIPort
-$cfArgs = @{
-    FilePath               = "cmd"
-    ArgumentList           = "/c", $tunnelCmd
-    WindowStyle            = "Hidden"
-    PassThru               = $true
-    RedirectStandardOutput = $TunnelLog
-}
-$CloudflaredProcess = Start-Process @cfArgs
 
-Write-OK ("Cloudflare tunnel starting (PID {0}) - log: {1}" -f $CloudflaredProcess.Id, $TunnelLog)
+if ($NamedTunnel) {
+    # ---- Named tunnel (permanent URL) ------------------------------------
+    Write-OK ("Named tunnel mode: {0}" -f $TunnelName)
+
+    $tunnelList = cmd /c "cloudflared tunnel list 2>&1"
+    $tunnelExists = $tunnelList -match $TunnelName
+    if (-not $tunnelExists) {
+        Write-OK ("Creating named tunnel: {0} ..." -f $TunnelName)
+        $createResult = cmd /c "cloudflared tunnel create $TunnelName 2>&1"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err ("Failed to create tunnel '{0}': {1}" -f $TunnelName, ($createResult -join " "))
+            Write-Warn "Falling back to ephemeral quick tunnel..."
+            $NamedTunnel = $false
+        } else {
+            Write-OK ("Tunnel '{0}' created. Credentials stored in ~/.cloudflared/" -f $TunnelName)
+            Write-Warn ("IMPORTANT: Route DNS for '{0}' in Cloudflare Zero Trust dashboard" -f $TunnelName)
+        }
+    }
+
+    if ($NamedTunnel) {
+        $tunnelCmd = "cloudflared tunnel run --url http://localhost:{0} {1} 2>&1" -f $FastAPIPort, $TunnelName
+        $cfArgs = @{
+            FilePath               = "cmd"
+            ArgumentList           = "/c", $tunnelCmd
+            WindowStyle            = "Hidden"
+            PassThru               = $true
+            RedirectStandardOutput = $TunnelLog
+        }
+        $CloudflaredProcess = Start-Process @cfArgs
+        Write-OK ("Named tunnel '{0}' starting (PID {1}) - log: {2}" -f $TunnelName, $CloudflaredProcess.Id, $TunnelLog)
+    }
+}
+
+if (-not $NamedTunnel) {
+    # ---- Ephemeral quick tunnel (URL changes every restart) --------------
+    Write-Warn "Ephemeral tunnel mode (URL will change on next restart)"
+    $tunnelCmd = "cloudflared tunnel --url http://localhost:{0} 2>&1" -f $FastAPIPort
+    $cfArgs = @{
+        FilePath               = "cmd"
+        ArgumentList           = "/c", $tunnelCmd
+        WindowStyle            = "Hidden"
+        PassThru               = $true
+        RedirectStandardOutput = $TunnelLog
+    }
+    $CloudflaredProcess = Start-Process @cfArgs
+    Write-OK ("Ephemeral tunnel starting (PID {0}) - log: {1}" -f $CloudflaredProcess.Id, $TunnelLog)
+}
 
 # Parse tunnel URL from log output
 $TunnelHost = $null
@@ -182,8 +372,8 @@ if (-not $TunnelHost) {
 
 Write-OK ("Tunnel URL captured: {0}" -f $TunnelHost)
 
-# ==== Step 5: Write tunnel hostname everywhere =============================
-Write-Step "Step 5: Writing tunnel hostname everywhere"
+# ==== Step 8: Write tunnel hostname everywhere =============================
+Write-Step "Step 8: Writing tunnel hostname everywhere"
 
 [System.IO.File]::WriteAllText($TunnelFile, $TunnelHost)
 Write-OK (".whatsapp_tunnel file updated -> {0}" -f $TunnelHost)
@@ -194,15 +384,15 @@ Write-OK ("Env TUNNEL_HOST = {0}" -f $TunnelHost)
 $env:DASHBOARD_API_URL = ("https://{0}" -f $TunnelHost)
 Write-OK ("Env DASHBOARD_API_URL = https://{0}" -f $TunnelHost)
 
-# ==== Step 6: Update Twilio webhooks =======================================
-Write-Step "Step 6: Updating Twilio webhooks"
+# ==== Step 9: Update Twilio webhooks =======================================
+Write-Step "Step 9: Updating Twilio webhooks"
 
 if ($SkipTwilio) {
     Write-Warn "Skipping Twilio (SkipTwilio flag set)"
 } else {
     $TwilioScript = Join-Path $ProjectRoot "scripts\update_twilio_webhook.py"
     if (Test-Path $TwilioScript) {
-        $result = & python $TwilioScript $TunnelHost 2>&1
+        $result = cmd /c "python $TwilioScript $TunnelHost 2>&1"
         if ($LASTEXITCODE -eq 0) {
             $result | ForEach-Object { Write-OK $_ }
         } else {
@@ -215,9 +405,39 @@ if ($SkipTwilio) {
     }
 }
 
-# ==== Step 7: Optional Streamlit apps ======================================
+# ==== Step 10: Verify URLs ================================================
+Write-Step "Step 10: Verifying URLs"
+
+# Verify tunnel is reachable (with warmup delay for Cloudflare)
+$tunnelOk = $false
+for ($tunnelAttempt = 0; $tunnelAttempt -lt 5; $tunnelAttempt++) {
+    if ($tunnelAttempt -gt 0) { Start-Sleep -Seconds 3 }
+    $verifyResult = curl.exe -s -o NUL -w "%{http_code}" "https://$TunnelHost/" 2>$null
+    if ($verifyResult -eq "200") {
+        Write-OK ("Tunnel reachable: https://{0}/ (HTTP 200)" -f $TunnelHost)
+        $tunnelOk = $true
+        break
+    }
+    Write-Warn ("Tunnel not ready yet (HTTP {0}) -- retry {1}/5..." -f $verifyResult, ($tunnelAttempt + 1))
+}
+if (-not $tunnelOk) {
+    Write-Err ("Tunnel NOT reachable after 5 attempts: https://{0}/" -f $TunnelHost)
+}
+
+# Verify Twilio webhook matches
+if (-not $SkipTwilio) {
+    $twilioVerify = cmd /c "python -c `"from dotenv import load_dotenv; load_dotenv(); import os; from twilio.rest import Client; c=Client(os.environ['TWILIO_ACCOUNT_SID'],os.environ['TWILIO_AUTH_TOKEN']); [print(f'Twilio webhook: {n.voice_url}') for n in c.incoming_phone_numbers.list(phone_number='+19788198953')]`" 2>&1"
+    if ($twilioVerify -match $TunnelHost) {
+        Write-OK ("Twilio webhook verified: matches {0}" -f $TunnelHost)
+    } else {
+        Write-Warn ("Twilio webhook may be stale! Current: {0}" -f ($twilioVerify -replace ".*Twilio webhook: ", ""))
+        Write-Warn ("Expected: https://{0}/twilio/voice" -f $TunnelHost)
+    }
+}
+
+# ==== Step 11: Optional Streamlit apps =====================================
 if ($WithStreamlit) {
-    Write-Step "Step 7: Starting Streamlit apps"
+    Write-Step "Step 11: Starting Streamlit apps"
 
     # Dashboard (port 8502)
     $DashLog = Join-Path $env:TEMP "university_dashboard.log"
@@ -246,7 +466,7 @@ if ($WithStreamlit) {
     Write-OK ("Main app starting (PID {0}) -> http://localhost:{1}" -f $AppProcess.Id, $StreamlitMainPort)
 }
 
-# ==== Step 8: Summary ======================================================
+# ==== Step 12: Summary =====================================================
 Write-Host ""
 Write-Host ("{0}{1}ALL SERVICES STARTED SUCCESSFULLY{2}" -f $GREEN, $BOLD, $RESET)
 Write-Host ""
@@ -283,9 +503,15 @@ if ($WithStreamlit) {
 }
 
 Write-Host ""
-Write-Host ("{0}{1}IMPORTANT:{2}{0} This tunnel is ephemeral. If you close this" -f $YELLOW, $BOLD, $RESET)
-Write-Host ("{0}terminal, the tunnel URL will CHANGE. Re-run this script to get" -f $YELLOW)
-Write-Host ("{0}a fresh tunnel and update all configs.{1}" -f $YELLOW, $RESET)
+Write-Host ("{0}{1}IMPORTANT:{2}{0} " -f $YELLOW, $BOLD, $RESET) -NoNewline
+if ($NamedTunnel) {
+    Write-Host ("Named tunnel '{0}' -- URL persists across restarts." -f $TunnelName)
+} else {
+    Write-Host ("This tunnel is ephemeral. If you close this" -f $YELLOW)
+    Write-Host ("{0}terminal, the tunnel URL will CHANGE. Re-run this script to get" -f $YELLOW)
+    Write-Host ("{0}a fresh tunnel and update all configs.{1}" -f $YELLOW, $RESET)
+    Write-Host ("{0}Tip: Use -NamedTunnel for a permanent URL.{1}" -f $CYAN, $RESET)
+}
 Write-Host ""
 Write-Host ("{0}Press Ctrl+C to stop all services...{1}" -f $CYAN, $RESET)
 
