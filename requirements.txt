@@ -41,3 +41,6 @@ mcp
 
 # ── Lead Management Dashboard ──────────────────────────────────────────
 pandas
+
+# ── PDF Generation (offer letters) ─────────────────────────────────────
+fpdf2

@@ -56,7 +56,7 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -836,22 +836,9 @@ def _send_whatsapp_message(
     media_url: str | None = None,
 ):
     """Send a WhatsApp message via Twilio REST API, optionally with media."""
-    try:
-        from twilio.rest import Client
-        from app.config import settings
-
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        kwargs = {"from_": from_number, "body": body, "to": to_number}
-        if media_url:
-            kwargs["media_url"] = [media_url]
-
-        msg = client.messages.create(**kwargs)
-        extra = " + audio" if media_url else ""
-        logger.info(f"Twilio message sent: {msg.sid} → {to_number}{extra}")
-        return True
-    except Exception as e:
-        logger.exception(f"Twilio send failed: {e}")
-        return False
+    from app.messaging import send_whatsapp_message
+    ok, _ = send_whatsapp_message(to_number, from_number, body, media_url=media_url)
+    return ok
 
 
 async def _process_voice_note_async(
@@ -1025,42 +1012,255 @@ async def serve_audio(filename: str):
     return FileResponse(filepath, media_type=media_type)
 
 
+# ── WhatsApp helper: document upload from students ─────────────────────
+
+async def _handle_whatsapp_document(
+    media_url: str,
+    content_type: str,
+    from_number: str,
+    body_text: str = "",
+):
+    """
+    Download a document sent via WhatsApp, save to data/documents/,
+    record in lead_documents table, and auto-trigger offer letter if
+    the lead has program_interest.
+    """
+    import uuid
+    import urllib.request
+    from pathlib import Path
+
+    try:
+        # Get or create lead
+        from app.leads.models import get_lead_by_phone, upsert_lead_by_phone
+        lead = await get_lead_by_phone(from_number)
+        if not lead:
+            lead = await upsert_lead_by_phone(phone_number=from_number, source="whatsapp")
+        if not lead:
+            logger.warning("_handle_whatsapp_document: could not create lead")
+            return
+        lead_id = lead["id"]
+
+        # Determine file extension
+        ext_map = {
+            "image/jpeg": ".jpg", "image/png": ".png", "image/jpg": ".jpg",
+            "application/pdf": ".pdf",
+            "image/webp": ".webp",
+        }
+        ext = ".bin"
+        for mime, e in ext_map.items():
+            if mime in content_type.lower():
+                ext = e
+                break
+
+        # Download from Twilio
+        logger.info(f"Downloading WhatsApp document: {media_url[:80]}...")
+        req = urllib.request.Request(media_url)
+        from app.config import settings
+        import base64
+        auth_str = base64.b64encode(
+            f"{settings.TWILIO_ACCOUNT_SID}:{settings.TWILIO_AUTH_TOKEN}".encode()
+        ).decode()
+        req.add_header("Authorization", f"Basic {auth_str}")
+
+        file_bytes = await _asyncio.to_thread(
+            lambda: urllib.request.urlopen(req, timeout=30).read()
+        )
+        logger.info(f"Downloaded {len(file_bytes)} bytes of document")
+
+        # Save to disk
+        data_dir = Path(settings.DATA_DIR)
+        lead_dir = data_dir / "documents" / lead_id
+        lead_dir.mkdir(parents=True, exist_ok=True)
+
+        short_id = str(uuid.uuid4())[:8]
+        safe_name = f"whatsapp_{short_id}{ext}"
+        stored_path = lead_dir / safe_name
+        stored_path.write_bytes(file_bytes)
+
+        # Map content_type to doc_type
+        doc_type = "other"
+        if "pdf" in content_type.lower():
+            doc_type = "transcript"
+        elif "image" in content_type.lower():
+            doc_type = "id_proof"
+
+        # Record in DB
+        from app.offers.models import add_document
+        doc = await add_document(
+            lead_id=lead_id,
+            filename=safe_name,
+            stored_path=str(stored_path),
+            doc_type=doc_type,
+            mime_type=content_type,
+            size_bytes=len(file_bytes),
+        )
+
+        if doc and lead.get("program_interest", "").strip():
+            # Auto-trigger offer letter
+            from app.offers.service import generate_and_send_offer
+            offer = await generate_and_send_offer(lead_id)
+            if offer:
+                logger.info(f"WhatsApp document → offer letter sent: {offer['id']}")
+            else:
+                logger.info(f"WhatsApp document saved, but offer skipped (may already exist)")
+        elif doc:
+            logger.info(f"WhatsApp document saved: {doc['id']}")
+        else:
+            logger.error("Failed to record WhatsApp document in DB")
+
+    except Exception:
+        logger.exception("_handle_whatsapp_document failed")
+
+
+async def _detect_admission_intent_whatsapp(msg_lower: str) -> bool:
+    """
+    Detect if a WhatsApp message expresses intent to proceed with admission.
+
+    Uses keyword fast-path first (free), then falls back to LLM for
+    semantic matching.  Catches all variations like:
+    "i am ready to take admission", "let's go ahead", "sign me up",
+    "yes apply now", "proceed with enrollment", etc.
+    """
+    # ── Fast path: strong admission keywords ────────────────────────
+    strong = [
+        "i want to take admission",
+        "i want admission",
+        "take addmission",
+        "i want to enroll",
+        "ready to enroll",
+        "sign me up",
+    ]
+    for kw in strong:
+        if kw in msg_lower:
+            logger.info(f"Admission intent: strong keyword '{kw}'")
+            return True
+
+    # ── Medium path: weaker keywords — confirm with LLM ────────────
+    medium = [
+        "admission", "enroll", "apply", "i am ready",
+        "let's proceed", "go ahead", "i'm interested",
+        "join the program", "confirm my", "i want to study",
+        "proceed with", "i'd like to apply",
+    ]
+    has_medium = any(kw in msg_lower for kw in medium)
+    if not has_medium:
+        return False
+
+    # LLM confirmation
+    try:
+        import ollama
+        response = ollama.chat(
+            model="qwen2.5:7b-instruct-q3_K_M",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "You are an intent classifier for a university admissions chatbot.\n"
+                    "Determine if the user's message expresses that they are READY to "
+                    "proceed with admission, want to enroll, want to apply, or want to "
+                    "take a program.\n\n"
+                    "This includes phrases like: 'i am ready to take admission', "
+                    "'let's go ahead', 'i want to join', 'sign me up', 'yes apply now', "
+                    "'proceed with enrollment', 'i'd like to study here', 'confirm my seat', "
+                    "'let's do it', 'i'm interested in joining', etc.\n\n"
+                    "Answer ONLY 'yes' or 'no'.\n\n"
+                    f"User message:\n{msg_lower[-800:]}"
+                ),
+            }],
+            options={"num_ctx": 1024},
+        )
+        raw = response["message"]["content"].strip().lower()
+        if raw.startswith("yes"):
+            logger.info("Admission intent: LLM confirmed")
+            return True
+    except Exception:
+        logger.warning("Admission intent LLM check failed — skipping")
+    return False
+
+
+async def _handle_offer_response(lead_id: str, status: str) -> dict | None:
+    """
+    Handle ACCEPT/DECLINE reply to an offer letter from WhatsApp.
+
+    Finds the most recent sent offer for this lead and updates its status.
+    """
+    try:
+        from app.offers.models import get_recent_offer_for_lead, update_offer_letter_status
+        offer = await get_recent_offer_for_lead(lead_id, within_hours=720)  # 30 days
+        if offer and offer.get("status") == "sent":
+            result = await update_offer_letter_status(offer["id"], status)
+            logger.info(f"Offer {offer['id']}: student replied '{status}' via WhatsApp")
+            return result
+        return None
+    except Exception:
+        logger.exception("_handle_offer_response failed")
+        return None
+
+
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(
     background_tasks: BackgroundTasks,
     Body: str = Form(default=""),
     MediaUrl0: str = Form(default=""),
     MediaContentType0: str = Form(default=""),
+    NumMedia: str = Form(default="0"),
     From: str = Form(default=""),
     To: str = Form(default=""),
     WaId: str = Form(default=""),
 ):
     """
-    Twilio WhatsApp webhook — receives incoming text OR voice messages.
+    Twilio WhatsApp webhook — receives incoming text, voice, image, or document messages.
 
-    - Text: synchronous RAG reply (fits in Twilio 15s timeout)
-    - Voice: returns acknowledgment immediately, processes async,
-      sends reply via Twilio REST API
+    - Voice (audio/*): async transcription + RAG reply
+    - Document (image/*, application/pdf): save as lead document, trigger offer letter
+    - Text: state machine (name → email → program → admission intent → RAG)
 
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
     """
     from app.pipeline import run_rag_query_sync
 
-    # ── Handle voice notes — async processing ──────────────────
-    if not Body.strip() and MediaUrl0.strip():
-        logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
-        background_tasks.add_task(
-            _process_voice_note_async,
-            media_url=MediaUrl0,
-            content_type=MediaContentType0,
-            from_number=From,
-            to_number=To,
-        )
-        twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer="🎤 Processing your voice note... you'll get a reply shortly."
-        )
-        return Response(content=twiml, media_type="application/xml")
+    # ── Handle media messages ────────────────────────────────────
+    num_media = int(NumMedia or "0")
+    if num_media > 0 and MediaUrl0.strip():
+        content_type = (MediaContentType0 or "").lower()
+
+        if "audio" in content_type:
+            # Voice note — existing flow (transcribe + RAG)
+            logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
+            background_tasks.add_task(
+                _process_voice_note_async,
+                media_url=MediaUrl0,
+                content_type=MediaContentType0,
+                from_number=From,
+                to_number=To,
+            )
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(
+                answer="🎤 Processing your voice note... you'll get a reply shortly."
+            )
+            return Response(content=twiml, media_type="application/xml")
+
+        elif "image" in content_type or "pdf" in content_type or "document" in content_type:
+            # Document upload from student — save + trigger offer letter
+            logger.info(f"WhatsApp document from {From} ({MediaContentType0})")
+            background_tasks.add_task(
+                _handle_whatsapp_document,
+                media_url=MediaUrl0,
+                content_type=MediaContentType0,
+                from_number=From,
+                body_text=Body.strip(),
+            )
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(
+                answer="📄 Got your document! I'm processing it now. If you have more documents, send them too, or type 'done' when you're finished."
+            )
+            return Response(content=twiml, media_type="application/xml")
+
+        else:
+            # Unknown media type
+            logger.info(f"WhatsApp unknown media from {From} ({MediaContentType0})")
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(
+                answer="I received your file but I can only accept photos (transcripts, IDs) and PDFs. Please try sending it as an image or PDF."
+            )
+            return Response(content=twiml, media_type="application/xml")
 
     # ── Handle text ─────────────────────────────────────────────
     if not Body.strip():
@@ -1077,6 +1277,7 @@ async def twilio_whatsapp_webhook(
     if not lead:
         lead = await upsert_lead_by_phone(phone_number=From, source="whatsapp")
 
+    lead_id = (lead or {}).get("id", "")
     lead_name = (lead or {}).get("name", "")
     lead_email = (lead or {}).get("email", "")
     lead_program = (lead or {}).get("program_interest", "")
@@ -1107,8 +1308,23 @@ async def twilio_whatsapp_webhook(
     elif not lead_email:
         # Missing email — ask for it
         answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
+    elif lead_id and await _detect_admission_intent_whatsapp(msg_lower):
+        # ── NEW: Admission intent detected ──────────────────────
+        await update_lead(lead["id"], status="in_progress")
+        if not lead_program:
+            answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+        else:
+            answer = (
+                f"Great! To process your admission for *{lead_program}*, "
+                "please upload the following documents:\n\n"
+                "📄 Transcript / Mark Sheet\n"
+                "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
+                "📝 Any additional certificates (optional)\n\n"
+                "Just send clear photos or PDFs right here in WhatsApp. "
+                "Type 'done' when you've sent everything."
+            )
     else:
-        # All info present — confirm briefly then do RAG
+        # All info present — check ACCEPT/DECLINE before RAG
         confirm = f"I have you as {lead_name}"
         if lead_email:
             confirm += f", {lead_email}"
@@ -1116,11 +1332,28 @@ async def twilio_whatsapp_webhook(
             confirm += f" — interested in {lead_program}"
         confirm += ". Is that correct? (Type 'yes' or tell me what to change)"
 
+        # ── NEW: ACCEPT/DECLINE offer handling ──────────────────
+        if msg_lower in ("accept", "accepted", "i accept"):
+            result = await _handle_offer_response(lead_id, "accepted")
+            if result:
+                answer = f"🎉 Congratulations {lead_name}! Your offer for *{result['program']}* has been accepted. You'll receive a payment link shortly to confirm your seat."
+            else:
+                answer = "I couldn't find a recent offer letter for you. How can I help with your admission?"
+        elif msg_lower in ("decline", "declined", "reject", "rejected", "i decline", "no thanks"):
+            result = await _handle_offer_response(lead_id, "rejected")
+            if result:
+                answer = f"Understood, {lead_name}. Your offer for *{result['program']}* has been declined. If you change your mind or want to explore other programs, just let me know!"
+            else:
+                answer = "I couldn't find a recent offer letter for you. How can I help with your admission?"
+
         # Only do RAG if user isn't confirming/changing their info
-        if msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
+        elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
             answer = "Great! How can I help you with UMD or FDU admissions today?"
         elif msg_lower in ("no", "nope", "wrong", "change"):
             answer = "No problem! What would you like to update? Your name, email, or program interest?"
+        elif msg_lower == "done" and lead_program:
+            # Student finished uploading documents
+            answer = f"Thanks {lead_name}! I have all your documents. Let me check your application status... To proceed, just say 'I want to take admission' and I'll process your offer letter."
         elif "?" in Body or len(Body) > 30:
             # User is asking a real question — do RAG
             try:
@@ -1645,6 +1878,219 @@ async def api_get_stats():
     from app.leads.models import get_lead_stats
 
     return await get_lead_stats()
+
+
+# ── REST API: Course catalog ─────────────────────────────────────────
+
+@app.get("/api/courses")
+async def api_list_courses():
+    """List all active courses."""
+    from app.offers.models import list_courses
+    return await list_courses()
+
+
+@app.post("/api/courses")
+async def api_create_course(req: Request):
+    """Create a new course."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    from app.offers.models import create_course
+    result = await create_course(
+        name=name,
+        duration=body.get("duration", ""),
+        fees=body.get("fees", ""),
+        intake=body.get("intake", ""),
+        description=body.get("description", ""),
+    )
+    if result:
+        return result
+    return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+
+@app.put("/api/courses/{course_id}")
+async def api_update_course(course_id: str, req: Request):
+    """Update a course."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    from app.offers.models import update_course
+    result = await update_course(course_id, **body)
+    if result:
+        return result
+    return JSONResponse({"error": "Course not found"}, status_code=404)
+
+
+@app.delete("/api/courses/{course_id}")
+async def api_deactivate_course(course_id: str):
+    """Deactivate a course (soft delete)."""
+    from app.offers.models import update_course
+    result = await update_course(course_id, is_active=False)
+    if result:
+        return {"status": "deactivated"}
+    return JSONResponse({"error": "Course not found"}, status_code=404)
+
+
+# ── REST API: Document upload ────────────────────────────────────────
+
+@app.post("/api/leads/{lead_id}/documents")
+async def api_upload_document(
+    lead_id: str,
+    file: UploadFile = File(...),
+    doc_type: str = Form("other"),
+):
+    """Upload a document for a lead. Auto-triggers offer letter if conditions met."""
+    from app.leads.models import get_lead
+    from app.offers.models import add_document
+    from pathlib import Path
+    import uuid
+    import os as _os
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+    # Sanitize filename
+    safe_name = Path(file.filename or "upload").name
+    safe_name = safe_name.replace(" ", "_")
+
+    # Determine storage path
+    data_dir = Path(_os.environ.get("DATA_DIR", "data"))
+    lead_dir = data_dir / "documents" / lead_id
+    lead_dir.mkdir(parents=True, exist_ok=True)
+
+    short_id = str(uuid.uuid4())[:8]
+    stored_name = f"{short_id}_{safe_name}"
+    stored_path = lead_dir / stored_name
+
+    # Read content and write
+    content = await file.read()
+    stored_path.write_bytes(content)
+
+    # Record in DB
+    doc = await add_document(
+        lead_id=lead_id,
+        filename=safe_name,
+        stored_path=str(stored_path),
+        doc_type=doc_type,
+        mime_type=file.content_type or "",
+        size_bytes=len(content),
+    )
+    if not doc:
+        # Clean up file if DB insert failed
+        try:
+            stored_path.unlink()
+        except Exception:
+            pass
+        return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+    # Auto-trigger offer letter if lead has program_interest
+    offer_result = None
+    if lead.get("program_interest", "").strip():
+        from app.offers.service import generate_and_send_offer
+        offer_result = await generate_and_send_offer(lead_id)
+
+    return {
+        "document": doc,
+        "offer_letter": offer_result,
+    }
+
+
+@app.get("/api/leads/{lead_id}/documents")
+async def api_list_documents(lead_id: str):
+    """List documents for a lead."""
+    from app.offers.models import list_documents
+    return await list_documents(lead_id)
+
+
+@app.get("/api/documents/{document_id}/file")
+async def api_serve_document(document_id: str):
+    """Serve a document file for download."""
+    from app.offers.models import get_document
+    doc = await get_document(document_id)
+    if not doc:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+    stored = doc.get("stored_path", "")
+    if not stored or not Path(stored).is_file():
+        return JSONResponse({"error": "File not found on disk"}, status_code=404)
+    return FileResponse(stored, media_type=doc.get("mime_type") or "application/octet-stream",
+                        filename=doc.get("filename"))
+
+
+@app.delete("/api/documents/{document_id}")
+async def api_delete_document(document_id: str):
+    """Delete a document (DB row + file on disk)."""
+    from app.offers.models import get_document, delete_document
+    doc = await get_document(document_id)
+    if doc:
+        stored = doc.get("stored_path", "")
+        if stored:
+            try:
+                Path(stored).unlink(missing_ok=True)
+            except Exception:
+                pass
+    ok = await delete_document(document_id)
+    if ok:
+        return {"status": "deleted"}
+    return JSONResponse({"error": "Document not found"}, status_code=404)
+
+
+# ── REST API: Offer letters ──────────────────────────────────────────
+
+@app.get("/api/leads/{lead_id}/offer-letters")
+async def api_list_offer_letters(lead_id: str):
+    """List offer letters for a lead."""
+    from app.offers.models import list_offer_letters
+    return await list_offer_letters(lead_id)
+
+
+@app.get("/api/offers/{offer_id}")
+async def api_get_offer_letter(offer_id: str):
+    """Get a single offer letter by ID."""
+    from app.offers.models import get_offer_letter
+    result = await get_offer_letter(offer_id)
+    if result:
+        return result
+    return JSONResponse({"error": "Offer letter not found"}, status_code=404)
+
+
+@app.get("/api/offers/{offer_id}/pdf")
+async def api_serve_offer_pdf(offer_id: str):
+    """Serve the offer letter PDF (public URL for Twilio media + email)."""
+    from app.offers.models import get_offer_letter
+    offer = await get_offer_letter(offer_id)
+    if not offer:
+        return JSONResponse({"error": "Offer letter not found"}, status_code=404)
+    pdf_path = offer.get("pdf_path", "")
+    if not pdf_path or not Path(pdf_path).is_file():
+        return JSONResponse({"error": "PDF not found on disk"}, status_code=404)
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"offer_letter_{offer_id[:8]}.pdf",
+    )
+
+
+@app.put("/api/offers/{offer_id}/status")
+async def api_update_offer_status(offer_id: str, req: Request):
+    """Update offer letter status (accepted / rejected)."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    status = body.get("status", "")
+    if status not in ("accepted", "rejected"):
+        return JSONResponse({"error": "Status must be 'accepted' or 'rejected'"}, status_code=400)
+    from app.offers.models import update_offer_letter_status
+    result = await update_offer_letter_status(offer_id, status)
+    if result:
+        return result
+    return JSONResponse({"error": "Offer letter not found"}, status_code=404)
 
 
 # ── MCP: SSE transport ────────────────────────────────────────────────

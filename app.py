@@ -42,6 +42,63 @@ with st.sidebar:
     tts_enabled = st.checkbox("🔊 Speak responses aloud", value=st.session_state.tts_enabled)
     st.session_state.tts_enabled = tts_enabled
     st.markdown("---")
+    st.markdown("### 📄 Upload Documents")
+    st.markdown("Upload your transcript, ID proof, or marksheets to apply for admission.")
+    uploaded_file = st.file_uploader(
+        "Choose a file",
+        type=["pdf", "png", "jpg", "jpeg"],
+        key="sidebar_doc_upload",
+        label_visibility="collapsed",
+    )
+    doc_type = st.selectbox("Document Type", ["transcript", "id_proof", "marksheet", "other"], key="sidebar_doc_type")
+    if uploaded_file and st.button("📤 Upload Document", key="sidebar_upload_btn"):
+        lead_id = st.session_state.get("lead_id", "")
+        if not lead_id:
+            # Create a lead first
+            phone = f"streamlit_{st.session_state.get('user_name', 'user')}"
+            try:
+                import requests, json as _json
+                resp = requests.post(
+                    "http://localhost:8000/api/leads",
+                    json={"phone_number": phone, "source": "streamlit", "name": st.session_state.get("user_name", "")},
+                    timeout=10,
+                )
+                if resp.ok:
+                    lead = resp.json()
+                    st.session_state["lead_id"] = lead["id"]
+                    lead_id = lead["id"]
+            except Exception:
+                pass
+        if lead_id:
+            try:
+                import requests, uuid as _uuid
+                boundary = f"----streamlit-{_uuid.uuid4().hex}"
+                parts = [
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"doc_type\"\r\n\r\n{doc_type}\r\n",
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{uploaded_file.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+                ]
+                header = "".join(parts).encode("utf-8")
+                footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
+                body = header + uploaded_file.getvalue() + footer
+                resp = requests.post(
+                    f"http://localhost:8000/api/leads/{lead_id}/documents",
+                    data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                    timeout=30,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    if data.get("offer_letter"):
+                        st.success("✅ Document uploaded! Offer letter generated and sent.")
+                    else:
+                        st.success("✅ Document uploaded successfully!")
+                else:
+                    st.error("Upload failed. Please try again.")
+            except Exception as e:
+                st.error(f"Upload error: {e}")
+        else:
+            st.warning("Send a message in the chat first so we can create your profile.")
+    st.markdown("---")
     st.markdown("### Powered by")
     st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
     st.markdown("👂 **Faster-Whisper** (local STT)")
@@ -328,12 +385,15 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             # Try to save to backend
             try:
                 import requests
-                requests.post("http://localhost:8000/api/leads", json={
+                resp = requests.post("http://localhost:8000/api/leads", json={
                     "phone_number": st.session_state.lead_phone,
                     "name": st.session_state.lead_name,
                     "email": st.session_state.lead_email,
                     "source": "streamlit",
                 }, timeout=5)
+                if resp.ok:
+                    lead_data = resp.json()
+                    st.session_state["lead_id"] = lead_data.get("id", "")
             except Exception:
                 pass
             answer = f"Perfect! I have your info:\n- Name: {st.session_state.lead_name}\n- Email: {st.session_state.lead_email}\n- Phone: {prompt.strip()}\n\nIs this correct? (Type 'yes' or tell me what to change)"
@@ -347,6 +407,30 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             # Restart collection
             st.session_state.awaiting_field = "name"
             answer = "Before we continue, could you tell me your name?"
+
+        # ── Admission intent detection ──────────────────────────
+        if answer is None and st.session_state.get("lead_collected"):
+            msg_lower = prompt.strip().lower()
+            admission_keywords = [
+                "i want to take admission", "i want admission", "take addmission",
+                "i want to enroll", "ready to enroll", "sign me up",
+                "admission", "enroll", "apply now", "i want to apply",
+                "i am ready", "let's proceed", "go ahead",
+            ]
+            if any(kw in msg_lower for kw in admission_keywords):
+                lead_id = st.session_state.get("lead_id", "")
+                prog = st.session_state.get("lead_program", "")
+                if not prog:
+                    answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                else:
+                    answer = (
+                        f"Great! To process your admission for *{prog}*, please upload:\n\n"
+                        "📄 **Transcript / Mark Sheet**\n"
+                        "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
+                        "Use the file uploader in the sidebar ⬅️ to submit your documents. "
+                        "Once uploaded, your offer letter will be generated automatically!"
+                    )
+                    st.session_state["show_apply_prompt"] = True
 
         # ── RAG fallback ──────────────────────────────────────
         if answer is None:

@@ -38,3 +38,6 @@ NUL
 
 # Task tracking (local only)
 pendingtask*.md
+
+# Uploaded documents and generated offer letters (sensitive data)
+data/

@@ -143,3 +143,90 @@ def render():
                     st.session_state["schedule_lead_id"] = lead_id
                     st.session_state["nav_to"] = "scheduler"
                     st.rerun()
+
+            # ── Documents & Offer Letters ──────────────────────────────
+            st.divider()
+            st.subheader("📄 Documents & Offer Letter")
+
+            # Document upload
+            uploaded_file = st.file_uploader(
+                "Upload Document",
+                type=["pdf", "png", "jpg", "jpeg", "docx", "xlsx", "txt"],
+                key=f"doc_upload_{lead_id}",
+            )
+            doc_type = st.selectbox(
+                "Document Type",
+                ["transcript", "id_proof", "marksheet", "recommendation", "other"],
+                key=f"doc_type_{lead_id}",
+            )
+            if uploaded_file and st.button("📤 Upload", key=f"upload_btn_{lead_id}"):
+                from app.dashboard.pages import api_upload
+                result = api_upload(
+                    f"/api/leads/{lead_id}/documents",
+                    "file",
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    {"doc_type": doc_type},
+                )
+                if result and "error" not in result:
+                    offer_info = result.get("offer_letter")
+                    if offer_info:
+                        st.success(f"✅ Document uploaded and offer letter sent via {offer_info.get('sent_via', 'N/A')}!")
+                    else:
+                        st.success("Document uploaded!")
+                    st.rerun()
+                else:
+                    st.error(result.get("error", "Upload failed") if result else "Upload failed")
+
+            # Existing documents
+            docs = api_call("GET", f"/api/leads/{lead_id}/documents") or []
+            if docs:
+                st.caption(f"{len(docs)} document(s) uploaded:")
+                for d in docs:
+                    c1, c2 = st.columns([4, 1])
+                    with c1:
+                        st.write(f"📎 {d.get('doc_type', 'file')} — {d.get('filename', '')} ({d.get('uploaded_at', '')[:10] if d.get('uploaded_at') else ''})")
+                    with c2:
+                        from app.dashboard.pages import api_call_bytes, BACKEND_URL
+                        file_bytes = api_call_bytes(f"/api/documents/{d['id']}/file")
+                        if file_bytes:
+                            st.download_button(
+                                "⬇️", file_bytes, file_name=d.get("filename", "download"),
+                                key=f"dl_{d['id']}",
+                            )
+            else:
+                st.caption("No documents uploaded yet.")
+
+            # Offer letters
+            st.markdown("---")
+            offers = api_call("GET", f"/api/leads/{lead_id}/offer-letters") or []
+            if offers:
+                for o in offers:
+                    status_emoji = {"sent": "🔵", "accepted": "🟢", "rejected": "🔴"}.get(o.get("status", ""), "⚪")
+                    st.write(
+                        f"{status_emoji} **{o.get('program', 'N/A')}** — "
+                        f"Sent: {o.get('sent_at', '')[:10] if o.get('sent_at') else 'N/A'} | "
+                        f"Via: {o.get('sent_via', 'N/A')} | "
+                        f"Valid until: {o.get('valid_until', 'N/A')}"
+                    )
+                    co1, co2, co3 = st.columns(3)
+                    with co1:
+                        from app.dashboard.pages import BACKEND_URL
+                        st.link_button("📄 View PDF", f"{BACKEND_URL}/api/offers/{o['id']}/pdf")
+                    with co2:
+                        if o.get("status") in ("sent",):
+                            if st.button("✅ Accept", key=f"accept_{o['id']}"):
+                                api_call("PUT", f"/api/offers/{o['id']}/status", {"status": "accepted"})
+                                st.rerun()
+                    with co3:
+                        if o.get("status") in ("sent",):
+                            if st.button("❌ Decline", key=f"decline_{o['id']}"):
+                                api_call("PUT", f"/api/offers/{o['id']}/status", {"status": "rejected"})
+                                st.rerun()
+            else:
+                lead_name = lead.get("name", "")
+                lead_prog = lead.get("program_interest", "")
+                if not lead_name or not lead_prog:
+                    st.info("Add a name and program interest before generating an offer letter.")
+                elif not docs:
+                    st.info("Upload a document — the offer letter will be generated and sent automatically.")

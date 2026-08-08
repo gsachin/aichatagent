@@ -18,9 +18,44 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+
+from twilio.base.exceptions import TwilioRestException
 from pathlib import Path
 
 logger = logging.getLogger("outbound.caller")
+
+
+def _format_twilio_error(exc: TwilioRestException) -> str:
+    """Convert a TwilioRestException into a user-friendly diagnostic message."""
+    code = getattr(exc, "code", None)
+    msg = getattr(exc, "msg", str(exc))
+
+    # Map specific Twilio error codes to actionable advice
+    FRIENDLY = {
+        21216: (
+            "Twilio blocked outbound call to this country/region. "
+            "Your account may have region-based calling restrictions. "
+            "Check Twilio Console → Voice → Geo Permissions, or contact "
+            "Twilio Support to enable outbound calling to this destination."
+        ),
+        13223: (
+            "Twilio phone number lacks Voice capability. "
+            "Check the number's capabilities in the Twilio Console."
+        ),
+        13224: "Invalid Twilio phone number. Check TWILIO_PHONE_NUMBER in .env.",
+        13225: "Invalid URL — the TwiML/callback webhook URL may be incorrect.",
+        13226: "Twilio account is suspended or closed. Contact Twilio Support.",
+        13227: "Destination number is not a valid phone number.",
+        20003: "Twilio account credentials (SID / Auth Token) are invalid.",
+        20404: "Twilio resource not found — check your Account SID.",
+    }
+
+    if code in FRIENDLY:
+        base = FRIENDLY[code]
+        return f"{base}\n\n[Twilio error {code}] {msg}"
+
+    # For unrecognized codes, give a cleaner version of the message
+    return f"Twilio error ({code or 'unknown'}): {msg}"
 
 
 def _resolve_host() -> str:
@@ -194,6 +229,29 @@ class OutboundCallWorker:
                 status="in_progress",
                 call_attempts=(lead.get("call_attempts", 0) + 1),
             )
+
+        except TwilioRestException as exc:
+            logger.exception(f"Twilio error for lead {lead_id}: code={exc.code}")
+            error_msg = _format_twilio_error(exc)
+            await update_call_queue_status(
+                entry["id"],
+                "failed",
+                error_message=error_msg,
+            )
+            # Re-queue if under max attempts
+            attempts = lead.get("call_attempts", 0) + 1
+            max_attempts = settings.MAX_CALL_ATTEMPTS
+            if attempts < max_attempts:
+                logger.info(
+                    f"Lead {lead_id}: attempt {attempts}/{max_attempts} — re-queuing"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="pending")
+                await add_to_call_queue(lead_id=lead_id)
+            else:
+                logger.info(
+                    f"Lead {lead_id}: max attempts ({max_attempts}) reached — marking failed"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="failed")
 
         except Exception as exc:
             logger.exception(f"Failed to initiate outbound call for lead {lead_id}")

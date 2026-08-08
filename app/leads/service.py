@@ -237,6 +237,56 @@ async def handle_post_interaction(
         call_duration_seconds=call_duration_seconds,
     )
 
+    # 4. Check for admission intent → send WhatsApp document request
+    try:
+        is_interested, evidence = await _detect_admission_intent(transcript)
+        if is_interested:
+            logger.info(f"Post-interaction: admission intent detected ({evidence})")
+
+            # Resolve phone number: use param, or extracted data
+            target_phone = phone_number
+            if not target_phone and extracted:
+                target_phone = extracted.get("phone", "") or extracted.get("phone_number", "")
+
+            if target_phone:
+                from app.messaging import send_whatsapp_message
+                from app.config import settings
+                from app.leads.models import get_lead_by_phone
+
+                lead = await get_lead_by_phone(target_phone)
+                lead_name = (lead or {}).get("name", "there")
+                lead_prog = (lead or {}).get("program_interest", "the program")
+
+                body = (
+                    f"Hi {lead_name}! We noticed you're interested in *{lead_prog}*.\n\n"
+                    f"To proceed with your admission, please upload the following documents:\n"
+                    f"📄 Transcript / Mark Sheet\n"
+                    f"🆔 ID Proof\n\n"
+                    f"Just reply here with photos or PDFs, and I'll process your application "
+                    f"and send your offer letter right away!"
+                )
+                try:
+                    wa_from = settings.TWILIO_WHATSAPP_NUMBER or settings.TWILIO_PHONE_NUMBER
+                    ok, sid = send_whatsapp_message(
+                        f"whatsapp:{target_phone}",
+                        f"whatsapp:{wa_from}",
+                        body,
+                    )
+                    if ok:
+                        logger.info(f"Admission doc request sent to {target_phone} (sid={sid})")
+                        # Update lead status
+                        if lead:
+                            from app.leads.models import update_lead
+                            await update_lead(lead["id"], status="in_progress")
+                    else:
+                        logger.warning(f"Failed to send admission doc request: {sid}")
+                except Exception:
+                    logger.exception("Failed to send WhatsApp doc request")
+            else:
+                logger.info("No phone number available — cannot send WhatsApp doc request")
+    except Exception:
+        logger.exception("Admission intent check/action failed")
+
     return conv is not None
 
 
@@ -315,6 +365,69 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
             break
 
     return False, ""
+
+
+async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
+    """
+    Detect if the caller expressed intent to proceed with admission.
+
+    Hybrid: keyword fast-path first, then LLM semantic matching for
+    variations like "i am ready to take admission", "let's go ahead",
+    "sign me up", "yes apply now", etc.
+
+    Returns (is_interested: bool, evidence: str).
+    """
+    lower = transcript.lower()
+
+    # ── Fast path: strong keywords ────────────────────────────────
+    strong = [
+        "i want to take admission",
+        "i want admission",
+        "take addmission",
+        "i want to enroll",
+        "ready to enroll",
+        "sign me up",
+    ]
+    for kw in strong:
+        if kw in lower:
+            return True, kw
+
+    # ── LLM semantic check ────────────────────────────────────────
+    medium = [
+        "admission", "enroll", "apply", "i am ready",
+        "proceed", "go ahead", "i'm interested",
+        "join the program", "confirm my", "i want to study",
+    ]
+    if not any(kw in lower for kw in medium):
+        return False, ""
+
+    try:
+        import ollama
+        response = ollama.chat(
+            model="qwen2.5:7b-instruct-q3_K_M",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "You are an intent classifier for a university admissions call.\n"
+                    "Determine if the caller expressed that they are READY to proceed "
+                    "with admission, want to enroll, want to apply, or want to take a "
+                    "program.\n\n"
+                    "This includes: 'i am ready to take admission', 'let's go ahead', "
+                    "'i want to join', 'sign me up', 'yes apply now', 'proceed with "
+                    "enrollment', 'confirm my seat', 'let's do it', etc.\n\n"
+                    "Answer ONLY 'yes' or 'no'.\n\n"
+                    f"Transcript (last 1000 chars):\n{transcript[-1000:]}"
+                ),
+            }],
+            options={"num_ctx": 1024},
+        )
+        raw = response["message"]["content"].strip().lower()
+        if raw.startswith("yes"):
+            return True, "llm_detected"
+    except Exception:
+        logger.warning("Admission intent LLM check failed — skipping")
+    return False, ""
+
 
 
 # ── Lead Scoring & Classification ────────────────────────────────────

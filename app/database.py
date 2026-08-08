@@ -95,8 +95,11 @@ async def init_db() -> bool:
             cur.execute(CREATE_TABLE_SQL)
             # Also initialise lead-management tables
             from app.leads.schema import ALL_TABLES_SQL
-
             cur.execute(ALL_TABLES_SQL)
+
+            # Also initialise offer-letter subsystem tables
+            from app.offers.schema import ALL_OFFERS_SQL
+            cur.execute(ALL_OFFERS_SQL)
         conn.close()
         logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True

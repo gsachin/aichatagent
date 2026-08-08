@@ -46,6 +46,7 @@ class Settings:
     TWILIO_ACCOUNT_SID: str = field(default_factory=lambda: _env("TWILIO_ACCOUNT_SID", ""))
     TWILIO_AUTH_TOKEN: str = field(default_factory=lambda: _env("TWILIO_AUTH_TOKEN", ""))
     TWILIO_PHONE_NUMBER: str = field(default_factory=lambda: _env("TWILIO_PHONE_NUMBER", ""))
+    TWILIO_WHATSAPP_NUMBER: str = field(default_factory=lambda: _env("TWILIO_WHATSAPP_NUMBER", ""))
 
     # ── PostgreSQL database ─────────────────────────────────────────
     DATABASE_URL: str = field(default_factory=lambda: _env("DATABASE_URL", ""))
@@ -72,6 +73,27 @@ class Settings:
     MCP_ENABLED: bool = field(
         default_factory=lambda: _env("MCP_ENABLED", "true").lower() == "true"
     )
+
+    # ── Offer letter / documents ────────────────────────────────────
+    DATA_DIR: str = field(default_factory=lambda: _env("DATA_DIR", "data"))
+    UNIVERSITY_NAME: str = field(
+        default_factory=lambda: _env("UNIVERSITY_NAME", "University of Maryland / Fairleigh Dickinson University")
+    )
+    OFFER_EMAIL: str = field(
+        default_factory=lambda: _env("OFFER_EMAIL", "admissions@university.edu")
+    )
+    OFFER_VALID_DAYS: int = field(
+        default_factory=lambda: int(_env("OFFER_VALID_DAYS", "30"))
+    )
+    DEFAULT_PAYMENT_LINK: str = field(
+        default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "https://pay.university.edu/admissions")
+    )
+
+    # ── Email / SMTP ───────────────────────────────────────────────
+    SMTP_HOST: str = field(default_factory=lambda: _env("SMTP_HOST", "smtp.gmail.com"))
+    SMTP_PORT: int = field(default_factory=lambda: int(_env("SMTP_PORT", "587")))
+    SMTP_USER: str = field(default_factory=lambda: _env("SMTP_USER", ""))
+    SMTP_PASS: str = field(default_factory=lambda: _env("SMTP_PASS", ""))
 
 
 # Module-level singleton

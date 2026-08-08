@@ -73,7 +73,12 @@
     background: #1e293b; padding: 0.15rem 0.4rem; border-radius: 4px;
     color: #facc15; font-size: 0.75rem; word-break: break-all;
   }
-  .error-msg { color: #f87171; font-size: 0.82rem; margin-top: 0.5rem; display: none; }
+  .error-msg {
+    color: #f87171; font-size: 0.82rem; margin-top: 0.5rem; display: none;
+    background: #2d1b1e; border: 1px solid #7f1d1d; border-radius: 8px;
+    padding: 0.75rem; line-height: 1.5; text-align: left;
+    white-space: pre-wrap; word-break: break-word;
+  }
 </style>
 </head>
 <body>
@@ -150,6 +155,7 @@ function setUI(state) {
   if (state === "completed" || state === "failed" || state === "busy" || state === "no-answer") {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
+  if (state !== "failed") { errorMsg.style.display = "none"; }
 }
 
 async function makeCall() {
@@ -192,7 +198,13 @@ async function pollStatus(leadId) {
       if (status === "ringing")      { setUI("ringing"); log("📞 Phone is ringing…", "info"); }
       else if (status === "in-progress") { setUI("in-progress"); log("✅ Call answered — AI speaking…", "success"); }
       else if (status === "completed")   { setUI("completed"); log("✅ Call completed", "success"); }
-      else if (status === "failed")      { setUI("failed"); log("❌ Call failed: " + (data.error_message || "unknown"), "error"); }
+      else if (status === "failed")      {
+        setUI("failed");
+        var errMsg = data.error_message || "unknown";
+        log("❌ " + errMsg, "error");
+        errorMsg.textContent = errMsg;
+        errorMsg.style.display = "block";
+      }
       else if (status === "busy")        { setUI("busy"); log("📵 Line busy", "error"); }
       else if (status === "no-answer")   { setUI("no-answer"); log("📵 No answer", "error"); }
     } catch (e) { /* silent retry */ }

@@ -160,7 +160,36 @@ for i, (lead_id, name, phone, program, status) in enumerate(lead_ids[:5]):
 
 print("Inserted 5 follow-ups")
 
+# -- Demo Courses --
+cur.execute("DELETE FROM offer_letters")
+cur.execute("DELETE FROM lead_documents")
+cur.execute("DELETE FROM courses")
+print("Cleared existing offer-letter data")
+
+courses_data = [
+    ("Computer Science", "4 Years", "$42,000/year", "Fall 2026, Spring 2027",
+     "ABET-accredited program covering AI, systems, software engineering, and cybersecurity."),
+    ("Data Science", "2 Years (MS)", "$38,000/year", "Fall 2026",
+     "Interdisciplinary program with concentrations in ML, big data, and statistical modeling."),
+    ("MBA", "2 Years", "$45,000/year", "Fall 2026, Spring 2027",
+     "AACSB-accredited with specializations in Finance, Marketing, Analytics, and Healthcare."),
+    ("Engineering", "4 Years", "$32,000/year (domestic) / $48,000/year (international)", "Fall 2026",
+     "Mechanical, Electrical, Civil, and Computer Engineering tracks. ABET-accredited."),
+    ("Business Analytics", "1 Year (MS)", "$35,000/year", "Fall 2026",
+     "STEM-designated program. Combines business strategy with advanced data analytics."),
+    ("Information Systems", "2 Years (MS)", "$30,000/year", "Spring 2027",
+     "Focus on IT management, enterprise systems, and digital transformation."),
+]
+for name, duration, fees, intake, desc in courses_data:
+    cid = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO courses (id, name, duration, fees, intake, description, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, NOW())",
+        (cid, name, duration, fees, intake, desc),
+    )
+print(f"Inserted {len(courses_data)} courses")
+
 conn.close()
 print("\n=== DASHBOARD DATA SEEDED ===")
 print("Dashboard: https://const-leaves-contest-legend.trycloudflare.com/dashboard")
-print(f"12 leads | 8 conversations | 5 follow-ups")
+print(f"12 leads | 8 conversations | 5 follow-ups | {len(courses_data)} courses")

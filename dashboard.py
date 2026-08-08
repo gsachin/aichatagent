@@ -15,6 +15,7 @@ from app.dashboard.overview import render as overview_page
 from app.dashboard.leads_page import render as leads_page
 from app.dashboard.conversations_page import render as conversations_page
 from app.dashboard.scheduler_page import render as scheduler_page
+from app.dashboard.courses_page import render as courses_page
 
 
 def main():
@@ -32,6 +33,8 @@ def main():
         conversations_page()
     elif page == "scheduler":
         scheduler_page()
+    elif page == "courses":
+        courses_page()
 
 
 if __name__ == "__main__":
