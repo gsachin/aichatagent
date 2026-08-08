@@ -1303,6 +1303,7 @@ async def twilio_whatsapp_webhook(
     if not lead_name and is_name_like and not has_email:
         # User likely provided their name
         await update_lead(lead["id"], name=Body.strip())
+        lead_name = Body.strip()  # Refresh local
         if not lead_email:
             answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
         else:
@@ -1310,6 +1311,7 @@ async def twilio_whatsapp_webhook(
     elif not lead_email and has_email:
         # User provided their email
         await update_lead(lead["id"], email=Body.strip())
+        lead_email = Body.strip()  # Refresh local
         if not lead_name:
             answer = f"Got your email! And what's your name?"
         else:
@@ -1320,38 +1322,30 @@ async def twilio_whatsapp_webhook(
     elif not lead_email:
         # Missing email — ask for it
         answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
-    elif lead_id:
+    else:
+        # All info present — check admission intent first, then ACCEPT/DECLINE
+
+        # ── Admission intent detection ──────────────────────────
         is_interested, detected_prog = await _detect_admission_intent_whatsapp(msg_lower)
         if is_interested:
-            # ── NEW: Admission intent detected ──────────────────
             await update_lead(lead["id"], status="in_progress")
-            # Auto-detect program from message if not already set
             if detected_prog and not lead_program:
                 await update_lead(lead["id"], program_interest=detected_prog)
                 lead_program = detected_prog
-                if not lead_program:
-                    answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
-                else:
-                    answer = (
-                        f"Great! To process your admission for *{lead_program}*, "
-                        "please upload the following documents:\n\n"
-                        "📄 Transcript / Mark Sheet\n"
-                        "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
-                        "📝 Any additional certificates (optional)\n\n"
-                        "Just send clear photos or PDFs right here in WhatsApp. "
-                        "Type 'done' when you've sent everything."
-                    )
-    else:
-        # All info present — check ACCEPT/DECLINE before RAG
-        confirm = f"I have you as {lead_name}"
-        if lead_email:
-            confirm += f", {lead_email}"
-        if lead_program:
-            confirm += f" — interested in {lead_program}"
-        confirm += ". Is that correct? (Type 'yes' or tell me what to change)"
-
-        # ── NEW: ACCEPT/DECLINE offer handling ──────────────────
-        if msg_lower in ("accept", "accepted", "i accept"):
+            if not lead_program:
+                answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+            else:
+                answer = (
+                    f"Great! To process your admission for *{lead_program}*, "
+                    "please upload the following documents:\n\n"
+                    "📄 Transcript / Mark Sheet\n"
+                    "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
+                    "📝 Any additional certificates (optional)\n\n"
+                    "Just send clear photos or PDFs right here in WhatsApp. "
+                    "Type 'done' when you've sent everything."
+                )
+        # ── ACCEPT/DECLINE offer handling ───────────────────────
+        elif msg_lower in ("accept", "accepted", "i accept"):
             result = await _handle_offer_response(lead_id, "accepted")
             if result:
                 answer = f"🎉 Congratulations {lead_name}! Your offer for *{result['program']}* has been accepted. You'll receive a payment link shortly to confirm your seat."
@@ -1408,6 +1402,12 @@ async def twilio_whatsapp_webhook(
                 answer = "Sorry, I couldn't process your question. Please try again."
         else:
             answer = confirm
+
+    # Safety: fallback answer
+    try:
+        _ = answer
+    except NameError:
+        answer = f"I have you as {lead_name or 'there'}. How can I help with UMD or FDU admissions?"
 
     # Log conversation
     background_tasks.add_task(
