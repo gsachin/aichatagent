@@ -101,7 +101,10 @@ with st.sidebar:
                     data = resp.json()
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
+                        offer_id = offer.get("id", "")
+                        pdf_url = f"http://localhost:8000/api/offers/{offer_id}/pdf"
                         st.success(f"✅ Document uploaded! Offer letter for {offer.get('program','')} generated and sent!")
+                        st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
                         st.session_state["offer_generated"] = True
                     else:
                         st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
@@ -428,7 +431,10 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                     data = resp.json()
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
+                        offer_id = offer.get("id", "")
+                        pdf_url = f"http://localhost:8000/api/offers/{offer_id}/pdf"
                         st.success(f"🎓 Offer letter for *{offer.get('program','')}* generated and sent!")
+                        st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
                         st.balloons()
                         st.session_state["offer_generated"] = True
                         st.session_state["awaiting_field"] = None
@@ -588,10 +594,11 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     f"Excellent! To process your admission for *{prog}*, please upload:\n\n"
                     "📄 **Transcript / Mark Sheet**\n"
                     "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
-                    "Use the file uploader in the **sidebar** ⬅️ to submit your documents. "
+                    "Use the upload widget **below** ⬇️ to submit your documents. "
                     "Once uploaded, your offer letter will be generated automatically!"
                 )
                 st.session_state["show_apply_prompt"] = True
+                st.rerun()  # Force re-render to show in-chat uploader immediately
             elif msg_lower in ("no", "nope", "i don't", "not sure"):
                 answer = "No worries! You can still explore our programs. Feel free to ask me about admission requirements, alternative programs, or how to prepare your application."
                 st.session_state.awaiting_field = None
