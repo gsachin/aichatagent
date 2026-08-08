@@ -73,9 +73,9 @@ async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | N
         logger.info(f"Lead {lead_id}: no program_interest — skipping offer")
         return None
 
-    # ── Idempotency guard ────────────────────────────────────────────
+    # ── Idempotency guard (15 min for demo, 24h for production) ────
     if not force:
-        recent = await get_recent_offer_for_lead(lead_id, within_hours=24)
+        recent = await get_recent_offer_for_lead(lead_id, within_hours=0.25)
         if recent:
             logger.info(
                 f"Lead {lead_id}: offer already sent within 24h (id={recent['id']}) — skipping"
