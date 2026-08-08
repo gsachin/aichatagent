@@ -373,6 +373,74 @@ if audio_value is not None:
         st.rerun()
 
 # ── Text input ─────────────────────────────────────────────────────
+# ── In-chat document upload (appears when ready for docs) ──────────
+if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state.get("show_apply_prompt"):
+    st.markdown("---")
+    st.markdown("### 📄 Upload Your Documents")
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        chat_upload = st.file_uploader(
+            "Choose transcript, marksheet, or ID proof",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key="chat_doc_upload",
+            label_visibility="collapsed",
+        )
+    with col2:
+        chat_doc_type = st.selectbox("Type", ["transcript", "id_proof", "marksheet", "other"], key="chat_doc_type")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        upload_clicked = st.button("📤 Upload", key="chat_upload_btn", use_container_width=True, type="primary")
+
+    if chat_upload and upload_clicked:
+        lead_id = st.session_state.get("lead_id", "")
+        if not lead_id:
+            phone = st.session_state.get("lead_phone", f"streamlit_{st.session_state.get('lead_name', 'user')}")
+            try:
+                import requests
+                resp = requests.post("http://localhost:8000/api/leads", json={
+                    "phone_number": phone,
+                    "name": st.session_state.get("lead_name", ""),
+                    "email": st.session_state.get("lead_email", ""),
+                    "program_interest": st.session_state.get("lead_program", ""),
+                    "source": "streamlit",
+                }, timeout=10)
+                if resp.ok:
+                    st.session_state["lead_id"] = resp.json()["id"]
+                    lead_id = st.session_state["lead_id"]
+            except Exception as e:
+                st.error(f"Cannot connect to backend: {e}")
+        if lead_id:
+            try:
+                import requests, uuid as _uuid
+                boundary = f"----chat-{_uuid.uuid4().hex}"
+                parts = [
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"doc_type\"\r\n\r\n{chat_doc_type}\r\n",
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{chat_upload.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+                ]
+                body = "".join(parts).encode("utf-8") + chat_upload.getvalue() + f"\r\n--{boundary}--\r\n".encode("utf-8")
+                resp = requests.post(
+                    f"http://localhost:8000/api/leads/{lead_id}/documents",
+                    data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                    timeout=30,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    if data.get("offer_letter"):
+                        offer = data["offer_letter"]
+                        st.success(f"🎓 Offer letter for *{offer.get('program','')}* generated and sent!")
+                        st.balloons()
+                        st.session_state["offer_generated"] = True
+                        st.session_state["awaiting_field"] = None
+                        st.session_state["show_apply_prompt"] = False
+                    else:
+                        st.success("✅ Document uploaded! You can upload more or start asking questions.")
+                else:
+                    st.error(f"Upload failed (HTTP {resp.status_code})")
+            except Exception as e:
+                st.error(f"Upload error: {e}")
+    st.markdown("---")
+
 if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
