@@ -105,7 +105,10 @@ with st.sidebar:
                         pdf_url = f"http://localhost:8000/api/offers/{offer_id}/pdf"
                         st.success(f"✅ Document uploaded! Offer letter for {offer.get('program','')} generated and sent!")
                         st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
+                        st.balloons()
                         st.session_state["offer_generated"] = True
+                        st.session_state["show_apply_prompt"] = False
+                        st.session_state["awaiting_field"] = None
                     else:
                         st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
                 else:
@@ -718,7 +721,6 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                         st.session_state["offer_generated"] = True
                         st.session_state["awaiting_field"] = None
                         st.session_state["show_apply_prompt"] = False
-                        st.rerun()
                     else:
                         st.success("✅ Document uploaded! You can upload more or start asking questions.")
                 else:

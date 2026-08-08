@@ -1112,15 +1112,27 @@ async def _handle_whatsapp_document(
         logger.exception("_handle_whatsapp_document failed")
 
 
-async def _detect_admission_intent_whatsapp(msg_lower: str) -> bool:
+async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     """
     Detect if a WhatsApp message expresses intent to proceed with admission.
+
+    Returns (is_interested: bool, program: str).
+    Program is extracted from the message if mentioned alongside admission intent.
 
     Uses keyword fast-path first (free), then falls back to LLM for
     semantic matching.  Catches all variations like:
     "i am ready to take admission", "let's go ahead", "sign me up",
     "yes apply now", "proceed with enrollment", etc.
     """
+    # ── Extract program from message ───────────────────────────────
+    programs = ["mba", "computer science", "data science", "engineering",
+               "business analytics", "information systems"]
+    detected_program = ""
+    for p in programs:
+        if p in msg_lower:
+            detected_program = p.title() if p != "mba" else "MBA"
+            break
+
     # ── Fast path: strong admission keywords ────────────────────────
     strong = [
         "i want to take admission",
@@ -1133,7 +1145,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> bool:
     for kw in strong:
         if kw in msg_lower:
             logger.info(f"Admission intent: strong keyword '{kw}'")
-            return True
+            return True, detected_program
 
     # ── Medium path: weaker keywords — confirm with LLM ────────────
     medium = [
@@ -1144,7 +1156,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> bool:
     ]
     has_medium = any(kw in msg_lower for kw in medium)
     if not has_medium:
-        return False
+        return False, ""
 
     # LLM confirmation
     try:
@@ -1171,10 +1183,10 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> bool:
         raw = response["message"]["content"].strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
-            return True
+            return True, detected_program
     except Exception:
         logger.warning("Admission intent LLM check failed — skipping")
-    return False
+    return False, ""
 
 
 async def _handle_offer_response(lead_id: str, status: str) -> dict | None:
@@ -1308,21 +1320,27 @@ async def twilio_whatsapp_webhook(
     elif not lead_email:
         # Missing email — ask for it
         answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
-    elif lead_id and await _detect_admission_intent_whatsapp(msg_lower):
-        # ── NEW: Admission intent detected ──────────────────────
-        await update_lead(lead["id"], status="in_progress")
-        if not lead_program:
-            answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
-        else:
-            answer = (
-                f"Great! To process your admission for *{lead_program}*, "
-                "please upload the following documents:\n\n"
-                "📄 Transcript / Mark Sheet\n"
-                "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
-                "📝 Any additional certificates (optional)\n\n"
-                "Just send clear photos or PDFs right here in WhatsApp. "
-                "Type 'done' when you've sent everything."
-            )
+    elif lead_id:
+        is_interested, detected_prog = await _detect_admission_intent_whatsapp(msg_lower)
+        if is_interested:
+            # ── NEW: Admission intent detected ──────────────────
+            await update_lead(lead["id"], status="in_progress")
+            # Auto-detect program from message if not already set
+            if detected_prog and not lead_program:
+                await update_lead(lead["id"], program_interest=detected_prog)
+                lead_program = detected_prog
+                if not lead_program:
+                    answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                else:
+                    answer = (
+                        f"Great! To process your admission for *{lead_program}*, "
+                        "please upload the following documents:\n\n"
+                        "📄 Transcript / Mark Sheet\n"
+                        "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
+                        "📝 Any additional certificates (optional)\n\n"
+                        "Just send clear photos or PDFs right here in WhatsApp. "
+                        "Type 'done' when you've sent everything."
+                    )
     else:
         # All info present — check ACCEPT/DECLINE before RAG
         confirm = f"I have you as {lead_name}"
@@ -1348,12 +1366,36 @@ async def twilio_whatsapp_webhook(
 
         # Only do RAG if user isn't confirming/changing their info
         elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
-            answer = "Great! How can I help you with UMD or FDU admissions today?"
+            if lead_program:
+                answer = (
+                    f"Great {lead_name}! You're confirmed for *{lead_program}*. "
+                    f"To proceed with admission, say: 'I want to take admission'"
+                )
+            else:
+                answer = "Great! Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
         elif msg_lower in ("no", "nope", "wrong", "change"):
             answer = "No problem! What would you like to update? Your name, email, or program interest?"
         elif msg_lower == "done" and lead_program:
-            # Student finished uploading documents
-            answer = f"Thanks {lead_name}! I have all your documents. Let me check your application status... To proceed, just say 'I want to take admission' and I'll process your offer letter."
+            answer = f"Thanks {lead_name}! To process your application, say 'I want to take admission' and I'll prepare your offer letter."
+        # ── FIX: Capture program name from short replies (Critical bug fix) ──
+        elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
+            programs = ["mba", "computer science", "data science", "engineering",
+                       "business analytics", "information systems"]
+            detected = ""
+            for p in programs:
+                if p in msg_lower:
+                    detected = p.title() if p != "mba" else "MBA"
+                    break
+            if detected:
+                await update_lead(lead["id"], program_interest=detected)
+                lead_program = detected
+                answer = (
+                    f"**{detected}** — great choice! 🎓\n\n"
+                    f"To proceed with your admission, say: 'I want to take admission' "
+                    f"and I'll guide you through the document upload process."
+                )
+            else:
+                answer = "I didn't catch the program name. Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
         elif "?" in Body or len(Body) > 30:
             # User is asking a real question — do RAG
             try:
