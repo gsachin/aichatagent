@@ -251,7 +251,10 @@ if "messages" not in st.session_state:
     st.session_state.setdefault("lead_name", "")
     st.session_state.setdefault("lead_email", "")
     st.session_state.setdefault("lead_phone", "")
-    st.session_state.setdefault("awaiting_field", None)  # 'name', 'email', 'phone', or None
+    st.session_state.setdefault("lead_program", "")
+    st.session_state.setdefault("lead_id", "")
+    st.session_state.setdefault("show_apply_prompt", False)
+    st.session_state.setdefault("awaiting_field", None)  # 'name','email','phone','program','qualification','awaiting_docs'
     if not st.session_state.lead_collected:
         greeting += " Before we start, could you tell me your name?"
         st.session_state.awaiting_field = "name"
@@ -363,26 +366,81 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # ── Lead info collection ──────────────────────────────
+        msg = prompt.strip()
+        msg_lower = msg.lower()
         awaiting = st.session_state.get("awaiting_field")
         answer = None
 
+        # ── Helper: detect admission intent in message ─────────
+        admission_keywords = [
+            "i want to take admission", "i want admission", "take addmission",
+            "i want to enroll", "ready to enroll", "sign me up",
+            "take admission", "want admission", "i am ready to take",
+            "i'm ready to take", "apply now", "i want to apply",
+            "i am ready", "let's proceed", "go ahead", "i want to join",
+            "i am interested in joining", "admission",
+        ]
+
+        def has_admission_intent(text):
+            return any(kw in text for kw in admission_keywords)
+
+        def extract_program(text):
+            """Try to extract program name from message."""
+            programs = ["computer science", "mba", "data science", "engineering",
+                       "business analytics", "information systems"]
+            for p in programs:
+                if p in text:
+                    return p.title() if p != "mba" else "MBA"
+            return ""
+
+        # ── Smart name detection: skip if contains admission intent ─
+        has_email = "@" in msg and "." in msg.split("@")[-1] if "@" in msg else False
+        is_short_name = len(msg.split()) <= 3 and not has_email and "?" not in msg and len(msg) < 60
+
+        # ── State: waiting for name ───────────────────────────
         if awaiting == "name":
-            st.session_state.lead_name = prompt.strip()
-            st.session_state.awaiting_field = "email"
-            answer = f"Thanks {prompt.strip()}! And what's your email address? I'll use it to send you program details."
+            if has_admission_intent(msg_lower):
+                # User provided name + admission intent in same message
+                # Try to extract just the name part
+                name_part = msg
+                for kw in admission_keywords:
+                    if kw in msg_lower:
+                        idx = msg_lower.index(kw)
+                        name_part = msg[:idx].strip()
+                        break
+                if name_part and len(name_part.split()) <= 4:
+                    st.session_state.lead_name = name_part
+                else:
+                    st.session_state.lead_name = msg.split("I want")[0].strip() if "i want" in msg_lower else msg
+
+                st.session_state.awaiting_field = "email"
+                prog = extract_program(msg_lower)
+                if prog:
+                    st.session_state.lead_program = prog
+                answer = f"Thanks {st.session_state.lead_name}! And what's your email address?"
+            elif is_short_name and not has_admission_intent(msg_lower):
+                st.session_state.lead_name = msg
+                st.session_state.awaiting_field = "email"
+                answer = f"Thanks {msg}! And what's your email address? I'll use it to send you program details."
+            else:
+                # Message too long for a name — ask again
+                answer = f"That's a bit long for a name. Could you just tell me your first and last name?"
+
+        # ── State: waiting for email ──────────────────────────
         elif awaiting == "email":
-            if "@" in prompt and "." in prompt:
-                st.session_state.lead_email = prompt.strip()
+            if has_email:
+                st.session_state.lead_email = msg
                 st.session_state.awaiting_field = "phone"
-                answer = f"Got it! And your phone number? (So an admissions counselor can follow up with you)"
+                answer = "Got it! And your phone number? (So an admissions counselor can follow up with you)"
             else:
                 answer = "That doesn't look like an email address. Could you share a valid email? (e.g., name@example.com)"
+
+        # ── State: waiting for phone ──────────────────────────
         elif awaiting == "phone":
-            st.session_state.lead_phone = prompt.strip()
+            st.session_state.lead_phone = msg
             st.session_state.awaiting_field = None
             st.session_state.lead_collected = True
-            # Try to save to backend
+            # Save to backend
             try:
                 import requests
                 resp = requests.post("http://localhost:8000/api/leads", json={
@@ -396,50 +454,173 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     st.session_state["lead_id"] = lead_data.get("id", "")
             except Exception:
                 pass
-            answer = f"Perfect! I have your info:\n- Name: {st.session_state.lead_name}\n- Email: {st.session_state.lead_email}\n- Phone: {prompt.strip()}\n\nIs this correct? (Type 'yes' or tell me what to change)"
-        elif prompt.strip().lower() in ("yes", "yeah", "yep", "correct", "right"):
-            if st.session_state.lead_collected:
-                answer = "Great! Your info is confirmed. How can I help you with UMD or FDU admissions today? Ask me anything about programs, tuition, or how to apply."
-            else:
-                # Do RAG
-                pass
-        elif not st.session_state.lead_collected and st.session_state.awaiting_field is None:
-            # Restart collection
-            st.session_state.awaiting_field = "name"
-            answer = "Before we continue, could you tell me your name?"
+            answer = (
+                f"Perfect! I have your info:\n"
+                f"- Name: {st.session_state.lead_name}\n"
+                f"- Email: {st.session_state.lead_email}\n"
+                f"- Phone: {msg}\n\n"
+                f"Is this correct? (Type 'yes' or tell me what to change)"
+            )
 
-        # ── Admission intent detection ──────────────────────────
-        if answer is None and st.session_state.get("lead_collected"):
-            msg_lower = prompt.strip().lower()
-            admission_keywords = [
-                "i want to take admission", "i want admission", "take addmission",
-                "i want to enroll", "ready to enroll", "sign me up",
-                "admission", "enroll", "apply now", "i want to apply",
-                "i am ready", "let's proceed", "go ahead",
-            ]
-            if any(kw in msg_lower for kw in admission_keywords):
-                lead_id = st.session_state.get("lead_id", "")
-                prog = st.session_state.get("lead_program", "")
-                if not prog:
-                    answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+        # ── State: awaiting program confirmation ──────────────
+        elif awaiting == "program":
+            prog = extract_program(msg_lower)
+            if not prog and len(msg.split()) <= 3:
+                prog = msg.title()
+            if prog:
+                st.session_state.lead_program = prog
+                st.session_state.awaiting_field = "qualification"
+                # Update backend
+                try:
+                    import requests
+                    lid = st.session_state.get("lead_id", "")
+                    if lid:
+                        requests.put(f"http://localhost:8000/api/leads/{lid}",
+                            json={"program_interest": prog}, timeout=5)
+                except Exception:
+                    pass
+                # Qualification check
+                qual_info = {
+                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
+                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
+                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
+                    "Engineering": "10+2 with Physics, Chemistry, Math (PCM) 60%+, JEE or equivalent entrance exam",
+                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
+                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
+                }
+                reqs = qual_info.get(prog, f"Relevant bachelor's degree with 50%+ marks")
+                answer = (
+                    f"**{prog}** — great choice! 🎓\n\n"
+                    f"Before we proceed, here are the requirements:\n"
+                    f"📋 {reqs}\n\n"
+                    f"Do you meet these requirements? (yes/no)"
+                )
+            else:
+                answer = "I didn't catch the program name. Which program? (e.g., Computer Science, MBA, Data Science)"
+
+        # ── State: awaiting qualification confirmation ─────────
+        elif awaiting == "qualification":
+            if msg_lower in ("yes", "yeah", "yep", "yes i do", "i do", "i meet", "correct"):
+                st.session_state.awaiting_field = "awaiting_docs"
+                prog = st.session_state.get("lead_program", "the program")
+                answer = (
+                    f"Excellent! To process your admission for *{prog}*, please upload:\n\n"
+                    "📄 **Transcript / Mark Sheet**\n"
+                    "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
+                    "Use the file uploader in the **sidebar** ⬅️ to submit your documents. "
+                    "Once uploaded, your offer letter will be generated automatically!"
+                )
+                st.session_state["show_apply_prompt"] = True
+            elif msg_lower in ("no", "nope", "i don't", "not sure"):
+                answer = "No worries! You can still explore our programs. Feel free to ask me about admission requirements, alternative programs, or how to prepare your application."
+                st.session_state.awaiting_field = None
+            else:
+                answer = "Please answer 'yes' or 'no' — do you meet the requirements for this program?"
+
+        # ── User confirms info ────────────────────────────────
+        elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
+            if st.session_state.get("lead_collected"):
+                lead_prog = st.session_state.get("lead_program", "")
+                if lead_prog:
+                    # Already have program — ask if they want to apply
+                    answer = (
+                        f"Your profile is confirmed! You're interested in *{lead_prog}*.\n\n"
+                        f"Would you like to proceed with the application? "
+                        f"Just say: 'I want to take admission'"
+                    )
                 else:
                     answer = (
-                        f"Great! To process your admission for *{prog}*, please upload:\n\n"
-                        "📄 **Transcript / Mark Sheet**\n"
-                        "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
-                        "Use the file uploader in the sidebar ⬅️ to submit your documents. "
-                        "Once uploaded, your offer letter will be generated automatically!"
+                        "Great! Your info is confirmed. Now, which program are you interested in? "
+                        "(e.g., Computer Science, MBA, Data Science)\n\n"
+                        "Or just say: 'I want to take admission in MBA'"
                     )
-                    st.session_state["show_apply_prompt"] = True
+
+        # ── Profile not started yet ───────────────────────────
+        elif not st.session_state.get("lead_collected") and awaiting is None:
+            if has_admission_intent(msg_lower):
+                # User wants admission but hasn't given profile yet
+                st.session_state.awaiting_field = "name"
+                prog = extract_program(msg_lower)
+                if prog:
+                    st.session_state.lead_program = prog
+                answer = "I'd love to help you apply! First, could you tell me your name?"
+            else:
+                st.session_state.awaiting_field = "name"
+                answer = "Hello! I'm your University Admissions Advisor. Before we start, could you tell me your name?"
+
+        # ── Admission intent with profile complete ────────────
+        elif has_admission_intent(msg_lower) and st.session_state.get("lead_collected"):
+            prog = extract_program(msg_lower) or st.session_state.get("lead_program", "")
+            if not prog:
+                st.session_state.awaiting_field = "program"
+                answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+            elif st.session_state.get("awaiting_field") != "qualification":
+                st.session_state.lead_program = prog
+                st.session_state.awaiting_field = "qualification"
+                # Update backend with program
+                try:
+                    import requests
+                    lid = st.session_state.get("lead_id", "")
+                    if lid:
+                        requests.put(f"http://localhost:8000/api/leads/{lid}",
+                            json={"program_interest": prog, "status": "in_progress"}, timeout=5)
+                except Exception:
+                    pass
+                qual_info = {
+                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
+                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
+                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
+                    "Engineering": "10+2 with PCM 60%+, JEE or equivalent entrance exam",
+                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
+                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
+                }
+                reqs = qual_info.get(prog, "Relevant bachelor's degree with 50%+ marks")
+                answer = (
+                    f"**{prog}** — great choice! 🎓\n\n"
+                    f"Here are the requirements:\n📋 {reqs}\n\n"
+                    f"Do you meet these requirements? (yes/no)"
+                )
+            else:
+                # Already in qualification flow
+                pass
+
+        # ── User mentions a program name directly ─────────────
+        elif st.session_state.get("lead_collected"):
+            prog = extract_program(msg_lower)
+            if prog and len(msg.split()) <= 5:
+                st.session_state.lead_program = prog
+                st.session_state.awaiting_field = "qualification"
+                try:
+                    import requests
+                    lid = st.session_state.get("lead_id", "")
+                    if lid:
+                        requests.put(f"http://localhost:8000/api/leads/{lid}",
+                            json={"program_interest": prog}, timeout=5)
+                except Exception:
+                    pass
+                qual_info = {
+                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
+                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
+                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
+                    "Engineering": "10+2 with PCM 60%+, JEE or equivalent entrance exam",
+                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
+                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
+                }
+                reqs = qual_info.get(prog, "Relevant bachelor's degree with 50%+ marks")
+                answer = (
+                    f"**{prog}** — great choice! 🎓\n\n"
+                    f"Here are the requirements:\n📋 {reqs}\n\n"
+                    f"Do you meet these requirements? (yes/no)"
+                )
 
         # ── RAG fallback ──────────────────────────────────────
         if answer is None:
-            with st.spinner("Searching..."):
+            with st.spinner("Thinking..."):
                 try:
                     response = st.session_state.rag_chain.invoke({"input": prompt})
                     answer = response["answer"]
                 except Exception as e:
-                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
+                    answer = f"Something went wrong: {e}\n\nMake sure Ollama is still running."
 
         st.markdown(answer)
 
