@@ -228,7 +228,7 @@ async def update_course(course_id: str, **kwargs) -> dict | None:
             cur.execute(
                 f"UPDATE courses SET {', '.join(set_parts)} WHERE id = %s "
                 "RETURNING id, name, duration, fees, intake, description, "
-                "is_active, created_at",
+                "is_active, payment_link, created_at",
                 values,
             )
             row = cur.fetchone()
@@ -520,6 +520,7 @@ async def update_offer_letter_status(
     status: str,
     message_sid: str = "",
     email_id: str = "",
+    pdf_path: str = "",
     sent_at: str = "",
     response_at: str = "",
 ) -> dict | None:
@@ -534,6 +535,9 @@ async def update_offer_letter_status(
             return None
         set_parts = ["status = %s", "updated_at = %s"]
         values = [status, now]
+        if pdf_path:
+            set_parts.append("pdf_path = %s")
+            values.append(pdf_path)
         if message_sid:
             set_parts.append("whatsapp_sid = %s")
             values.append(message_sid)

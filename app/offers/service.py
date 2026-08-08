@@ -119,16 +119,10 @@ async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | N
 
         # Update the row with the actual pdf_path
         from app.offers.models import update_offer_letter_status
-        offer = await update_offer_letter_status(offer["id"], "sent")
+        offer = await update_offer_letter_status(offer["id"], "sent", pdf_path=str(pdf_path))
         if offer is None:
             logger.warning("Failed to update offer after PDF gen — continuing")
         else:
-            # Re-query to get the full record with pdf_path set
-            from app.offers.models import get_offer_letter
-            fresh = await get_offer_letter(offer["id"])
-            if fresh:
-                offer = fresh
-            # Manually patch pdf_path if update didn't persist it
             offer["pdf_path"] = str(pdf_path)
     except Exception:
         logger.exception(f"Lead {lead_id}: PDF generation failed")
