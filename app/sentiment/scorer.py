@@ -518,12 +518,38 @@ async def _compute_session_aggregate(lead_id: str) -> dict:
         return {"s_lead": 0.0, "category": "Nurture", "trajectory": "Stable",
                 "p_convert": None}
 
-    # ── Build full conversation transcript from all exchanges ─────
+    # ── Build full conversation transcript (student-side only) ────
+    # The LLM should score the STUDENT's sentiment.  Including long
+    # bot responses dilutes the signal — the assistant's words are
+    # not the lead's sentiment.  We extract only student/user lines.
     full_transcript_parts = []
     for h in reversed(history):  # oldest first
         snippet = h.get("transcript_snippet", "")
-        if snippet:
-            full_transcript_parts.append(snippet)
+        if not snippet:
+            continue
+        # Extract only the student/user side of each exchange
+        student_lines = []
+        for line in snippet.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Match student-side prefixes
+            if (stripped.lower().startswith("user:")
+                    or stripped.lower().startswith("student:")
+                    or stripped.lower().startswith("caller:")):
+                # Remove the prefix for cleaner LLM input
+                content = stripped.split(":", 1)[-1].strip()
+                if content:
+                    student_lines.append(content)
+        if student_lines:
+            full_transcript_parts.extend(student_lines)
+
+    # If no student-side lines found, fall back to full snippets
+    if not full_transcript_parts:
+        for h in reversed(history):
+            snippet = h.get("transcript_snippet", "")
+            if snippet:
+                full_transcript_parts.append(snippet)
 
     full_transcript = "\n".join(full_transcript_parts) if full_transcript_parts else ""
 
