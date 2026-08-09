@@ -72,6 +72,15 @@ body {
 }
 .stat-dot.pulse { background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
 
+.sentiment-card {
+  border-top: 3px solid var(--teal);
+}
+.sentiment-card[data-cat="Hot"] { border-top-color: var(--red); }
+.sentiment-card[data-cat="Warm"] { border-top-color: var(--yellow); }
+.sentiment-card[data-cat="Nurture"] { border-top-color: var(--green); }
+.sentiment-card[data-cat="At-Risk"] { border-top-color: #f97316; }
+.sentiment-card[data-cat="Disqualified"] { border-top-color: var(--text-muted); }
+
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
 /* ===== PANELS ===== */

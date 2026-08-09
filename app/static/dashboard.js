@@ -136,6 +136,12 @@ async function loadSummary() {
     state.conversations = data.recent_activity;
     renderActivity();
   }
+
+  // Sentiment stats
+  if (data.sentiment_stats) {
+    state.sentimentStats = data.sentiment_stats;
+    renderSentimentStats(data.sentiment_stats);
+  }
 }
 
 async function loadStats() {
@@ -211,9 +217,17 @@ async function loadSettings() {
 
 // ===== RENDER: PIPELINE BOARD =====
 const leadScores = {}; // Cache of lead_id -> score data
+const leadSentiments = {}; // Cache of lead_id -> sentiment data
 const tempMap = { hot: '🔥 Hot', warm: '🟡 Warm', cool: '🟠 Cool', cold: '🔴 Cold', dead: '⚫ Dead' };
 const tempClass = { hot: 'badge-hot', warm: 'badge-warm', cool: 'badge-cool', cold: 'badge-cold', dead: '' };
 const scoreColor = (s) => s >= 8 ? 'var(--green)' : s >= 5 ? 'var(--yellow)' : 'var(--red)';
+const sentCatColor = (cat) => ({
+  'Hot': 'var(--red)', 'Warm': 'var(--yellow)', 'Nurture': 'var(--green)',
+  'At-Risk': 'var(--orange)', 'Disqualified': 'var(--text-muted)'
+}[cat] || 'var(--text-muted)');
+const sentCatEmoji = (cat) => ({
+  'Hot': '🔥', 'Warm': '🟠', 'Nurture': '🟢', 'At-Risk': '⚠', 'Disqualified': '🚫'
+}[cat] || '');
 
 async function loadLeadScores(leadIds) {
   // Fetch scores in batches (don't hammer the API)
@@ -227,6 +241,25 @@ async function loadLeadScores(leadIds) {
   }
 }
 
+async function loadLeadSentiments(leadIds) {
+  const toFetch = leadIds.filter(id => !leadSentiments[id]);
+  if (toFetch.length === 0) return;
+  for (const id of toFetch.slice(0, 20)) {
+    try {
+      const data = await fetchJSON(`/api/leads/${id}/sentiment`);
+      if (data && !data.error) leadSentiments[id] = data;
+    } catch(e) {}
+  }
+}
+
+function renderSentimentStats(stats) {
+  const cats = ['Hot', 'Warm', 'Nurture', 'At-Risk', 'Disqualified'];
+  cats.forEach(cat => {
+    const el = document.getElementById(`statSent${cat.replace('-','')}`);
+    if (el) el.textContent = stats[cat] || 0;
+  });
+}
+
 function renderPipeline() {
   const leads = state.leads;
   const groups = { pending: [], in_progress: [], completed: [], failed: [], unreachable: [] };
@@ -236,9 +269,10 @@ function renderPipeline() {
     else groups.pending.push(l);
   });
 
-  // Trigger score loading for visible leads
+  // Trigger score + sentiment loading for visible leads
   const allIds = leads.map(l => l.id).filter(Boolean);
   loadLeadScores(allIds);
+  loadLeadSentiments(allIds);
 
   Object.entries(groups).forEach(([status, items]) => {
     const countEl = document.getElementById(`count-${status}`);
@@ -250,12 +284,17 @@ function renderPipeline() {
       const sc = leadScores[l.id] || {};
       const score = sc.score;
       const temp = sc.temperature;
+      const sent = leadSentiments[l.id] || {};
+      const sentCat = sent.current_category || '';
+      const sentScore = sent.overall_sentiment_score;
       return `<div class="lead-card" onclick="openLeadDetail('${l.id}')" style="border-left-color: ${statusColor(status)}">
         <div class="lead-name">${escapeHtml(l.name || 'Unknown')}</div>
         <div class="lead-program">${escapeHtml(l.program_interest || '—')}</div>
         <div class="lead-meta">
           ${temp ? `<span class="badge ${tempClass[temp]||''}">${tempMap[temp]||temp}</span>` : ''}
           ${score ? `<span class="badge" style="color:${scoreColor(score)}">⭐${score}</span>` : ''}
+          ${sentCat ? `<span class="badge" style="color:${sentCatColor(sentCat)};font-weight:600">${sentCatEmoji(sentCat)} ${sentCat}</span>` : ''}
+          ${sentScore != null ? `<span class="badge" style="color:${sentScore >= 0.35 ? 'var(--green)' : sentScore >= -0.2 ? 'var(--yellow)' : 'var(--red)'}">S:${sentScore.toFixed(2)}</span>` : ''}
         </div>
       </div>`;
     }).join('');
