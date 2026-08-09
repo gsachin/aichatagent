@@ -1956,6 +1956,27 @@ async def api_calls_live(stream: bool = False):
 # ── API: Dashboard Summary ────────────────────────────────────────────
 
 
+async def _get_sentiment_stats() -> dict:
+    """Count leads per sentiment category for the dashboard overview."""
+    try:
+        import psycopg2
+        from app.config import settings
+
+        conn = psycopg2.connect(settings.DATABASE_URL)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT current_category, COUNT(*) FROM leads "
+                "WHERE current_category != '' AND current_category IS NOT NULL "
+                "GROUP BY current_category"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+
 @app.get("/api/dashboard/summary")
 async def api_dashboard_summary():
     """Aggregated KPIs + recent activity in one call for the dashboard."""
@@ -2012,6 +2033,7 @@ async def api_dashboard_summary():
         "pipeline": pipeline,
         "recent_activity": conversations[:10],
         "active_call_details": _active_call_sids,
+        "sentiment_stats": await _get_sentiment_stats(),
     }
 
 

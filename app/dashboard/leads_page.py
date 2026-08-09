@@ -109,6 +109,33 @@ def render():
                 if lead.get("notes"):
                     st.write(f"**Notes:** {lead['notes']}")
 
+            # ── Sentiment Score (if available) ────────────────────
+            sentiment = api_call("GET", f"/api/leads/{lead_id}/sentiment")
+            if sentiment and "error" not in sentiment:
+                s_category = sentiment.get("current_category", "N/A")
+                s_score = sentiment.get("overall_sentiment_score", 0)
+                s_traj = sentiment.get("sentiment_trajectory", "")
+                p_conv = sentiment.get("conversion_probability")
+                primary_emotion = sentiment.get("primary_emotion", "")
+
+                cat_color = {
+                    "Hot": "🔥", "Warm": "🟠", "Nurture": "🟢",
+                    "At-Risk": "⚠️", "Disqualified": "🚫",
+                }.get(s_category, "⚪")
+
+                st.divider()
+                sc1, sc2, sc3, sc4 = st.columns(4)
+                with sc1:
+                    st.metric("Sentiment Category", f"{cat_color} {s_category}")
+                with sc2:
+                    st.metric("S_lead Score", f"{s_score:.2f}")
+                with sc3:
+                    st.metric("Trajectory", s_traj or "N/A")
+                with sc4:
+                    st.metric("P(convert)", f"{p_conv:.0%}" if p_conv is not None else "N/A")
+                if primary_emotion:
+                    st.caption(f"Emotion: {primary_emotion} | Objections: {sentiment.get('objections', [])}")
+
             # Action buttons
             col_a, col_b, col_c, col_d = st.columns(4)
 

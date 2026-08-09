@@ -37,6 +37,30 @@ def render():
 
     st.markdown("---")
 
+    # ── Sentiment KPI row ────────────────────────────────────────
+    st.subheader("🔬 Sentiment Analysis")
+
+    # Fetch sentiment-enriched leads summary
+    summary = api_call("GET", "/api/dashboard/summary") or {}
+    sentiment_stats = summary.get("sentiment_stats", {})
+
+    if sentiment_stats:
+        s1, s2, s3, s4, s5 = st.columns(5)
+        category_emoji = {
+            "Hot": "🔥", "Warm": "🟠", "Nurture": "🟢",
+            "At-Risk": "⚠️", "Disqualified": "🚫",
+        }
+        for col, cat in zip([s1, s2, s3, s4, s5],
+                            ["Hot", "Warm", "Nurture", "At-Risk", "Disqualified"]):
+            emoji = category_emoji.get(cat, "⚪")
+            count = sentiment_stats.get(cat, 0)
+            with col:
+                st.metric(f"{emoji} {cat}", count)
+    else:
+        st.caption("No sentiment data yet — score a transcript to populate.")
+
+    st.markdown("---")
+
     # ── Quick actions ────────────────────────────────────────────
     st.subheader("⚡ Quick Actions")
 

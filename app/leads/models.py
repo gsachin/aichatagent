@@ -656,7 +656,7 @@ async def update_call_queue_status(
 # ── Row -> dict helpers ───────────────────────────────────────────────
 
 def _row_to_lead_dict(row) -> dict:
-    return {
+    result = {
         "id": str(row[0]),
         "phone_number": row[1] or "",
         "name": row[2] or "",
@@ -671,6 +671,13 @@ def _row_to_lead_dict(row) -> dict:
         "created_at": _ts_to_str(row[11]),
         "updated_at": _ts_to_str(row[12]),
     }
+    # Add sentiment columns if present in the row (columns 13-16)
+    if len(row) > 13:
+        result["current_category"] = row[13] or ""
+        result["overall_sentiment_score"] = float(row[14]) if row[14] is not None else 0.0
+        result["sentiment_trajectory"] = row[15] or ""
+        result["conversion_probability"] = float(row[16]) if row[16] is not None else None
+    return result
 
 
 def _row_to_conversation_dict(row) -> dict:
