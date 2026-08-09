@@ -1629,35 +1629,54 @@ async def api_sentiment_score_transcript(req: Request):
 
 @app.get("/api/leads/{lead_id}/sentiment")
 async def api_lead_sentiment(lead_id: str):
-    """Get the most recent sentiment score for a lead."""
-    from app.sentiment.models import get_lead_sentiment, get_lead_sentiment_history
+    """Get the session-level aggregate sentiment for a lead."""
+    from app.sentiment.models import get_lead_sentiment_history
 
-    sent = await get_lead_sentiment(lead_id)
-    if not sent:
+    history = await get_lead_sentiment_history(lead_id, limit=20)
+    if not history:
         return JSONResponse({"error": f"Lead {lead_id} not found or no sentiment data"}, status_code=404)
 
-    # Get full history for trajectory context
-    history = await get_lead_sentiment_history(lead_id, limit=5)
+    # Compute session-level aggregate from all exchanges
+    from app.sentiment.scorer import _compute_session_aggregate
+    agg = await _compute_session_aggregate(lead_id)
+
+    # Latest per-exchange for detail
+    latest = history[0] if history else {}
+
+    # Collect all emotions and objections across the session
+    all_emotions = [h.get("primary_emotion", "") for h in history if h.get("primary_emotion")]
+    all_objections = []
+    for h in history:
+        objs = h.get("objections", [])
+        if isinstance(objs, list):
+            all_objections.extend(objs)
+
+    # Average buying intent and friction
+    intents = [h.get("buying_intent_score", 0) for h in history if h.get("buying_intent_score")]
+    frictions = [h.get("friction_score", 0) for h in history if h.get("friction_score")]
+    avg_intent = sum(intents) / len(intents) if intents else 0.0
+    avg_friction = sum(frictions) / len(frictions) if frictions else 0.0
 
     return {
         "lead_id": lead_id,
-        "current_category": sent.get("category", ""),
-        "overall_sentiment_score": sent.get("s_lead", 0.0),
-        "sentiment_trajectory": sent.get("trajectory", ""),
-        "conversion_probability": sent.get("p_convert"),
-        "last_s_call": sent.get("s_call", 0.0),
-        "primary_emotion": sent.get("primary_emotion", ""),
-        "buying_intent_score": sent.get("buying_intent_score", 0.0),
-        "friction_score": sent.get("friction_score", 0.0),
-        "objections": sent.get("objections", []),
-        "updated_at": sent.get("created_at", ""),
+        "current_category": agg.get("category", "Nurture"),
+        "overall_sentiment_score": agg.get("s_lead", 0.0),
+        "sentiment_trajectory": agg.get("trajectory", "Stable"),
+        "conversion_probability": agg.get("p_convert"),
+        "last_s_call": latest.get("s_call", 0.0),
+        "primary_emotion": agg.get("dominant_emotion", latest.get("primary_emotion", "")),
+        "buying_intent_score": round(avg_intent, 4),
+        "friction_score": round(avg_friction, 4),
+        "objections": list(set(all_objections)),
+        "updated_at": latest.get("created_at", ""),
+        "exchanges": agg.get("exchanges", len(history)),
         "scoring_components": {
-            "s_latest": sent.get("s_call", 0.0),
-            "ewma_baseline": None,  # computed on-the-fly for detailed queries
-            "i_intent": 0.5 * sent.get("buying_intent_score", 0.0),
-            "friction": sent.get("friction_score", 0.0),
+            "s_latest": latest.get("s_call", 0.0),
+            "ewma_baseline": None,
+            "i_intent": 0.5 * avg_intent,
+            "friction": avg_friction,
         },
-        "weights_used": sent.get("weights_used", {}),
+        "weights_used": {"w1": 0.30, "w2": 0.30, "w3": 0.25, "w4": 0.15},
         "history_count": len(history),
     }
 
@@ -1681,6 +1700,27 @@ async def api_lead_sentiment_history(
         "count": len(history),
         "history": history,
     }
+
+
+@app.post("/api/sentiment/recompute/{lead_id}")
+async def api_sentiment_recompute(lead_id: str):
+    """
+    Recompute the session-level aggregate sentiment for a lead
+    from all accumulated exchanges.  Useful after a conversation
+    ends to get the full-session picture instead of per-message scores.
+    """
+    from app.sentiment.scorer import _compute_session_aggregate
+    from app.sentiment.models import update_lead_sentiment_fields
+
+    result = await _compute_session_aggregate(lead_id)
+    await update_lead_sentiment_fields(
+        lead_id=lead_id,
+        current_category=result["category"],
+        overall_sentiment_score=result["s_lead"],
+        sentiment_trajectory=result["trajectory"],
+        conversion_probability=result["p_convert"],
+    )
+    return {"lead_id": lead_id, **result}
 
 
 @app.post("/api/sentiment/explain-categorization")

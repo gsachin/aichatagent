@@ -461,9 +461,10 @@ async def _persist_score(
     composite: CompositeScore,
     transcript: str,
 ) -> None:
-    """Save a sentiment score and update the lead record."""
+    """Save a sentiment score and update the lead record with session-level aggregate."""
     from app.sentiment.models import save_sentiment_score, update_lead_sentiment_fields
 
+    # Save the per-exchange score for history/audit
     await save_sentiment_score(
         lead_id=lead_id,
         s_call=extraction.s_call,
@@ -480,13 +481,137 @@ async def _persist_score(
         transcript_snippet=transcript[:500],
     )
 
+    # ── Compute session-level aggregate from ALL history ──────────
+    # The per-exchange score (above) captures individual messages.
+    # The lead's overall sentiment should reflect the ENTIRE session,
+    # not just the last message.  We recompute from all history.
+    session_aggregate = await _compute_session_aggregate(lead_id)
+
     await update_lead_sentiment_fields(
         lead_id=lead_id,
-        current_category=composite.category,
-        overall_sentiment_score=composite.s_lead,
-        sentiment_trajectory=composite.trajectory,
-        conversion_probability=composite.p_convert,
+        current_category=session_aggregate["category"],
+        overall_sentiment_score=session_aggregate["s_lead"],
+        sentiment_trajectory=session_aggregate["trajectory"],
+        conversion_probability=session_aggregate["p_convert"],
     )
+
+
+async def _compute_session_aggregate(lead_id: str) -> dict:
+    """
+    Compute the lead's OVERALL sentiment from all accumulated exchanges.
+
+    Uses EWMA of all s_call values for the baseline, then applies the
+    composite formula to produce a session-level S_lead that reflects
+    the entire conversation, not just the last message.
+    """
+    from app.sentiment.models import get_lead_sentiment_history
+    from app.sentiment.categorizer import categorize
+
+    history = await get_lead_sentiment_history(lead_id, limit=20)
+    if not history:
+        return {"s_lead": 0.0, "category": "Nurture", "trajectory": "Stable",
+                "p_convert": None}
+
+    # Extract all s_call values (oldest first for EWMA)
+    s_calls = [h["s_call"] for h in reversed(history)]
+
+    # Compute EWMA across all exchanges (session baseline)
+    ewma = s_calls[0]
+    for s in s_calls[1:]:
+        ewma = EWMA_LAMBDA * s + (1 - EWMA_LAMBDA) * ewma
+
+    # Latest (most recent) s_call
+    s_latest = s_calls[-1]
+
+    # Average buying intent and friction across session
+    buying_ints = [h["buying_intent_score"] for h in history if h.get("buying_intent_score")]
+    frictions = [h["friction_score"] for h in history if h.get("friction_score")]
+    avg_intent = sum(buying_ints) / len(buying_ints) if buying_ints else 0.0
+    avg_friction = sum(frictions) / len(frictions) if frictions else 0.0
+
+    # Average BANT completeness from extraction_raw
+    bant_vals = []
+    for h in history:
+        raw = h.get("extraction_raw", {})
+        if isinstance(raw, dict) and "bant_completeness" in raw:
+            bant_vals.append(raw["bant_completeness"])
+    avg_bant = sum(bant_vals) / len(bant_vals) if bant_vals else 0.0
+
+    # Delta from EWMA baseline
+    delta_s = s_latest - ewma
+
+    # Composite intent
+    i_intent = 0.5 * avg_bant + 0.5 * avg_intent
+
+    # Session S_lead
+    s_lead_raw = W1 * s_latest + W2 * delta_s + W3 * i_intent - W4 * avg_friction
+    s_lead = max(-1.0, min(1.0, s_lead_raw))
+
+    # Trajectory from all s_call values
+    trajectory, _ = await _classify_trajectory(lead_id, s_latest)
+    # Override: if we have 2+ scores and variance is low, trajectory is more reliable
+    if len(s_calls) >= 2:
+        mean_s = sum(s_calls) / len(s_calls)
+        var = sum((s - mean_s) ** 2 for s in s_calls) / len(s_calls)
+        if var <= 0.10:
+            # Low variance — check trend
+            slope = _simple_slope(s_calls)
+            if slope > 0.05:
+                trajectory = "Upward"
+            elif slope < -0.05:
+                trajectory = "Degrading"
+            else:
+                trajectory = "Stable"
+
+    # Most frequent emotion
+    from collections import Counter
+    emotions = [h.get("primary_emotion", "") for h in history if h.get("primary_emotion")]
+    dominant_emotion = Counter(emotions).most_common(1)[0][0] if emotions else "neutral"
+
+    # Conversion probability
+    p_convert = _heuristic_conversion_probability(s_lead, trajectory)
+
+    # Collect all objections across session
+    all_objections = []
+    for h in history:
+        objs = h.get("objections", [])
+        if isinstance(objs, list):
+            all_objections.extend(objs)
+
+    # Categorize with session-level values
+    category = categorize(
+        s_lead=s_lead, delta_s=delta_s, p_convert=p_convert,
+        friction=avg_friction, trajectory=trajectory,
+        objections=list(set(all_objections)),
+    )
+
+    logger.info(
+        f"Session aggregate for {lead_id}: S_lead={s_lead:.2f}, "
+        f"category={category}, trajectory={trajectory}, "
+        f"from {len(history)} exchanges, dominant_emotion={dominant_emotion}"
+    )
+
+    return {
+        "s_lead": s_lead,
+        "category": category,
+        "trajectory": trajectory,
+        "p_convert": p_convert,
+        "exchanges": len(history),
+        "dominant_emotion": dominant_emotion,
+    }
+
+
+def _simple_slope(values: list[float]) -> float:
+    """Compute simple linear slope over a series."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    indices = list(range(n))
+    x_mean = (n - 1) / 2
+    y_mean = sum(values) / n
+    num = sum((i - x_mean) * (v - y_mean) for i, v in zip(indices, values))
+    den = sum((i - x_mean) ** 2 for i in indices)
+    return num / den if den > 0 else 0.0
 
 
 def _build_response(extraction: ScoreResult, composite: CompositeScore) -> dict:
