@@ -100,6 +100,10 @@ async def init_db() -> bool:
             # Also initialise offer-letter subsystem tables
             from app.offers.schema import ALL_OFFERS_SQL
             cur.execute(ALL_OFFERS_SQL)
+
+            # Also initialise sentiment-analysis subsystem tables
+            from app.sentiment.schema import ALL_SENTIMENT_SQL
+            cur.execute(ALL_SENTIMENT_SQL)
         conn.close()
         logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True

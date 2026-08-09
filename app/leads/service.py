@@ -107,6 +107,19 @@ async def log_interaction(
     if follow_up_needed and follow_up_reason:
         await _auto_schedule_follow_up(lead_id, follow_up_reason)
 
+    # 5. Run sentiment analysis on the transcript (non-blocking, non-fatal)
+    if transcript and len(transcript.strip()) > 20:
+        try:
+            from app.sentiment.scorer import score_transcript
+
+            await score_transcript(
+                transcript=transcript,
+                lead_id=lead_id,
+            )
+            logger.debug(f"Sentiment scored for lead {lead_id}")
+        except Exception:
+            logger.exception("Sentiment scoring failed (non-fatal)")
+
     return conv
 
 

@@ -84,6 +84,13 @@ services:
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
       - LOG_LEVEL=info
+      # Sentiment analysis scoring weights (tune for your business)
+      - SENTIMENT_W1=0.30
+      - SENTIMENT_W2=0.30
+      - SENTIMENT_W3=0.25
+      - SENTIMENT_W4=0.15
+      - SENTIMENT_EWMA_LAMBDA=0.35
+      - MIN_LABELED_OUTCOMES=100
     restart: unless-stopped
     depends_on:
       postgres:

@@ -1559,7 +1559,7 @@ async def api_quick_call(req: Request):
 
 @app.get("/api/leads/{lead_id}/score")
 async def api_lead_score(lead_id: str):
-    """Get lead quality score (1-10) with breakdown and temperature."""
+    """Get lead quality score (1-10) with breakdown, temperature, and sentiment data."""
     from app.leads.models import get_lead, get_conversations
     from app.leads.service import calculate_lead_score
 
@@ -1569,7 +1569,190 @@ async def api_lead_score(lead_id: str):
 
     conversations = await get_conversations(lead_id=lead_id) or []
     score_data = calculate_lead_score(lead, conversations)
-    return {"lead_id": lead_id, **score_data}
+
+    # Enrich with sentiment data if available
+    sentiment = {}
+    try:
+        from app.sentiment.models import get_lead_sentiment
+        sent = await get_lead_sentiment(lead_id)
+        if sent:
+            sentiment = {
+                "sentiment_category": sent.get("category", ""),
+                "overall_sentiment_score": sent.get("s_lead", 0),
+                "sentiment_trajectory": sent.get("trajectory", ""),
+                "conversion_probability": sent.get("p_convert"),
+                "last_sentiment_at": sent.get("created_at", ""),
+            }
+    except Exception:
+        pass
+
+    return {"lead_id": lead_id, **score_data, "sentiment": sentiment}
+
+
+# ── Sentiment Analysis API ───────────────────────────────────────────
+
+
+@app.post("/api/sentiment/score-transcript")
+async def api_sentiment_score_transcript(req: Request):
+    """
+    Score a transcript for sentiment without persisting data (dry-run).
+
+    Body: {"transcript": "Conversation text...", "lead_id": "optional-uuid"}
+
+    If lead_id is provided, includes composite score with EWMA momentum
+    and persists the result.  Without lead_id, pure dry-run.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    transcript = body.get("transcript", "").strip()
+    if not transcript:
+        return JSONResponse({"error": "transcript is required"}, status_code=422)
+
+    lead_id = body.get("lead_id", "").strip()
+
+    try:
+        from app.sentiment.scorer import score_transcript
+
+        result = await score_transcript(
+            transcript=transcript,
+            lead_id=lead_id,
+            prosody=body.get("prosody"),
+        )
+        return result
+    except Exception as e:
+        logger.exception("Sentiment scoring failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/leads/{lead_id}/sentiment")
+async def api_lead_sentiment(lead_id: str):
+    """Get the most recent sentiment score for a lead."""
+    from app.sentiment.models import get_lead_sentiment, get_lead_sentiment_history
+
+    sent = await get_lead_sentiment(lead_id)
+    if not sent:
+        return JSONResponse({"error": f"Lead {lead_id} not found or no sentiment data"}, status_code=404)
+
+    # Get full history for trajectory context
+    history = await get_lead_sentiment_history(lead_id, limit=5)
+
+    return {
+        "lead_id": lead_id,
+        "current_category": sent.get("category", ""),
+        "overall_sentiment_score": sent.get("s_lead", 0.0),
+        "sentiment_trajectory": sent.get("trajectory", ""),
+        "conversion_probability": sent.get("p_convert"),
+        "last_s_call": sent.get("s_call", 0.0),
+        "primary_emotion": sent.get("primary_emotion", ""),
+        "buying_intent_score": sent.get("buying_intent_score", 0.0),
+        "friction_score": sent.get("friction_score", 0.0),
+        "objections": sent.get("objections", []),
+        "updated_at": sent.get("created_at", ""),
+        "scoring_components": {
+            "s_latest": sent.get("s_call", 0.0),
+            "ewma_baseline": None,  # computed on-the-fly for detailed queries
+            "i_intent": 0.5 * sent.get("buying_intent_score", 0.0),
+            "friction": sent.get("friction_score", 0.0),
+        },
+        "weights_used": sent.get("weights_used", {}),
+        "history_count": len(history),
+    }
+
+
+@app.get("/api/leads/{lead_id}/sentiment-history")
+async def api_lead_sentiment_history(
+    lead_id: str,
+    limit: int = 10,
+):
+    """Get historical sentiment scores for a lead, newest first."""
+    from app.leads.models import get_lead
+    from app.sentiment.models import get_lead_sentiment_history
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+    history = await get_lead_sentiment_history(lead_id, limit=min(limit, 50))
+    return {
+        "lead_id": lead_id,
+        "count": len(history),
+        "history": history,
+    }
+
+
+@app.post("/api/sentiment/explain-categorization")
+async def api_sentiment_explain_categorization(req: Request):
+    """
+    Get a grounded, human-readable explanation for a lead's sentiment category.
+
+    Body: {"lead_id": "uuid"}  — uses latest persisted scores
+          OR
+          {"s_lead": 0.78, "delta_s": 0.12, "p_convert": 0.82, ...} — manual values
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    lead_id = body.get("lead_id", "").strip()
+
+    if lead_id:
+        # Load from persisted data
+        from app.sentiment.models import get_lead_sentiment
+
+        sent = await get_lead_sentiment(lead_id)
+        if not sent:
+            return JSONResponse({"error": f"Lead {lead_id} not found or no sentiment data"}, status_code=404)
+
+        from app.sentiment.categorizer import explain_categorization
+
+        result = explain_categorization(
+            s_lead=sent.get("s_lead", 0.0),
+            delta_s=None,  # Can't compute from single score
+            p_convert=sent.get("p_convert"),
+            friction=sent.get("friction_score", 0.0),
+            trajectory=sent.get("trajectory", "Stable"),
+            objections=sent.get("objections", []),
+            bant_completeness=0.0,
+            buying_intent_score=sent.get("buying_intent_score", 0.0),
+            primary_emotion=sent.get("primary_emotion", ""),
+        )
+        result["lead_id"] = lead_id
+        return result
+
+    # Manual mode — use provided values
+    try:
+        s_lead = float(body.get("s_lead", 0.0))
+        delta_s_val = body.get("delta_s")
+        delta_s = float(delta_s_val) if delta_s_val is not None else None
+        p_convert_val = body.get("p_convert")
+        p_convert = float(p_convert_val) if p_convert_val is not None else None
+        friction = float(body.get("friction", 0.0))
+        trajectory = str(body.get("trajectory", "Stable"))
+        objections = body.get("objections", [])
+        bant = float(body.get("bant_completeness", 0.0))
+        buying = float(body.get("buying_intent_score", 0.0))
+        emotion = str(body.get("primary_emotion", ""))
+    except (ValueError, TypeError) as e:
+        return JSONResponse({"error": f"Invalid parameter value: {e}"}, status_code=422)
+
+    from app.sentiment.categorizer import explain_categorization
+
+    result = explain_categorization(
+        s_lead=s_lead,
+        delta_s=delta_s,
+        p_convert=p_convert,
+        friction=friction,
+        trajectory=trajectory,
+        objections=objections if isinstance(objections, list) else [],
+        bant_completeness=bant,
+        buying_intent_score=buying,
+        primary_emotion=emotion,
+    )
+    return result
 
 
 @app.get("/api/call-queue")
@@ -2191,6 +2374,7 @@ async def health_check(request: Request):
         "twilio_phone": settings.TWILIO_PHONE_NUMBER or "(not set)",
         "outbound_worker": "active" if _outbound_worker and _outbound_worker._running else "inactive",
         "mcp_enabled": settings.MCP_ENABLED,
+        "sentiment_analysis": "enabled",
         "endpoints": {
             "health": "/",
             "voice_page": "/voice",
@@ -2207,6 +2391,10 @@ async def health_check(request: Request):
             "call_queue_status": "/api/call-queue",
             "mcp_sse": "/mcp/sse",
             "mcp_messages": "/mcp/messages",
+            "sentiment_score_transcript": "/api/sentiment/score-transcript",
+            "sentiment_lead_score": "/api/leads/{lead_id}/sentiment",
+            "sentiment_lead_history": "/api/leads/{lead_id}/sentiment-history",
+            "sentiment_explain": "/api/sentiment/explain-categorization",
         },
     })
 
@@ -2255,7 +2443,7 @@ async def dashboard_page():
 # ── Helpers ──────────────────────────────────────────────────────────
 
 async def _handle_disconnect(transcript_parts: list[str]) -> None:
-    """Post-call handler: save transcript and extract lead data."""
+    """Post-call handler: save transcript, extract lead data, and run sentiment scoring."""
     transcript = " ".join(transcript_parts)
 
     if not transcript.strip():
@@ -2283,3 +2471,12 @@ async def _handle_disconnect(transcript_parts: list[str]) -> None:
         )
     except Exception:
         logger.exception("New leads-system logging failed (non-fatal)")
+
+    # Run sentiment analysis on the transcript (non-blocking, non-fatal)
+    try:
+        from app.sentiment.scorer import score_transcript
+
+        await score_transcript(transcript=transcript, lead_id="")
+        logger.info(f"Sentiment scored for call transcript ({len(transcript)} chars)")
+    except Exception:
+        logger.exception("Sentiment scoring failed (non-fatal)")
