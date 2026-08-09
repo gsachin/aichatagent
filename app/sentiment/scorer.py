@@ -103,14 +103,14 @@ Analyze the following conversation transcript between a prospective student and 
 
 Return ONLY valid JSON (no markdown, no explanation) with these exact keys:
 
-{
+{{
   "primary_emotion": "one of: excited, interested, neutral, skeptical, frustrated, angry, confused",
-  "sentiment_score": <float between -1.0 and 1.0, where -1 is extremely negative/angry/ready-to-leave, 0 is neutral, 1 is extremely positive/ready-to-buy>,
-  "buying_intent_score": <float between 0.0 and 1.0 — how ready the student is to enroll/apply>,
-  "friction_score": <float between 0.0 and 1.0 — resistance, objections, budget concerns, hesitation>,
-  "objections": [<list of strings — specific concerns raised, e.g. "pricing", "timeline", "competitor", "contract terms">],
-  "bant_completeness": <float between 0.0 and 1.0 — BANT qualification: Budget confirmed? Authority? Need identified? Timeline clear?>
-}
+  "sentiment_score": <float between -1.0 and 1.0>,
+  "buying_intent_score": <float between 0.0 and 1.0>,
+  "friction_score": <float between 0.0 and 1.0>,
+  "objections": ["pricing", "timeline", "competitor"],
+  "bant_completeness": <float between 0.0 and 1.0>
+}}
 
 Guidelines:
 - If the student explicitly says they want to enroll/apply/join, buying_intent >= 0.7
