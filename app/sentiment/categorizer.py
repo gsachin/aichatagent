@@ -51,28 +51,45 @@ def categorize(
     friction: float = 0.0,
     trajectory: str = "Stable",
     objections: list[str] | None = None,
+    buying_intent: float = 0.0,
 ) -> str:
     """
     Categorize a lead based on composite sentiment scores.
 
     Parameters:
-        s_lead:     Composite lead score [-1, 1]
-        delta_s:    Momentum (change from EWMA baseline). None for first call.
-        p_convert:  Conversion probability [0, 1]. None if predictive layer inactive.
-        friction:   Friction/resistance score [0, 1]
-        trajectory: Trajectory label (Upward/Stable/Degrading/Volatile)
-        objections: List of objection strings from extraction
+        s_lead:        Composite lead score [-1, 1]
+        delta_s:       Momentum (change from EWMA baseline). None for first call.
+        p_convert:     Conversion probability [0, 1]. None if predictive layer inactive.
+        friction:      Friction/resistance score [0, 1]
+        trajectory:    Trajectory label (Upward/Stable/Degrading/Volatile)
+        objections:    List of objection strings from extraction
+        buying_intent: Buying intent score [0, 1] — high intent + timeline
+                       objection = Warm, not Disqualified
 
     Returns one of: "Hot", "Warm", "Nurture", "At-Risk", "Disqualified"
     """
     objections = objections or []
+    obj_text = " ".join(objections).lower()
+
+    # ── Classify objection types ────────────────────────────────
+    SOFT_OBJECTIONS = {"timeline", "documents", "scheduling", "callback",
+                       "follow-up", "follow up", "waiting"}
+    HARD_OBJECTIONS = {"pricing", "price", "expensive", "competitor",
+                       "budget", "cost", "money"}
+
+    has_soft_only = bool(objections) and all(
+        any(sw in obj.lower() for sw in SOFT_OBJECTIONS)
+        for obj in objections
+    )
+    has_hard = any(
+        any(hw in obj.lower() for hw in HARD_OBJECTIONS)
+        for obj in objections
+    )
 
     # ── 1. Disqualified ─────────────────────────────────────────
     non_fit_keywords = ["not interested", "wrong fit", "different field",
                         "scam", "fraud", "not a student", "wrong number"]
-    has_non_fit = any(
-        kw in " ".join(objections).lower() for kw in non_fit_keywords
-    )
+    has_non_fit = any(kw in obj_text for kw in non_fit_keywords)
 
     if s_lead < -0.20 or has_non_fit:
         return LeadCategory.DISQUALIFIED.value
@@ -82,6 +99,9 @@ def categorize(
         return LeadCategory.AT_RISK.value
 
     if friction > 0.70 and trajectory in ("Degrading", "Volatile"):
+        return LeadCategory.AT_RISK.value
+
+    if has_hard and friction > 0.50 and trajectory == "Degrading":
         return LeadCategory.AT_RISK.value
 
     # ── 3. Hot ─────────────────────────────────────────────────
@@ -97,6 +117,11 @@ def categorize(
 
     # ── 4. Warm ────────────────────────────────────────────────
     if s_lead >= 0.35:
+        return LeadCategory.WARM.value
+
+    # Soft objections only (timeline, waiting for docs) with
+    # buying intent — bump to Warm even if s_lead is lower
+    if has_soft_only and not has_hard and buying_intent >= 0.25:
         return LeadCategory.WARM.value
 
     # ── 5. Nurture (fallthrough) ───────────────────────────────

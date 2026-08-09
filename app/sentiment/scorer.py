@@ -113,11 +113,16 @@ Return ONLY valid JSON (no markdown, no explanation) with these exact keys:
 }}
 
 Guidelines:
-- If the student explicitly says they want to enroll/apply/join, buying_intent >= 0.7
-- If the student raises pricing concerns, friction >= 0.5 and add "pricing" to objections
+- If the student explicitly says they want to enroll/apply/join/admission, buying_intent >= 0.7
+  even if they also mention waiting for documents/results. Intent to enroll is NOT cancelled by
+  timeline blockers.
+- "Waiting for degree/results/documents" or "call me back in X days" is a timeline objection
+  (NOT negative sentiment). The student is interested but blocked. Set friction <= 0.30 for
+  timeline-only objections; buying_intent stays high if they expressed enrollment intent.
+- If the student raises pricing/budget concerns, friction >= 0.5 and add "pricing" to objections
 - If the student mentions a competitor, add "competitor" to objections
 - If the transcript is very short or unclear, set scores near 0.0
-- Score the STUDENT's sentiment, not the assistant's
+- Score the STUDENT's sentiment, not the assistant's responses
 
 Transcript:
 {transcript}
@@ -500,9 +505,10 @@ async def _compute_session_aggregate(lead_id: str) -> dict:
     """
     Compute the lead's OVERALL sentiment from all accumulated exchanges.
 
-    Uses EWMA of all s_call values for the baseline, then applies the
-    composite formula to produce a session-level S_lead that reflects
-    the entire conversation, not just the last message.
+    Two-pass approach:
+      1. Build the FULL combined transcript and re-score it as one document
+         so the LLM sees the complete conversation context.
+      2. Fall back to per-exchange EWMA if full rescore fails.
     """
     from app.sentiment.models import get_lead_sentiment_history
     from app.sentiment.categorizer import categorize
@@ -512,49 +518,84 @@ async def _compute_session_aggregate(lead_id: str) -> dict:
         return {"s_lead": 0.0, "category": "Nurture", "trajectory": "Stable",
                 "p_convert": None}
 
-    # Extract all s_call values (oldest first for EWMA)
-    s_calls = [h["s_call"] for h in reversed(history)]
+    # ── Build full conversation transcript from all exchanges ─────
+    full_transcript_parts = []
+    for h in reversed(history):  # oldest first
+        snippet = h.get("transcript_snippet", "")
+        if snippet:
+            full_transcript_parts.append(snippet)
 
-    # Compute EWMA across all exchanges (session baseline)
+    full_transcript = "\n".join(full_transcript_parts) if full_transcript_parts else ""
+
+    # ── Pass 1: Re-score the FULL conversation as one document ────
+    full_extraction = None
+    if full_transcript and len(full_transcript) > 30:
+        try:
+            full_extraction = await extract_sentiment(full_transcript)
+            logger.info(
+                f"Full-session rescore for {lead_id}: "
+                f"s_call={full_extraction.s_call:.2f}, "
+                f"emotion={full_extraction.primary_emotion}, "
+                f"intent={full_extraction.buying_intent_score:.2f}, "
+                f"friction={full_extraction.friction_score:.2f}, "
+                f"objections={full_extraction.objections}"
+            )
+        except Exception:
+            logger.exception("Full-session rescore failed — falling back to EWMA")
+
+    if full_extraction is not None:
+        # Use the full-session LLM extraction as the primary signal
+        s_latest = full_extraction.s_call
+        buying_intent = full_extraction.buying_intent_score
+        friction = full_extraction.friction_score
+        objections = full_extraction.objections
+        dominant_emotion = full_extraction.primary_emotion
+        bant = full_extraction.extraction_raw.get("bant_completeness", 0.0)
+    else:
+        # Fallback: aggregate from per-exchange scores
+        s_calls_fb = [h["s_call"] for h in reversed(history)]
+        s_latest = s_calls_fb[-1]
+        buying_ints = [h["buying_intent_score"] for h in history if h.get("buying_intent_score")]
+        frictions = [h["friction_score"] for h in history if h.get("friction_score")]
+        buying_intent = sum(buying_ints) / len(buying_ints) if buying_ints else 0.0
+        friction = sum(frictions) / len(frictions) if frictions else 0.0
+        all_objs = []
+        for h in history:
+            objs = h.get("objections", [])
+            if isinstance(objs, list):
+                all_objs.extend(objs)
+        objections = list(set(all_objs))
+        from collections import Counter
+        emotions = [h.get("primary_emotion", "") for h in history if h.get("primary_emotion")]
+        dominant_emotion = Counter(emotions).most_common(1)[0][0] if emotions else "neutral"
+        bant_vals = []
+        for h in history:
+            raw = h.get("extraction_raw", {})
+            if isinstance(raw, dict) and "bant_completeness" in raw:
+                bant_vals.append(raw["bant_completeness"])
+        bant = sum(bant_vals) / len(bant_vals) if bant_vals else 0.0
+
+    # ── Compute EWMA from individual s_call history ───────────────
+    s_calls = [h["s_call"] for h in reversed(history)]
     ewma = s_calls[0]
     for s in s_calls[1:]:
         ewma = EWMA_LAMBDA * s + (1 - EWMA_LAMBDA) * ewma
+    delta_s = s_latest - ewma if ewma is not None else None
 
-    # Latest (most recent) s_call
-    s_latest = s_calls[-1]
+    # ── Composite intent ──────────────────────────────────────────
+    i_intent = 0.5 * bant + 0.5 * buying_intent
 
-    # Average buying intent and friction across session
-    buying_ints = [h["buying_intent_score"] for h in history if h.get("buying_intent_score")]
-    frictions = [h["friction_score"] for h in history if h.get("friction_score")]
-    avg_intent = sum(buying_ints) / len(buying_ints) if buying_ints else 0.0
-    avg_friction = sum(frictions) / len(frictions) if frictions else 0.0
-
-    # Average BANT completeness from extraction_raw
-    bant_vals = []
-    for h in history:
-        raw = h.get("extraction_raw", {})
-        if isinstance(raw, dict) and "bant_completeness" in raw:
-            bant_vals.append(raw["bant_completeness"])
-    avg_bant = sum(bant_vals) / len(bant_vals) if bant_vals else 0.0
-
-    # Delta from EWMA baseline
-    delta_s = s_latest - ewma
-
-    # Composite intent
-    i_intent = 0.5 * avg_bant + 0.5 * avg_intent
-
-    # Session S_lead
-    s_lead_raw = W1 * s_latest + W2 * delta_s + W3 * i_intent - W4 * avg_friction
+    # ── Session S_lead ────────────────────────────────────────────
+    d = delta_s if delta_s is not None else 0.0
+    s_lead_raw = W1 * s_latest + W2 * d + W3 * i_intent - W4 * friction
     s_lead = max(-1.0, min(1.0, s_lead_raw))
 
-    # Trajectory from all s_call values
+    # ── Trajectory ────────────────────────────────────────────────
     trajectory, _ = await _classify_trajectory(lead_id, s_latest)
-    # Override: if we have 2+ scores and variance is low, trajectory is more reliable
     if len(s_calls) >= 2:
         mean_s = sum(s_calls) / len(s_calls)
         var = sum((s - mean_s) ** 2 for s in s_calls) / len(s_calls)
         if var <= 0.10:
-            # Low variance — check trend
             slope = _simple_slope(s_calls)
             if slope > 0.05:
                 trajectory = "Upward"
@@ -563,32 +604,24 @@ async def _compute_session_aggregate(lead_id: str) -> dict:
             else:
                 trajectory = "Stable"
 
-    # Most frequent emotion
-    from collections import Counter
-    emotions = [h.get("primary_emotion", "") for h in history if h.get("primary_emotion")]
-    dominant_emotion = Counter(emotions).most_common(1)[0][0] if emotions else "neutral"
-
-    # Conversion probability
+    # ── Conversion probability ────────────────────────────────────
     p_convert = _heuristic_conversion_probability(s_lead, trajectory)
 
-    # Collect all objections across session
-    all_objections = []
-    for h in history:
-        objs = h.get("objections", [])
-        if isinstance(objs, list):
-            all_objections.extend(objs)
-
-    # Categorize with session-level values
+    # ── Categorize ────────────────────────────────────────────────
     category = categorize(
         s_lead=s_lead, delta_s=delta_s, p_convert=p_convert,
-        friction=avg_friction, trajectory=trajectory,
-        objections=list(set(all_objections)),
+        friction=friction, trajectory=trajectory,
+        objections=objections,
+        buying_intent=buying_intent,
     )
 
     logger.info(
         f"Session aggregate for {lead_id}: S_lead={s_lead:.2f}, "
         f"category={category}, trajectory={trajectory}, "
-        f"from {len(history)} exchanges, dominant_emotion={dominant_emotion}"
+        f"from {len(history)} exchanges, emotion={dominant_emotion}, "
+        f"intent={buying_intent:.2f}, friction={friction:.2f}, "
+        f"objections={objections}, "
+        f"{'full-rescore' if full_extraction else 'ewma-fallback'}"
     )
 
     return {
