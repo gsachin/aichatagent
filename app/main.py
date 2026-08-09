@@ -1956,6 +1956,54 @@ async def api_calls_live(stream: bool = False):
 # ── API: Dashboard Summary ────────────────────────────────────────────
 
 
+@app.post("/api/interactions/log")
+async def api_log_interaction(req: Request):
+    """
+    Log an interaction from any channel and trigger sentiment scoring.
+
+    Body: {
+        "phone_number": "+91...",
+        "transcript": "User: ...\nAssistant: ...",
+        "channel": "streamlit" | "whatsapp" | "inbound_call" | "outbound_call",
+        "lead_id": "optional-uuid (if already known)"
+    }
+
+    If lead_id is provided, uses it directly. Otherwise, looks up by phone
+    or creates a new lead. Triggers sentiment scoring automatically.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    phone = body.get("phone_number", "").strip()
+    transcript = body.get("transcript", "").strip()
+    channel = body.get("channel", "streamlit").strip()
+    lead_id = body.get("lead_id", "").strip()
+
+    if not transcript:
+        return JSONResponse({"error": "transcript is required"}, status_code=422)
+
+    try:
+        from app.leads.service import log_interaction
+
+        conv = await log_interaction(
+            phone_number=phone,
+            channel=channel,
+            transcript=transcript,
+        )
+        if conv:
+            return {
+                "status": "ok",
+                "conversation_id": conv.get("id", ""),
+                "lead_id": conv.get("lead_id", lead_id),
+            }
+        return JSONResponse({"error": "Database unavailable"}, status_code=503)
+    except Exception as e:
+        logger.exception("Interaction logging failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def _get_sentiment_stats() -> dict:
     """Count leads per sentiment category for the dashboard overview."""
     try:
@@ -2465,16 +2513,52 @@ async def dashboard_page():
 # ── Helpers ──────────────────────────────────────────────────────────
 
 async def _handle_disconnect(transcript_parts: list[str]) -> None:
-    """Post-call handler: save transcript, extract lead data, and run sentiment scoring."""
+    """Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring."""
     transcript = " ".join(transcript_parts)
 
     if not transcript.strip():
         return
 
+    # ── Step 1: Extract lead data from transcript ──────────────────
+    extracted_lead = None
+    try:
+        from app.database import extract_lead_from_transcript
+        extracted_lead = await extract_lead_from_transcript(transcript)
+    except Exception:
+        logger.exception("Lead extraction failed (non-fatal)")
+
+    # ── Step 2: Resolve lead_id from extracted data ────────────────
+    resolved_lead_id = ""
+    resolved_phone = ""
+    if extracted_lead:
+        from app.leads.models import get_lead_by_phone, upsert_lead_by_phone
+        # Try phone first
+        phone = extracted_lead.get("phone", "") or extracted_lead.get("phone_number", "")
+        if phone:
+            lead = await get_lead_by_phone(phone)
+            if not lead:
+                lead = await upsert_lead_by_phone(
+                    phone_number=phone,
+                    name=extracted_lead.get("name", ""),
+                    email=extracted_lead.get("email", ""),
+                    program_interest=extracted_lead.get("program", ""),
+                    source="inbound_call",
+                )
+            if lead:
+                resolved_lead_id = lead["id"]
+                resolved_phone = phone
+        # Fallback: try name match
+        if not resolved_lead_id and extracted_lead.get("name"):
+            from app.leads.models import list_leads
+            leads = await list_leads(search=extracted_lead["name"], limit=1)
+            if leads:
+                resolved_lead_id = leads[0]["id"]
+
+    # ── Step 3: Save to legacy table ───────────────────────────────
     try:
         from app.pipeline import post_call_handler
 
-        saved = await post_call_handler(transcript=transcript)
+        saved = await post_call_handler(transcript=transcript, phone_number=resolved_phone)
         if saved:
             logger.info(f"Lead saved ({len(transcript)} chars transcript)")
         else:
@@ -2482,23 +2566,32 @@ async def _handle_disconnect(transcript_parts: list[str]) -> None:
     except Exception:
         logger.exception("post_call_handler failed")
 
-    # Also log to the new leads subsystem
+    # ── Step 4: Log to leads subsystem (with resolved lead_id) ────
     try:
         from app.leads.service import handle_post_interaction
 
         await handle_post_interaction(
-            phone_number="",
+            phone_number=resolved_phone,
             transcript=transcript,
             channel="inbound_call",
         )
     except Exception:
         logger.exception("New leads-system logging failed (non-fatal)")
 
-    # Run sentiment analysis on the transcript (non-blocking, non-fatal)
+    # ── Step 5: Run sentiment analysis linked to lead ──────────────
     try:
         from app.sentiment.scorer import score_transcript
 
-        await score_transcript(transcript=transcript, lead_id="")
-        logger.info(f"Sentiment scored for call transcript ({len(transcript)} chars)")
+        await score_transcript(
+            transcript=transcript,
+            lead_id=resolved_lead_id,
+        )
+        if resolved_lead_id:
+            logger.info(
+                f"Sentiment scored + persisted for lead {resolved_lead_id} "
+                f"({len(transcript)} chars)"
+            )
+        else:
+            logger.info(f"Sentiment scored for call transcript ({len(transcript)} chars)")
     except Exception:
         logger.exception("Sentiment scoring failed (non-fatal)")

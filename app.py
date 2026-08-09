@@ -11,12 +11,44 @@ import sys
 import io
 import warnings
 import tempfile
+import threading
 import requests
 import streamlit as st
 import numpy as np
 
 warnings.filterwarnings("ignore")
 os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
+
+
+# ── Background helper: log interaction + trigger sentiment ──────────
+
+def _log_and_score_async(phone: str, transcript: str, channel: str,
+                         lead_id: str = ""):
+    """
+    Fire-and-forget: POST the exchange to the backend so it gets
+    logged to the conversations table and sentiment-scored.
+
+    Runs in a daemon thread — never blocks the UI.
+    """
+    def _post():
+        try:
+            payload = {
+                "phone_number": phone,
+                "transcript": transcript,
+                "channel": channel,
+            }
+            if lead_id:
+                payload["lead_id"] = lead_id
+            requests.post(
+                "http://localhost:8000/api/interactions/log",
+                json=payload,
+                timeout=15,
+            )
+        except Exception:
+            pass  # Never let logging failures surface to the user
+
+    t = threading.Thread(target=_post, daemon=True)
+    t.start()
 
 # ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
@@ -375,6 +407,15 @@ if audio_value is not None:
                 "audio": audio_for_msg
             })
 
+            # ── Log interaction + trigger sentiment scoring ────────
+            exchange = f"User (voice): {transcript}\nAssistant: {answer}"
+            _log_and_score_async(
+                phone=st.session_state.get("lead_phone", ""),
+                transcript=exchange,
+                channel="streamlit",
+                lead_id=st.session_state.get("lead_id", ""),
+            )
+
         st.session_state.voice_key += 1  # Reset widget to break rerun loop
         st.rerun()
 
@@ -657,6 +698,15 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             "content": answer,
             "audio": audio_for_msg
         })
+
+        # ── Log interaction + trigger sentiment scoring ────────────
+        exchange = f"User: {prompt}\nAssistant: {answer}"
+        _log_and_score_async(
+            phone=st.session_state.get("lead_phone", ""),
+            transcript=exchange,
+            channel="streamlit",
+            lead_id=st.session_state.get("lead_id", ""),
+        )
 
 # ── In-chat document upload (below chat, appears when ready for docs) ─
 if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state.get("show_apply_prompt"):
