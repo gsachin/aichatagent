@@ -21,20 +21,20 @@ cur.execute("DELETE FROM lead_calls")
 cur.execute("DELETE FROM leads")
 print("Cleared existing data")
 
-# -- Dummy Leads --
+# -- Dummy Leads (Meridian programs) --
 leads_data = [
-    ("+12025551001", "John Smith", "john.smith@email.com", "MBA", "in_progress", "inbound_call", "Interested in part-time MBA, asked about GMAT and fees"),
-    ("+12025551002", "Jane Doe", "jane.doe@email.com", "Computer Science", "pending", "whatsapp", "International student from India, asked about FDU MS in CS"),
-    ("+12025551003", "Bob Chen", "bob.chen@email.com", "Data Science", "in_progress", "outbound_call", "Comparing UMD and FDU Data Science programs"),
-    ("+12025551004", "Alice Kim", "alice.kim@email.com", "MBA", "pending", "streamlit", "Exploring MBA options at both universities"),
-    ("+12025551005", "Mike Johnson", "mike.j@email.com", "Engineering", "completed", "inbound_call", "Enrolled in UMD Engineering - Fall 2026"),
-    ("+12025551006", "Sarah Lee", "sarah.lee@email.com", "MBA", "in_progress", "whatsapp", "Voice note asking about FDU MBA tuition and scholarships"),
-    ("+12025551007", "Tom Harris", "tom.h@email.com", "Computer Science", "pending", "outbound_call", "Career fair lead, interested in AI/ML track"),
-    ("+12025551008", "Emma Wilson", "emma.w@email.com", "Data Science", "failed", "inbound_call", "Not interested after learning tuition fees"),
-    ("+12025551009", "David Brown", "david.b@email.com", "MBA", "pending", "streamlit", "Chatted on website, wants UMD MBA info"),
-    ("+12025551010", "Lisa Garcia", "lisa.g@email.com", "Engineering", "in_progress", "outbound_call", "Follow-up scheduled, interested in FDU"),
-    ("+12025551011", "Ryan Park", "ryan.park@email.com", "MBA", "unreachable", "outbound_call", "No answer on 3 attempts"),
-    ("+12025551012", "Priya Patel", "priya.p@email.com", "Computer Science", "pending", "whatsapp", "Asked about visa process and FDU programs"),
+    ("+12025551001", "John Smith", "john.smith@email.com", "MBA", "in_progress", "inbound_call", "Interested in part-time MBA, asked about eligibility and fees"),
+    ("+12025551002", "Jane Doe", "jane.doe@email.com", "B.Tech Computer Science", "pending", "whatsapp", "International student from India, asked about Meridian B.Tech CS"),
+    ("+12025551003", "Bob Chen", "bob.chen@email.com", "M.Sc", "in_progress", "outbound_call", "Comparing M.Sc and MCA programs"),
+    ("+12025551004", "Alice Kim", "alice.kim@email.com", "MBA", "pending", "streamlit", "Exploring MBA options and scholarships"),
+    ("+12025551005", "Mike Johnson", "mike.j@email.com", "B.Tech AI & Machine Learning", "completed", "inbound_call", "Enrolled in Meridian B.Tech AI & ML - Fall 2026"),
+    ("+12025551006", "Sarah Lee", "sarah.lee@email.com", "MBA", "in_progress", "whatsapp", "Voice note asking about Meridian MBA tuition and scholarships"),
+    ("+12025551007", "Tom Harris", "tom.h@email.com", "B.Tech Information Technology", "pending", "outbound_call", "Career fair lead, interested in IT track"),
+    ("+12025551008", "Emma Wilson", "emma.w@email.com", "M.Sc", "failed", "inbound_call", "Not interested after learning tuition fees"),
+    ("+12025551009", "David Brown", "david.b@email.com", "MCA", "pending", "streamlit", "Chatted on website, wants Meridian MCA info"),
+    ("+12025551010", "Lisa Garcia", "lisa.g@email.com", "BBA", "in_progress", "outbound_call", "Follow-up scheduled, interested in Meridian BBA"),
+    ("+12025551011", "Ryan Park", "ryan.park@email.com", "M.Tech", "unreachable", "outbound_call", "No answer on 3 attempts"),
+    ("+12025551012", "Priya Patel", "priya.p@email.com", "BCA", "pending", "whatsapp", "Asked about visa process and Meridian BCA"),
 ]
 
 lead_ids = []
@@ -51,43 +51,43 @@ for phone, name, email, program, status, source, notes in leads_data:
 
 print(f"Inserted {len(lead_ids)} leads")
 
-# -- Dummy Conversations --
+# -- Dummy Conversations (Meridian-grounded facts from the knowledge base) --
 transcripts = [
     (
         "inbound_call",
-        "Caller: Hi, I wanted to ask about the MBA program at UMD.\n"
-        "Assistant: Hello! The UMD MBA is a 2-year full-time program with specializations in Finance, Marketing, and Data Analytics. Tuition is approximately $45,000 per year. What would you like to know?\n"
-        "Caller: What about GMAT requirements?\n"
-        "Assistant: UMD requires a minimum GMAT of 600 for the MBA program. With 4 years of experience, you would be a strong candidate. Shall I schedule a follow-up?\n"
+        "Caller: Hi, I wanted to ask about the MBA program at Meridian.\n"
+        "Assistant: Hello! The Meridian MBA is a 2-year program open to anyone with a Bachelor's Degree. Tuition is $18,500 per year. What would you like to know?\n"
+        "Caller: What about application deadlines?\n"
+        "Assistant: The early application deadline is January 15 and the regular deadline is April 30. Admission decisions are released June 10, and the Fall semester begins August 1. Shall I schedule a follow-up?\n"
         "Caller: Yes, please.",
         272,
         "interested",
     ),
     (
         "outbound_call",
-        "Assistant: Hi Jane, I am calling from University Admissions. I noticed your interest in Computer Science. Do you have a moment?\n"
-        "Caller: Yes, I was looking at the FDU MS in CS program. I am an international student from India.\n"
-        "Assistant: Great! FDU MS in CS has tracks in AI/ML, Cybersecurity, and Software Engineering. International students need TOEFL 80 or IELTS 6.5. Tuition is $35,000 per year.\n"
+        "Assistant: Hi Jane, I am calling from Meridian University Admissions. I noticed your interest in B.Tech Computer Science. Do you have a moment?\n"
+        "Caller: Yes, I was looking at the B.Tech CS program. I am an international student from India.\n"
+        "Assistant: Great! B.Tech Computer Science is a 4-year program requiring 10+2 (PCM). Tuition is $14,500 per year. International applicants need a valid passport copy and, where applicable, an English proficiency score.\n"
         "Caller: Any scholarships?\n"
-        "Assistant: Yes, FDU offers merit scholarships up to 50% for outstanding international students. Would you like details via WhatsApp?",
+        "Assistant: Yes, Meridian offers a Merit Scholarship with up to 50% tuition waiver, Need-Based Aid, and Sports & Arts Scholarships. Would you like details via WhatsApp?",
         198,
         "interested",
     ),
     (
         "whatsapp",
-        "Student: What are the FDU MBA tuition fees?\n"
-        "Assistant: FDU MBA tuition is $38,500 per year for the full-time program, including campus facilities, career services, and alumni network access. Financial aid and scholarships are available.\n"
+        "Student: What are the Meridian MBA tuition fees?\n"
+        "Assistant: Meridian MBA tuition is $18,500 per year for the 2-year program, including campus facilities, career services, and alumni network access. Financial aid and scholarships are available.\n"
         "Student: What scholarships?\n"
-        "Assistant: FDU offers: Dean Scholarship (up to 40%), Merit Scholarship (up to 25%), International Student Scholarship (up to 30%). Most students qualify for at least one. Would you like a counselor to call you?",
+        "Assistant: Meridian offers: Merit Scholarship (up to 50% tuition waiver), Need-Based Aid, and Sports & Arts Scholarships. Most students qualify for at least one. Would you like a counselor to call you?",
         0,
         "info_given",
     ),
     (
         "inbound_call",
-        "Caller: I want to know about UMD Data Science.\n"
-        "Assistant: The UMD Data Science MS covers Machine Learning, Big Data, Statistical Modeling, and Data Visualization. Requires GRE 310+ and programming background.\n"
-        "Caller: I have a CS degree. Tuition?\n"
-        "Assistant: With CS background, you are well-qualified! Tuition is $42,000 per year. The program has partnerships with Google, Amazon, and Microsoft for internships. Graduates have 95% job placement within 3 months.\n"
+        "Caller: I want to know about B.Tech AI & Machine Learning.\n"
+        "Assistant: B.Tech AI & Machine Learning is a 4-year program requiring 10+2 (PCM). Tuition is $15,200 per year. It is offered by the School of Computer Science, covering software, AI, data science and cybersecurity.\n"
+        "Caller: I have 10+2 with PCM. How is placement?\n"
+        "Assistant: You are well-qualified! Meridian's placement rate is 95%, with 40,000+ alumni working across 70 countries. Hostel & accommodation is $3,200 per year if needed.\n"
         "Caller: Sounds great. Let me think about it.\n"
         "Assistant: Would you like a brochure and a follow-up call scheduled?",
         145,
@@ -95,37 +95,37 @@ transcripts = [
     ),
     (
         "outbound_call",
-        "Assistant: Hi, I am calling from Admissions about your program interest.\n"
+        "Assistant: Hi, I am calling from Meridian Admissions about your program interest.\n"
         "Caller: Actually, I already enrolled elsewhere. Thank you.\n"
-        "Assistant: Congratulations on your enrollment! If you ever want to explore transfer or graduate options at UMD or FDU, feel free to reach out. Have a great day!",
+        "Assistant: Congratulations on your enrollment! If you ever want to explore transfer or graduate options at Meridian, feel free to reach out. Have a great day!",
         45,
         "not_interested",
     ),
     (
         "whatsapp",
-        "Student: Application deadline for FDU?\n"
-        "Assistant: FDU deadlines: Fall - June 15, Spring - November 15. Early decision is March 1 with priority scholarships. Which program?\n"
-        "Student: MS in CS.\n"
-        "Assistant: Same deadlines apply for MS in CS. I recommend early decision by March 1 for best scholarship chances. Need help with the application?",
+        "Student: Application deadline for Meridian?\n"
+        "Assistant: Meridian deadlines: Early application January 15, Regular application April 30. Admission decisions are released June 10 and the Fall semester begins August 1. Which program?\n"
+        "Student: MCA.\n"
+        "Assistant: Same deadlines apply for the MCA. I recommend applying by the early deadline for the best chance at scholarships. Need help with the application?",
         0,
         "info_given",
     ),
     (
         "inbound_call",
-        "Caller: Tell me about UMD Engineering.\n"
-        "Assistant: UMD offers Mechanical, Electrical, Civil, and Computer Engineering. All 4-year ABET-accredited programs. State-of-the-art labs and mandatory 3rd-year internship. Which one?\n"
-        "Caller: Mechanical.\n"
-        "Assistant: UMD Mechanical Engineering is highly ranked. Admission: SAT 1300+ or ACT 28+, strong math and physics. Tuition: $32,000 domestic, $48,000 international, plus $12,000 room and board. Shall I send the detailed fee structure?\n"
+        "Caller: Tell me about Meridian Engineering.\n"
+        "Assistant: Meridian's School of Engineering covers core, computer and electronics engineering with strong lab exposure. B.Tech programs are 4 years with 10+2 (PCM) eligibility. Which one interests you?\n"
+        "Caller: Computer Science.\n"
+        "Assistant: B.Tech Computer Science is $14,500 per year. The Innovation Labs offer prototyping benches, 3D printers and startup incubation space. Shall I send the detailed fee structure?\n"
         "Caller: Yes, please do.",
         210,
         "interested",
     ),
     (
         "inbound_call",
-        "Caller: Hi, what programs does UMD offer for someone interested in business analytics?\n"
-        "Assistant: UMD offers both an MBA with Data Analytics specialization and a standalone MS in Business Analytics. The MBA is broader, while the MS is more technical. What is your background?\n"
+        "Caller: Hi, what business programs does Meridian offer?\n"
+        "Assistant: Meridian's School of Business / Management offers finance, marketing and entrepreneurship. The MBA is a 2-year program at $18,500 per year, and the BBA is 3 years at $10,800 per year. What is your background?\n"
         "Caller: I work in finance, 5 years experience.\n"
-        "Assistant: With 5 years in finance, the MBA with Data Analytics would be ideal. You would learn business strategy plus technical analytics skills. GMAT 620+ required, tuition $45,000/year. Many finance professionals choose this path.",
+        "Assistant: With 5 years in finance, the MBA would be ideal. Admission requires a Bachelor's Degree, and tuition is $18,500 per year. Many finance professionals choose this path.",
         160,
         "interested",
     ),
@@ -166,19 +166,37 @@ cur.execute("DELETE FROM lead_documents")
 cur.execute("DELETE FROM courses")
 print("Cleared existing offer-letter data")
 
+# Meridian catalog — names, durations and fees must match
+# content/meridian/meridian_knowledge_base.md exactly (offer letters read these rows).
 courses_data = [
-    ("Computer Science", "4 Years", "$42,000/year", "Fall 2026, Spring 2027",
-     "ABET-accredited program covering AI, systems, software engineering, and cybersecurity."),
-    ("Data Science", "2 Years (MS)", "$38,000/year", "Fall 2026",
-     "Interdisciplinary program with concentrations in ML, big data, and statistical modeling."),
-    ("MBA", "2 Years", "$45,000/year", "Fall 2026, Spring 2027",
-     "AACSB-accredited with specializations in Finance, Marketing, Analytics, and Healthcare."),
-    ("Engineering", "4 Years", "$32,000/year (domestic) / $48,000/year (international)", "Fall 2026",
-     "Mechanical, Electrical, Civil, and Computer Engineering tracks. ABET-accredited."),
-    ("Business Analytics", "1 Year (MS)", "$35,000/year", "Fall 2026",
-     "STEM-designated program. Combines business strategy with advanced data analytics."),
-    ("Information Systems", "2 Years (MS)", "$30,000/year", "Spring 2027",
-     "Focus on IT management, enterprise systems, and digital transformation."),
+    ("B.Tech Computer Science", "4 Years", "$14,500/year", "Fall 2026, Spring 2027",
+     "Core, computer and electronics engineering with strong lab exposure."),
+    ("B.Tech AI & Machine Learning", "4 Years", "$15,200/year", "Fall 2026",
+     "AI and machine learning specialization in the School of Computer Science."),
+    ("B.Tech Information Technology", "4 Years", "$14,200/year", "Fall 2026",
+     "IT program covering software, AI, data science and cybersecurity."),
+    ("BBA", "3 Years", "$10,800/year", "Fall 2026",
+     "Bachelor of Business Administration — finance, marketing, entrepreneurship."),
+    ("BCA", "3 Years", "$10,200/year", "Fall 2026",
+     "Bachelor of Computer Applications."),
+    ("B.Com", "3 Years", "$8,600/year", "Fall 2026",
+     "Accounting, economics and business analytics."),
+    ("BA", "3 Years", "$7,900/year", "Fall 2026",
+     "Design, media, literature and humanities."),
+    ("B.Sc", "3 Years", "$9,400/year", "Fall 2026",
+     "Physics, chemistry, biology and mathematics with research tracks."),
+    ("MBA", "2 Years", "$18,500/year", "Fall 2026, Spring 2027",
+     "Master of Business Administration — School of Business / Management."),
+    ("MCA", "2 Years", "$13,800/year", "Fall 2026",
+     "Master of Computer Applications — Bachelor's in Computing eligibility."),
+    ("M.Tech", "2 Years", "$14,600/year", "Fall 2026",
+     "M.Tech specializations across Engineering & Computing."),
+    ("M.Sc", "2 Years", "$11,200/year", "Fall 2026",
+     "Master of Science — Bachelor's in Science eligibility."),
+    ("MA", "2 Years", "$9,600/year", "Fall 2026",
+     "Master of Arts — Bachelor's Degree eligibility."),
+    ("M.Com", "2 Years", "$9,900/year", "Fall 2026",
+     "Master of Commerce — Bachelor's in Commerce eligibility."),
 ]
 for name, duration, fees, intake, desc in courses_data:
     cid = str(uuid.uuid4())

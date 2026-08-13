@@ -74,7 +74,8 @@ if not transcript:
 print("-- Step 2: RAG + LLM (ChromaDB + Qwen) --")
 t0 = time.time()
 
-from app.pipeline import build_rag_prompt, retrieve_context
+from app.pipeline import build_rag_prompt
+from app.rag import retrieve_context
 
 context = retrieve_context(transcript)
 prompt = build_rag_prompt(transcript)

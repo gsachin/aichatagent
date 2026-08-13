@@ -1,0 +1,223 @@
+"""
+Meridian RAG -- reference ingestion + retrieval pattern.
+
+Synthesizes the two architecture reviews you were given, updated with:
+
+1. A validation gate that blocks contaminated / dummy source documents
+   BEFORE anything is embedded. This is the piece the second review
+   missed entirely -- it would have caught the Meridian PDF containing
+   University of Maryland financial-aid and housing content.
+2. Versioned, atomically-activated Chroma collections instead of an
+   in-place delete + rebuild, so a bad ingest can never take a working
+   chatbot offline.
+3. Chroma's native hybrid search (dense KNN + BM25, fused server-side
+   with Reciprocal Rank Fusion) via collection.search(search=[Knn(...),
+   Rrf(...)]). This replaces maintaining a second, separate BM25 index
+   and hand-written score fusion -- both prior proposals did this the
+   harder way.
+
+This is illustrative scaffolding, not a drop-in for your app/rag.py --
+point it at your real PDF parser, chunker, and Ollama client once you
+share the actual repo. The embedding function stub below in particular
+needs to be wired to your existing Ollama client.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import chromadb
+from chromadb.search import Knn, Rrf
+
+
+# --- 1. Validation gate ----------------------------------------------------
+# The check that would have caught the Meridian / Maryland contamination.
+
+@dataclass
+class ValidationResult:
+    passed: bool
+    university: str
+    issues: list[str] = field(default_factory=list)
+
+
+# Extend these per source document. In production, load this from config,
+# not a hardcoded constant -- it should grow every time contamination is
+# found in a new document.
+FOREIGN_UNIVERSITY_MARKERS = [
+    "university of maryland", "umd", "terrapin commitment",
+    "mddcs", "fafsa", "fairleigh dickinson", " fdu ",
+]
+DUMMY_DATA_MARKERS = ["dummy", "sample figure", "sample data", "placeholder value"]
+
+
+def validate_document(pages: list[str], expected_university: str) -> ValidationResult:
+    issues: list[str] = []
+    full_text = "\n".join(pages).lower()
+
+    foreign_hits = [m for m in FOREIGN_UNIVERSITY_MARKERS if m in full_text]
+    if foreign_hits:
+        issues.append(
+            f"Content from another institution detected ({len(foreign_hits)} "
+            f"marker(s)) -- the file mixes more than one university's data."
+        )
+
+    if expected_university.lower() not in full_text:
+        issues.append(f"Expected university name '{expected_university}' not found in the file.")
+
+    dummy_hits = [m for m in DUMMY_DATA_MARKERS if m in full_text]
+    if dummy_hits:
+        issues.append("Source explicitly labels its own figures as dummy/sample data.")
+
+    if len(pages) < 3:
+        issues.append(f"Only {len(pages)} page(s) extracted -- looks truncated or empty.")
+
+    return ValidationResult(passed=not issues, university=expected_university, issues=issues)
+
+
+# --- 2. Versioned collections + native hybrid search ------------------------
+
+def make_collection_name(university_slug: str) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{university_slug}_v_{ts}"
+
+
+class Qwen3EmbeddingFunction:
+    """Wraps Qwen3-Embedding-0.6B served by Ollama as a Chroma embedding
+    function. Point __call__ at your existing Ollama client -- this is a
+    stub. (Depending on your installed chromadb version you may need to
+    subclass chromadb.utils.embedding_functions.EmbeddingFunction instead
+    of duck-typing __call__; check against what's in your requirements.txt.)
+    """
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        import ollama
+        return [
+            ollama.embeddings(model="qwen3-embedding:0.6b", prompt=text)["embedding"]
+            for text in input
+        ]
+
+
+class RAGIndex:
+    """Owns collection creation, atomic activation, and hybrid retrieval."""
+
+    def __init__(self, chroma_path: str = "./chroma_db", pointer_file: str = "./active_collection.json"):
+        self.client = chromadb.PersistentClient(path=chroma_path)
+        self.pointer_file = Path(pointer_file)
+        self.embedding_fn = Qwen3EmbeddingFunction()
+
+    def active_collection_name(self) -> Optional[str]:
+        if not self.pointer_file.exists():
+            return None
+        return json.loads(self.pointer_file.read_text())["active"]
+
+    def activate(self, collection_name: str) -> None:
+        """Atomic swap: rewrite a pointer file. Never deletes the previous
+        collection, so rollback is just writing the old name back."""
+        self.pointer_file.write_text(json.dumps({
+            "active": collection_name,
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+        }))
+
+    def build_collection(self, name: str, chunks: list[dict]):
+        """chunks: [{"id": ..., "text": ..., "metadata": {...}}, ...]"""
+        collection = self.client.create_collection(
+            name=name,
+            embedding_function=self.embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
+        collection.add(
+            ids=[c["id"] for c in chunks],
+            documents=[c["text"] for c in chunks],
+            metadatas=[c["metadata"] for c in chunks],
+        )
+        return collection
+
+    def smoke_test(self, collection, test_queries: list[str]) -> bool:
+        """Sanity-check retrieval before a new collection is ever activated."""
+        for q in test_queries:
+            hits = collection.search(search=[Knn(query_texts=[q], n_results=1)], n_results=1)
+            if not hits["documents"] or not hits["documents"][0]:
+                return False
+        return True
+
+    def hybrid_query(self, question: str, top_k: int = 20, rrf_k: int = 60):
+        """Dense + BM25, fused server-side by Chroma's Search API -- no
+        separate BM25 index or hand-written fusion needed."""
+        name = self.active_collection_name()
+        if name is None:
+            raise RuntimeError("No active collection. Ingest and activate one first.")
+        collection = self.client.get_collection(name, embedding_function=self.embedding_fn)
+        return collection.search(
+            search=[
+                Knn(query_texts=[question], n_results=top_k),
+                Rrf(query_texts=[question], k=rrf_k),
+            ],
+            n_results=top_k,
+        )
+
+
+# --- 3. Ingestion orchestration -- validation gates the swap ----------------
+
+def ingest(pdf_pages: list[str], university: str, chunks: list[dict],
+           index: RAGIndex, smoke_test_queries: list[str]) -> dict:
+    validation = validate_document(pdf_pages, expected_university=university)
+
+    if not validation.passed:
+        return {
+            "activated": False,
+            "reason": "validation_failed",
+            "issues": validation.issues,
+            "active_collection_unchanged": index.active_collection_name(),
+        }
+
+    slug = re.sub(r"[^a-z0-9]+", "_", university.lower()).strip("_")
+    name = make_collection_name(slug)
+    collection = index.build_collection(name, chunks)
+
+    if not index.smoke_test(collection, smoke_test_queries):
+        return {
+            "activated": False,
+            "reason": "smoke_test_failed",
+            "built_but_not_activated": name,
+            "active_collection_unchanged": index.active_collection_name(),
+        }
+
+    index.activate(name)
+    return {"activated": True, "collection": name}
+
+
+# --- 4. Rerank + grounded answer (contract only) -----------------------------
+# Wire these to your Qwen3.5:4b / Qwen3-Reranker-0.6B Ollama endpoints.
+
+def rerank(question: str, candidates: list[str], top_n: int = 5) -> list[str]:
+    """Cross-encoder rerank with Qwen3-Reranker-0.6B. Chroma does not do
+    this natively -- call your Ollama reranker endpoint here."""
+    raise NotImplementedError("Wire to your Qwen3-Reranker-0.6B endpoint")
+
+
+GROUNDED_ANSWER_PROMPT = """Answer using ONLY the evidence below. If the evidence
+does not contain the answer, say the information is not available -- do not
+infer or guess. Cite the source page for every factual claim.
+
+Evidence:
+{evidence}
+
+Question: {question}"""
+
+
+if __name__ == "__main__":
+    # Example wiring -- replace with your real parser/chunker output.
+    index = RAGIndex()
+    result = ingest(
+        pdf_pages=["... extracted page text ..."],
+        university="Meridian University",
+        chunks=[{"id": "meridian-v1-p1-c01", "text": "...", "metadata": {"page": 1}}],
+        index=index,
+        smoke_test_queries=["What is the B.Tech AI & Machine Learning tuition?"],
+    )
+    print(result)

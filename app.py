@@ -19,6 +19,9 @@ import numpy as np
 warnings.filterwarnings("ignore")
 os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
 
+from app.streamlit_backend import backend_healthy, sync_lead, sync_program
+from app.offers.service import missing_fields_text
+
 
 # ── Background helper: log interaction + trigger sentiment ──────────
 
@@ -64,7 +67,7 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown(
         "An AI-powered university admissions assistant. "
-        "Ask questions about **UMD** and **FDU** programs, "
+        "Ask questions about **Meridian University** programs, "
         "tuition, admission requirements, and more."
     )
     st.markdown("---")
@@ -86,32 +89,19 @@ with st.sidebar:
     if uploaded_file and st.button("📤 Upload Document", key="sidebar_upload_btn"):
         lead_id = st.session_state.get("lead_id", "")
         if not lead_id:
-            # Create a lead from session state or fallback
+            # Create or find lead, including program_interest if known
             phone = st.session_state.get("lead_phone", f"streamlit_{st.session_state.get('lead_name', 'user')}")
-            name = st.session_state.get("lead_name", "")
-            email = st.session_state.get("lead_email", "")
-            prog = st.session_state.get("lead_program", "")
-            try:
-                import requests
-                resp = requests.post(
-                    "http://localhost:8000/api/leads",
-                    json={
-                        "phone_number": phone,
-                        "name": name,
-                        "email": email,
-                        "program_interest": prog,
-                        "source": "streamlit",
-                    },
-                    timeout=10,
-                )
-                if resp.ok:
-                    lead = resp.json()
-                    st.session_state["lead_id"] = lead["id"]
-                    lead_id = lead["id"]
-                else:
-                    st.error(f"Cannot create profile. Backend: {resp.status_code}")
-            except Exception as e:
-                st.error(f"Cannot connect to backend server at localhost:8000. Make sure it's running. ({e})")
+            lid, err = sync_lead(
+                name=st.session_state.get("lead_name", ""),
+                email=st.session_state.get("lead_email", ""),
+                phone=phone,
+                program=st.session_state.get("lead_program", ""),
+            )
+            if lid:
+                st.session_state["lead_id"] = lid
+                lead_id = lid
+            if err:
+                st.error(f"Cannot reach backend server at localhost:8000. Make sure it's running. ({err})")
         if lead_id:
             try:
                 import requests, uuid as _uuid
@@ -131,6 +121,7 @@ with st.sidebar:
                 )
                 if resp.ok:
                     data = resp.json()
+                    readiness = data.get("offer_readiness")
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
                         offer_id = offer.get("id", "")
@@ -141,6 +132,15 @@ with st.sidebar:
                         st.session_state["offer_generated"] = True
                         st.session_state["show_apply_prompt"] = False
                         st.session_state["awaiting_field"] = None
+                    elif readiness and readiness.get("missing"):
+                        st.success("✅ Document uploaded! Your file is saved, but your offer is on hold.")
+                        st.warning(
+                            f"Before I can generate your offer letter, I still need: "
+                            f"**{missing_fields_text(readiness['missing'])}**."
+                        )
+                        if readiness["missing"] == ["program_interest"]:
+                            st.session_state["awaiting_field"] = "program"
+                            st.info("Just type the program you want, e.g. *MBA* or *Computer Science*.")
                     else:
                         st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
                 else:
@@ -153,13 +153,13 @@ with st.sidebar:
     st.markdown("### Powered by")
     st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
     st.markdown("👂 **Faster-Whisper** (local STT)")
-    st.markdown("📚 **UMD & FDU** university profiles")
+    st.markdown("📚 **Meridian University** knowledge base")
     st.markdown("---")
     st.caption("All data stays on your machine. No internet required.")
 
 # ── Title ──────────────────────────────────────────────────────────
 st.title("🎓 University Admissions Advisor")
-st.caption("Ask me anything about UMD or FDU — type or use your voice.")
+st.caption("Ask me anything about Meridian — type or use your voice.")
 
 # ── Load RAG chain (cached, runs once) ─────────────────────────────
 @st.cache_resource(show_spinner=False)
@@ -294,6 +294,18 @@ if "rag_chain" not in st.session_state:
 
         st.session_state.rag_chain = load_rag_chain()
         st.success("✅ Bot is ready! Type below or click 🎤 to speak.")
+
+# ── Backend-health banner (prevents silent data loss) ──────────────────
+@st.cache_data(ttl=10)
+def _backend_reachable() -> bool:
+    return backend_healthy()
+
+if not _backend_reachable():
+    st.warning(
+        "⚠️ The backend server (port 8000) is not running. Your profile "
+        "and offer letter can't be saved until it's up. Start it with:\n\n"
+        "`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`"
+    )
 
 if "messages" not in st.session_state:
     greeting = "Hello! I'm your University Admissions Advisor."
@@ -499,20 +511,22 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             st.session_state.lead_phone = msg
             st.session_state.awaiting_field = None
             st.session_state.lead_collected = True
-            # Save to backend
-            try:
-                import requests
-                resp = requests.post("http://localhost:8000/api/leads", json={
-                    "phone_number": st.session_state.lead_phone,
-                    "name": st.session_state.lead_name,
-                    "email": st.session_state.lead_email,
-                    "source": "streamlit",
-                }, timeout=5)
-                if resp.ok:
-                    lead_data = resp.json()
-                    st.session_state["lead_id"] = lead_data.get("id", "")
-            except Exception:
-                pass
+            # Save to backend — include program_interest if already known
+            lid, err = sync_lead(
+                name=st.session_state.get("lead_name", ""),
+                email=st.session_state.get("lead_email", ""),
+                phone=st.session_state.get("lead_phone", ""),
+                program=st.session_state.get("lead_program", ""),
+                lead_id=st.session_state.get("lead_id", ""),
+            )
+            if lid:
+                st.session_state["lead_id"] = lid
+            if err:
+                st.warning(
+                    f"⚠️ I saved your profile here, but the server couldn't "
+                    f"be reached ({err}). Your offer letter won't generate "
+                    f"until it's back — you can still chat, and we'll retry later."
+                )
             answer = (
                 f"Perfect! I have your info:\n"
                 f"- Name: {st.session_state.lead_name}\n"
@@ -530,14 +544,21 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
                 # Update backend
-                try:
-                    import requests
-                    lid = st.session_state.get("lead_id", "")
-                    if lid:
-                        requests.put(f"http://localhost:8000/api/leads/{lid}",
-                            json={"program_interest": prog}, timeout=5)
-                except Exception:
-                    pass
+                lid, err = sync_program(
+                    prog,
+                    name=st.session_state.get("lead_name", ""),
+                    email=st.session_state.get("lead_email", ""),
+                    phone=st.session_state.get("lead_phone", ""),
+                    lead_id=st.session_state.get("lead_id", ""),
+                )
+                if lid:
+                    st.session_state["lead_id"] = lid
+                if err:
+                    st.warning(
+                        f"⚠️ I noted *{prog}* here, but couldn't save it to "
+                        f"the server ({err}). It'll be synced before your "
+                        f"documents are processed."
+                    )
                 # Qualification check
                 qual_info = {
                     "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
@@ -560,10 +581,26 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         # ── State: awaiting qualification confirmation ─────────
         elif awaiting == "qualification":
             if msg_lower in ("yes", "yeah", "yep", "yes i do", "i do", "i meet", "correct"):
+                # Sync program_interest to backend BEFORE transitioning
+                prog = st.session_state.get("lead_program", "")
+                if prog:
+                    lid, err = sync_program(
+                        prog,
+                        name=st.session_state.get("lead_name", ""),
+                        email=st.session_state.get("lead_email", ""),
+                        phone=st.session_state.get("lead_phone", ""),
+                        lead_id=st.session_state.get("lead_id", ""),
+                    )
+                    if lid:
+                        st.session_state["lead_id"] = lid
+                    if err:
+                        st.warning(
+                            f"⚠️ Backend sync delayed ({err}). Your offer "
+                            f"will be generated once the server is reachable."
+                        )
                 st.session_state.awaiting_field = "awaiting_docs"
-                prog = st.session_state.get("lead_program", "the program")
                 answer = (
-                    f"Excellent! To process your admission for *{prog}*, please upload:\n\n"
+                    f"Excellent! To process your admission for *{prog or 'the program'}*, please upload:\n\n"
                     "📄 **Transcript / Mark Sheet**\n"
                     "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
                     "Use the upload widget **below** ⬇️ to submit your documents. "
@@ -581,7 +618,14 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             if st.session_state.get("lead_collected"):
                 lead_prog = st.session_state.get("lead_program", "")
                 if lead_prog:
-                    # Already have program — ask if they want to apply
+                    # Already have program — ensure it's synced, then ask to apply
+                    sync_program(
+                        lead_prog,
+                        name=st.session_state.get("lead_name", ""),
+                        email=st.session_state.get("lead_email", ""),
+                        phone=st.session_state.get("lead_phone", ""),
+                        lead_id=st.session_state.get("lead_id", ""),
+                    )
                     answer = (
                         f"Your profile is confirmed! You're interested in *{lead_prog}*.\n\n"
                         f"Would you like to proceed with the application? "
@@ -617,14 +661,21 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
                 # Update backend with program
-                try:
-                    import requests
-                    lid = st.session_state.get("lead_id", "")
-                    if lid:
-                        requests.put(f"http://localhost:8000/api/leads/{lid}",
-                            json={"program_interest": prog, "status": "in_progress"}, timeout=5)
-                except Exception:
-                    pass
+                lid, err = sync_program(
+                    prog,
+                    name=st.session_state.get("lead_name", ""),
+                    email=st.session_state.get("lead_email", ""),
+                    phone=st.session_state.get("lead_phone", ""),
+                    lead_id=st.session_state.get("lead_id", ""),
+                )
+                if lid:
+                    st.session_state["lead_id"] = lid
+                if err:
+                    st.warning(
+                        f"⚠️ I noted *{prog}* here, but couldn't save it to "
+                        f"the server ({err}). It'll be synced before your "
+                        f"documents are processed."
+                    )
                 qual_info = {
                     "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
                     "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
@@ -649,14 +700,21 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             if prog and len(msg.split()) <= 5:
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
-                try:
-                    import requests
-                    lid = st.session_state.get("lead_id", "")
-                    if lid:
-                        requests.put(f"http://localhost:8000/api/leads/{lid}",
-                            json={"program_interest": prog}, timeout=5)
-                except Exception:
-                    pass
+                lid, err = sync_program(
+                    prog,
+                    name=st.session_state.get("lead_name", ""),
+                    email=st.session_state.get("lead_email", ""),
+                    phone=st.session_state.get("lead_phone", ""),
+                    lead_id=st.session_state.get("lead_id", ""),
+                )
+                if lid:
+                    st.session_state["lead_id"] = lid
+                if err:
+                    st.warning(
+                        f"⚠️ I noted *{prog}* here, but couldn't save it to "
+                        f"the server ({err}). It'll be synced before your "
+                        f"documents are processed."
+                    )
                 qual_info = {
                     "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
                     "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
@@ -730,20 +788,17 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
         lead_id = st.session_state.get("lead_id", "")
         if not lead_id:
             phone = st.session_state.get("lead_phone", f"streamlit_{st.session_state.get('lead_name', 'user')}")
-            try:
-                import requests
-                resp = requests.post("http://localhost:8000/api/leads", json={
-                    "phone_number": phone,
-                    "name": st.session_state.get("lead_name", ""),
-                    "email": st.session_state.get("lead_email", ""),
-                    "program_interest": st.session_state.get("lead_program", ""),
-                    "source": "streamlit",
-                }, timeout=10)
-                if resp.ok:
-                    st.session_state["lead_id"] = resp.json()["id"]
-                    lead_id = st.session_state["lead_id"]
-            except Exception as e:
-                st.error(f"Cannot connect to backend: {e}")
+            lid, err = sync_lead(
+                name=st.session_state.get("lead_name", ""),
+                email=st.session_state.get("lead_email", ""),
+                phone=phone,
+                program=st.session_state.get("lead_program", ""),
+            )
+            if lid:
+                st.session_state["lead_id"] = lid
+                lead_id = lid
+            if err:
+                st.error(f"Cannot connect to backend: {err}")
         if lead_id:
             try:
                 import requests, uuid as _uuid
@@ -761,6 +816,7 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                 )
                 if resp.ok:
                     data = resp.json()
+                    readiness = data.get("offer_readiness")
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
                         offer_id = offer.get("id", "")
@@ -771,6 +827,15 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                         st.session_state["offer_generated"] = True
                         st.session_state["awaiting_field"] = None
                         st.session_state["show_apply_prompt"] = False
+                    elif readiness and readiness.get("missing"):
+                        st.success("✅ Document uploaded! Your file is saved, but your offer is on hold.")
+                        st.warning(
+                            f"Before I can generate your offer letter, I still need: "
+                            f"**{missing_fields_text(readiness['missing'])}**."
+                        )
+                        if readiness["missing"] == ["program_interest"]:
+                            st.session_state["awaiting_field"] = "program"
+                            st.info("Just type the program you want, e.g. *MBA* or *Computer Science*.")
                     else:
                         st.success("✅ Document uploaded! You can upload more or start asking questions.")
                 else:

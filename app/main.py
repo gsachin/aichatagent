@@ -204,9 +204,9 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather numDigits="1" timeout="3" action="/twilio/voice/connect" method="GET">
         <Say voice="Polly.Joanna">
-            Welcome to the University Admissions helpline.
-            Press 1 for UMD programs.
-            Press 2 for FDU programs.
+            Welcome to the Meridian University Admissions helpline.
+            Press 1 for Undergraduate programs.
+            Press 2 for Postgraduate programs.
             Press 3 for tuition and fees information.
             Press 4 to speak with our AI admissions assistant.
             Or, simply start speaking to ask any question.
@@ -405,7 +405,7 @@ async def websocket_twilio(websocket: WebSocket):
 
                     greeting = (
                         "Hi, I'm the admissions assistant. "
-                        "Ask me anything about UMD or FDU programs, "
+                        "Ask me anything about Meridian University programs, "
                         "tuition fees, or how to apply."
                     )
                     chunks = generate_ulaw_greeting(greeting)
@@ -545,7 +545,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
                     greeting = (
                         "Hi, I'm the admissions assistant. "
-                        "Ask me anything about UMD or FDU programs, "
+                        "Ask me anything about Meridian University programs, "
                         "tuition fees, or how to apply."
                     )
                     chunks = generate_ulaw_greeting(greeting)
@@ -1104,12 +1104,64 @@ async def _handle_whatsapp_document(
             else:
                 logger.info(f"WhatsApp document saved, but offer skipped (may already exist)")
         elif doc:
-            logger.info(f"WhatsApp document saved: {doc['id']}")
+            # Program not set — proactively ask what the student wants
+            from app.offers.service import evaluate_offer_readiness, missing_fields_text
+            readiness = await evaluate_offer_readiness(lead_id)
+            logger.info(
+                f"WhatsApp document saved but offer not ready — "
+                f"missing: {readiness['missing']}"
+            )
+            try:
+                from app.messaging import send_whatsapp_message
+                send_whatsapp_message(
+                    _wa(from_number),
+                    _wa(_whatsapp_from()),
+                    (
+                        "I received your document! But before I can generate "
+                        "your offer letter, I still need: "
+                        f"{missing_fields_text(readiness['missing'])}."
+                    ),
+                )
+            except Exception:
+                logger.exception("Failed to send WhatsApp readiness nudge")
         else:
             logger.error("Failed to record WhatsApp document in DB")
 
     except Exception:
         logger.exception("_handle_whatsapp_document failed")
+
+
+# ── Meridian program-name capture ──────────────────────────────────
+# Longer/more specific aliases first — first substring match wins.
+
+_MERIDIAN_PROGRAMS = {
+    # Compound / specific names first — first substring match wins
+    "master of business administration": "MBA",
+    "ai & machine learning": "B.Tech AI & Machine Learning",
+    "computer science": "B.Tech Computer Science",
+    "information technology": "B.Tech Information Technology",
+    "computer applications": "BCA",
+    "business administration": "BBA",
+    # Short aliases
+    "mba": "MBA",
+    "mca": "MCA",
+    "m.tech": "M.Tech",
+    "b.tech": "B.Tech",
+    "bca": "BCA",
+    "bba": "BBA",
+    "b.com": "B.Com",
+    "b.sc": "B.Sc",
+    "b.a": "BA",
+}
+
+
+def _detect_meridian_program(msg_lower: str) -> str:
+    """Return the canonical Meridian program name for a message, or ''."""
+    msg_lower = msg_lower.lower()
+    for alias, canonical in _MERIDIAN_PROGRAMS.items():
+        if alias in msg_lower:
+            return canonical
+    return ""
 
 
 async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
@@ -1125,13 +1177,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     "yes apply now", "proceed with enrollment", etc.
     """
     # ── Extract program from message ───────────────────────────────
-    programs = ["mba", "computer science", "data science", "engineering",
-               "business analytics", "information systems"]
-    detected_program = ""
-    for p in programs:
-        if p in msg_lower:
-            detected_program = p.title() if p != "mba" else "MBA"
-            break
+    detected_program = _detect_meridian_program(msg_lower)
 
     # ── Fast path: strong admission keywords ────────────────────────
     strong = [
@@ -1277,7 +1323,7 @@ async def twilio_whatsapp_webhook(
     # ── Handle text ─────────────────────────────────────────────
     if not Body.strip():
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer="Hello! Send me a question about UMD or FDU admissions, or send a voice note."
+            answer="Hello! Send me a question about Meridian admissions, or send a voice note."
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -1307,7 +1353,7 @@ async def twilio_whatsapp_webhook(
         if not lead_email:
             answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
         else:
-            answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with UMD or FDU admissions?"
+            answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with Meridian admissions?"
     elif not lead_email and has_email:
         # User provided their email
         await update_lead(lead["id"], email=Body.strip())
@@ -1333,7 +1379,7 @@ async def twilio_whatsapp_webhook(
                 await update_lead(lead["id"], program_interest=detected_prog)
                 lead_program = detected_prog
             if not lead_program:
-                answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
             else:
                 answer = (
                     f"Great! To process your admission for *{lead_program}*, "
@@ -1366,20 +1412,14 @@ async def twilio_whatsapp_webhook(
                     f"To proceed with admission, say: 'I want to take admission'"
                 )
             else:
-                answer = "Great! Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                answer = "Great! Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
         elif msg_lower in ("no", "nope", "wrong", "change"):
             answer = "No problem! What would you like to update? Your name, email, or program interest?"
         elif msg_lower == "done" and lead_program:
             answer = f"Thanks {lead_name}! To process your application, say 'I want to take admission' and I'll prepare your offer letter."
         # ── FIX: Capture program name from short replies (Critical bug fix) ──
         elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
-            programs = ["mba", "computer science", "data science", "engineering",
-                       "business analytics", "information systems"]
-            detected = ""
-            for p in programs:
-                if p in msg_lower:
-                    detected = p.title() if p != "mba" else "MBA"
-                    break
+            detected = _detect_meridian_program(msg_lower)
             if detected:
                 await update_lead(lead["id"], program_interest=detected)
                 lead_program = detected
@@ -1389,7 +1429,7 @@ async def twilio_whatsapp_webhook(
                     f"and I'll guide you through the document upload process."
                 )
             else:
-                answer = "I didn't catch the program name. Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                answer = "I didn't catch the program name. Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
         elif "?" in Body or len(Body) > 30:
             # User is asking a real question — do RAG
             try:
@@ -1407,7 +1447,7 @@ async def twilio_whatsapp_webhook(
     try:
         _ = answer
     except NameError:
-        answer = f"I have you as {lead_name or 'there'}. How can I help with UMD or FDU admissions?"
+        answer = f"I have you as {lead_name or 'there'}. How can I help with Meridian admissions?"
 
     # Log conversation
     background_tasks.add_task(
@@ -2324,15 +2364,17 @@ async def api_upload_document(
             pass
         return JSONResponse({"error": "Database unavailable"}, status_code=503)
 
-    # Auto-trigger offer letter if lead has program_interest
+    # Auto-trigger offer letter if the lead is fully ready
     offer_result = None
-    if lead.get("program_interest", "").strip():
-        from app.offers.service import generate_and_send_offer
+    from app.offers.service import evaluate_offer_readiness, generate_and_send_offer
+    readiness = await evaluate_offer_readiness(lead_id)
+    if readiness["ready"]:
         offer_result = await generate_and_send_offer(lead_id)
 
     return {
         "document": doc,
         "offer_letter": offer_result,
+        "offer_readiness": readiness,   # additive — old clients ignore unknown keys
     }
 
 
@@ -2373,6 +2415,18 @@ async def api_delete_document(document_id: str):
     if ok:
         return {"status": "deleted"}
     return JSONResponse({"error": "Document not found"}, status_code=404)
+
+
+# ── REST API: Offer readiness check ──────────────────────────────────
+
+@app.get("/api/leads/{lead_id}/offer-readiness")
+async def api_offer_readiness(lead_id: str):
+    """Return what prerequisites are missing before an offer can be generated."""
+    from app.offers.service import evaluate_offer_readiness
+    readiness = await evaluate_offer_readiness(lead_id)
+    if readiness["lead"] is None:
+        return JSONResponse({"error": "Lead not found"}, status_code=404)
+    return readiness
 
 
 # ── REST API: Offer letters ──────────────────────────────────────────

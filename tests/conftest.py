@@ -94,8 +94,10 @@ def test_server(free_port: int):
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
 
-    # Wait until the server is accepting connections
-    deadline = time.time() + 10
+    # Wait until the server is accepting connections.
+    # The app lifespan pre-warms ChromaDB + Whisper (CUDA) before serving,
+    # which takes ~20-60s on first load (model check against Hugging Face).
+    deadline = time.time() + 90
     while time.time() < deadline:
         try:
             s = socket.create_connection((host, free_port), timeout=0.5)
@@ -104,7 +106,7 @@ def test_server(free_port: int):
         except (ConnectionRefusedError, OSError):
             time.sleep(0.2)
     else:
-        raise RuntimeError(f"Server did not start on port {free_port} within 10s")
+        raise RuntimeError(f"Server did not start on port {free_port} within 90s")
 
     yield f"http://{host}:{free_port}"
 

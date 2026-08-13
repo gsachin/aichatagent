@@ -60,12 +60,11 @@ def test_module_import() -> bool:
     try:
         from app.pipeline import (
             create_local_voice_pipeline,
-            retrieve_context,
             build_rag_prompt,
             test_pipeline_with_text,
         )
         print_result(True, "app.pipeline imported successfully")
-        print(f"         Functions: create_local_voice_pipeline, retrieve_context, "
+        print(f"         Functions: create_local_voice_pipeline, "
               f"build_rag_prompt, test_pipeline_with_text")
         return True
     except Exception as e:
@@ -79,7 +78,7 @@ def test_rag_retrieval() -> bool:
     """Verify ChromaDB returns relevant context for a query."""
     print_header("Test 2: RAG Context Retrieval")
 
-    from app.pipeline import retrieve_context
+    from app.rag import retrieve_context
 
     query = "tuition fee"
     context = retrieve_context(query)

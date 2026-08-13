@@ -40,6 +40,73 @@ def _whatsapp_from() -> str:
     return settings.TWILIO_WHATSAPP_NUMBER or settings.TWILIO_PHONE_NUMBER
 
 
+# ── Offer readiness validation (shared by WhatsApp + Streamlit) ──────────
+
+# Fields that must be non-empty on the lead before an offer can be generated.
+REQUIRED_OFFER_FIELDS = ("name", "email", "phone_number", "program_interest")
+
+_FIELD_LABELS: dict[str, str] = {
+    "name": "your full name",
+    "email": "your email address",
+    "phone_number": "your phone number",
+    "program_interest": "which program you're interested in",
+    "document": "at least one document (transcript, ID, or marksheet)",
+    "lead": "your profile",
+}
+
+
+def missing_fields_text(missing: list[str]) -> str:
+    """Human-readable explanation of what is missing before an offer can be generated."""
+    if not missing:
+        return ""
+    labels = [_FIELD_LABELS.get(f, f) for f in missing]
+    if len(labels) == 1:
+        return labels[0]
+    return ", ".join(labels[:-1]) + ", and " + labels[-1]
+
+
+async def evaluate_offer_readiness(lead_id: str) -> dict:
+    """
+    Check whether an offer letter can be generated for a lead.
+
+    Returns::
+
+        {
+            "ready": bool,        # True iff all prerequisites are satisfied
+            "missing": [str],     # list of missing prerequisite keys
+            "lead": dict | None,  # the lead row (for reuse by callers)
+            "documents": int,     # number of documents already uploaded
+        }
+
+    Never raises — degrades gracefully on DB errors.
+    """
+    from app.leads.models import get_lead
+    from app.offers.models import list_documents
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return {"ready": False, "missing": ["lead"], "lead": None, "documents": 0}
+
+    missing = [
+        f for f in REQUIRED_OFFER_FIELDS
+        if not str(lead.get(f, "") or "").strip()
+    ]
+
+    docs = await list_documents(lead_id) or []
+    if not docs:
+        missing.append("document")
+
+    return {
+        "ready": len(missing) == 0,
+        "missing": missing,
+        "lead": lead,
+        "documents": len(docs),
+    }
+
+
+# ── Core offer generation ────────────────────────────────────────────────
+
+
 async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | None:
     """
     Generate a PDF offer letter, send via WhatsApp + email, and return the offer dict.
@@ -64,14 +131,18 @@ async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | N
         logger.warning(f"generate_and_send_offer: lead {lead_id} not found")
         return None
 
+    # ── Pre-offer readiness validation ────────────────────────────────
+    readiness = await evaluate_offer_readiness(lead_id)
+    if not readiness["ready"]:
+        logger.warning(
+            f"Lead {lead_id}: offer skipped — missing: {readiness['missing']}"
+        )
+        return None
+
     lead_name = lead.get("name") or "Prospective Student"
     program_interest = lead.get("program_interest", "")
     lead_email = lead.get("email", "")
     lead_phone = lead.get("phone_number", "")
-
-    if not program_interest:
-        logger.info(f"Lead {lead_id}: no program_interest — skipping offer")
-        return None
 
     # ── Idempotency guard ────────────────────────────────────────────
     if not force:

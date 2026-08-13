@@ -27,43 +27,20 @@ except requests.ConnectionError:
     print("   ERROR: AI not reachable. Is it running in system tray?")
     sys.exit(1)
 
-# ── Step 1: Load & chunk PDF ───────────────────────────────────────
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# ── Step 1: Load the shared vector store ────────────────────────────
+# LEGACY NOTE (2026-08-14): this bot no longer ingests documents.
+# It previously built its own Chroma store from the old UMD/FDU PDF at
+# 800/150 chunking, which polluted the shared store with duplicate
+# generations. Ingestion is now owned exclusively by
+# scripts/rebuild_rag_index.py; this bot only READS the shared store.
 
-pdf_path = os.path.join(os.getcwd(), "content", "sample_data", "UMD_and_FDU_University_Profile_Report.pdf")
-print(f"\n--> Loading PDF: {pdf_path}")
+from app.rag import get_retriever
 
-if not os.path.exists(pdf_path):
-    # fallback
-    alt = "content/sample_data/UMD_and_FDU_University_Profile_Report.pdf"
-    if os.path.exists(alt):
-        pdf_path = alt
-    else:
-        print(f"   ERROR: PDF not found. Tried: {pdf_path}, {alt}")
-        sys.exit(1)
-
-loader = PyPDFLoader(pdf_path)
-raw_docs = loader.load()
-print(f"   Loaded {len(raw_docs)} pages.")
-
-splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
-chunks = splitter.split_documents(raw_docs)
-print(f"   Split into {len(chunks)} chunks.")
-
-# ── Step 2: Build vector store ─────────────────────────────────────
-from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaEmbeddings
-
-print("\n--> Building vector embeddings (nomic-embed-text)...")
-embeddings = OllamaEmbeddings(model="nomic-embed-text")
-vector_store = Chroma.from_documents(
-    documents=chunks,
-    embedding=embeddings,
-    persist_directory="./chroma_local_db"
-)
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-print("   Vector store ready.")
+retriever = get_retriever()
+if retriever is None:
+    print("   ERROR: Vector store not found. Run scripts/rebuild_rag_index.py first.")
+    sys.exit(1)
+print("   Vector store loaded (shared Meridian store).")
 
 # ── Step 3: Build RAG chain ────────────────────────────────────────
 from langchain_ollama import ChatOllama
@@ -84,7 +61,7 @@ system_prompt = (
     "STRICT FACTUAL CONSTRAINTS:\n"
     "1. Rely EXCLUSIVELY on the provided context. If a detail isn't in the text, "
     "politely say so.\n"
-    "2. Never merge or confuse details between UMD and FDU.\n"
+    "2. Rely on Meridian University facts only.\n"
     "3. Present structural information (tuition, deadlines, courses) in Markdown.\n\n"
     "Context:\n{context}"
 )
@@ -105,7 +82,7 @@ def ask(question: str):
 
 # ── Step 4: Chat ───────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about UMD"
+    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about the Meridian MBA"
     question = " ".join(sys.argv[1:])
     print("\n" + "=" * 60)
     print(f"   Student: {question}")

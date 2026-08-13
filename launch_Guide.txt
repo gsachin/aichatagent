@@ -2,10 +2,10 @@ python admissions_bot.py
 
 
 Example questions:
-- What are the admission requirements for UMD?
-- Tell me about FDU tuition fees
-- What programs does University of Maryland offer?
-- Compare UMD and FDU
+- What are the admission requirements at Meridian?
+- Tell me about Meridian tuition fees
+- What programs does Meridian University offer?
+- How do I apply to Meridian?
 
 
  http://localhost:8501

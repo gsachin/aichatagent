@@ -26,12 +26,12 @@ if %errorlevel% NEQ 0 (
     echo    [OK] Ollama is already running.
 )
 
-:: ── Step 2: Check PDF ─────────────────────────────────────────
-echo [2/3] Checking PDF file...
-if exist "content\sample_data\UMD_and_FDU_University_Profile_Report.pdf" (
-    echo    [OK] University profile PDF found.
+:: ── Step 2: Check knowledge base ───────────────────────────────
+echo [2/3] Checking Meridian knowledge base...
+if exist "content\meridian\meridian_knowledge_base.md" (
+    echo    [OK] Meridian knowledge base found.
 ) else (
-    echo    [FAIL] PDF not found at content\sample_data\UMD_and_FDU_University_Profile_Report.pdf
+    echo    [FAIL] Meridian knowledge base not found at content\meridian\meridian_knowledge_base.md
     pause
     exit /b 1
 )

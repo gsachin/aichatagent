@@ -284,9 +284,11 @@ class VoiceCallSession:
     # ── Domain dictionary for phone audio corrections ──────────────
 
     _CORRECTIONS = {
-        "held you": "FDU", "hold you": "FDU", "hold u": "FDU",
+        # Meridian-name corrections (common STT mis-hearings on phone audio)
+        "maridian": "Meridian", "miridian": "Meridian", "meridien": "Meridian",
+        "mary dian": "Meridian",
+        # Generic admissions terms (valid for Meridian)
         "intuition": "tuition", "faze": "fees",
-        "you empty": "UMD", "you and the": "UMD", "empty": "UMD",
         "emma": "MBA", "gp a": "GPA", "i elts": "IELTS",
         "toefl": "TOEFL", "jimat": "GMAT", "g mat": "GMAT",
     }

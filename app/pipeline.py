@@ -30,13 +30,15 @@ logger = logging.getLogger("voice_pipeline")
 
 # ── Configuration ────────────────────────────────────────────────────
 
-CHROMA_DB_PATH = Path(__file__).resolve().parent.parent / "chroma_local_db"
+CHROMA_DB_PATH = Path(os.environ.get(
+    "CHROMA_DB_PATH",
+    str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
+))
 DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
 TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
-RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "2"))
 
 # ── Platform Detection (Multi-GPU Support) ──────────────────────────
 from app.platform import detect_compute_device
@@ -63,55 +65,10 @@ def _vram_info() -> str:
 
 
 # ── ChromaDB context retriever ───────────────────────────────────────
-
-def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> str:
-    """
-    Search the persisted ChromaDB for admissions documents relevant to
-    *query*. Returns formatted context text, or empty string on failure.
-    """
-    try:
-        import chromadb
-    except ImportError:
-        logger.warning("chromadb not installed — skipping RAG context")
-        return ""
-
-    if not CHROMA_DB_PATH.is_dir():
-        logger.warning(f"ChromaDB not found at {CHROMA_DB_PATH} — skipping RAG context")
-        return ""
-
-    try:
-        # Use Ollama embedding function to match the nomic-embed-text (768-dim)
-        # that was used when building the persisted index.
-        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
-
-        embed_fn = OllamaEmbeddingFunction(
-            model_name="nomic-embed-text",
-            url=OLLAMA_BASE_URL,
-        )
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-        collections = client.list_collections()
-
-        if not collections:
-            logger.warning("ChromaDB has no collections — run app.py to build index")
-            return ""
-
-        # ChromaDB 1.x returns Collection objects; get name for get_collection()
-        first = collections[0]
-        coll_name = first if isinstance(first, str) else first.name
-        collection = client.get_collection(coll_name, embedding_function=embed_fn)
-        results = collection.query(query_texts=[query], n_results=top_k)
-
-        if not results.get("documents") or not results["documents"][0]:
-            return ""
-
-        chunks = results["documents"][0]
-        context = "\n".join(f"- {c}" for c in chunks)
-        logger.debug(f"RAG: retrieved {len(chunks)} chunks for query: {query[:60]}...")
-        return context
-
-    except Exception:
-        logger.exception("ChromaDB retrieval failed")
-        return ""
+# NOTE: retrieval is centralized in app.rag (single source of truth).
+# The live voice path uses app.pipeline.run_rag_query_sync -> app.rag.query_rag.
+# The local retrieve_context() duplicate was removed 2026-08-14 — use
+#   from app.rag import retrieve_context
 
 
 def build_rag_prompt(transcript: str) -> str:

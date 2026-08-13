@@ -77,7 +77,7 @@ class Settings:
     # ── Offer letter / documents ────────────────────────────────────
     DATA_DIR: str = field(default_factory=lambda: _env("DATA_DIR", "data"))
     UNIVERSITY_NAME: str = field(
-        default_factory=lambda: _env("UNIVERSITY_NAME", "University of Maryland / Fairleigh Dickinson University")
+        default_factory=lambda: _env("UNIVERSITY_NAME", "Meridian University")
     )
     OFFER_EMAIL: str = field(
         default_factory=lambda: _env("OFFER_EMAIL", "admissions@university.edu")
