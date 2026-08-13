@@ -32,6 +32,7 @@ chroma_local_db/
 
 # Cloudflare tunnel hostname (changes every restart)
 .whatsapp_tunnel
+.tunnel_*
 
 # Windows NUL device artifact
 NUL
