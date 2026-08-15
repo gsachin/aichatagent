@@ -235,6 +235,27 @@ On boot, the FastAPI lifespan does:
 
 ## 9. Deployment Checklist
 
+### 9.0 One-click bootstrap (recommended starting point)
+
+`bootstrap_services` checks every prerequisite, installs what is missing
+(Docker, Ollama + models, cloudflared, ffmpeg, Python 3.11 + pinned venv),
+creates `.env`, rebuilds the RAG store if absent, and starts everything in
+dependency order (PostgreSQL → Ollama → FastAPI → tunnel → Twilio → UIs):
+
+| OS | Command |
+|---|---|
+| Windows (double-click) | `bootstrap_services.bat` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -File .\bootstrap_services.ps1` |
+| macOS / Linux | `sudo bash bootstrap_services.sh` |
+
+Useful flags: `--check-only` (verify, change nothing), `--dry-run` (print
+actions), `--skip-install` (launch only), `--with-streamlit` (chatbot +
+dashboard + per-port tunnels), `--with-demo-data` (seeds only an empty DB).
+
+The manual checklist below remains the reference for the steps the script
+automates, and for TLS/proxy setup (steps 1, 8–10, 14) which still need a
+real domain + reverse proxy on cloud deployments.
+
 1. **Provision** GPU VM (T4+), Ubuntu, 30 GB disk, static IP + DNS record (`bot.yourdomain.com`).
 2. **Install** NVIDIA driver, CUDA 12 toolkit, `nvidia-container-toolkit`; Python 3.11; `ffmpeg`.
 3. **Clone repo**, `pip install -r requirements.txt` + the extra packages listed in §4 (or use the Dockerfile).

@@ -38,6 +38,13 @@ $FastAPIPort = 8000
 $StreamlitMainPort = 8501
 $StreamlitDashboardPort = 8502
 
+# Prefer the project venv (created by bootstrap_services) when present,
+# falling back to system python — keeps pre-venv setups working unchanged.
+$VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$PythonExe  = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+$StreamlitExe = if (Test-Path $VenvPython) { Join-Path $ProjectRoot ".venv\Scripts\streamlit.exe" } else { "streamlit" }
+Write-Host "  Python: $PythonExe"
+
 $ESC  = [char]27
 $GREEN = "$ESC[32m"; $YELLOW = "$ESC[33m"; $RED = "$ESC[31m"
 $CYAN = "$ESC[36m"; $RESET = "$ESC[0m"; $BOLD = "$ESC[1m"
@@ -139,7 +146,7 @@ if ($nvidiaSmi) {
 
 # Verify CUDA is visible to Python / PyTorch
 if ($gpuOk) {
-    $cudaCheck = cmd /c "python -c `"import torch; print(f'CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \`"N/A\`"}')`" 2>&1"
+    $cudaCheck = cmd /c "$PythonExe -c `"import torch; print(f'CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \`"N/A\`"}')`" 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-OK ("PyTorch: {0}" -f $cudaCheck)
     } else {
@@ -222,7 +229,7 @@ Write-Step "Step 5: Starting FastAPI backend (port $FastAPIPort)"
 
 $ServerLog = Join-Path $env:TEMP "university_fastapi.log"
 $fastApiArgs = @{
-    FilePath               = "python"
+    FilePath               = $PythonExe
     ArgumentList           = "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$FastAPIPort"
     WindowStyle            = "Hidden"
     PassThru               = $true
@@ -266,7 +273,7 @@ if ($ollamaCheck -eq "200") {
 }
 
 if ($ollamaUp) {
-    $modelList = curl.exe -s "http://127.0.0.1:11434/api/tags" 2>$null | python -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin).get('models',[])]; print('\n'.join(models))" 2>$null
+    $modelList = curl.exe -s "http://127.0.0.1:11434/api/tags" 2>$null | & $PythonExe -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin).get('models',[])]; print('\n'.join(models))" 2>$null
     if ($modelList) {
         Write-OK ("Found models: {0}" -f ($modelList -split "`n" -join ", "))
         foreach ($model in ($modelList -split "`n" | Where-Object { $_ })) {
@@ -392,7 +399,7 @@ if ($SkipTwilio) {
 } else {
     $TwilioScript = Join-Path $ProjectRoot "scripts\update_twilio_webhook.py"
     if (Test-Path $TwilioScript) {
-        $result = cmd /c "python $TwilioScript $TunnelHost 2>&1"
+        $result = cmd /c "$PythonExe $TwilioScript $TunnelHost 2>&1"
         if ($LASTEXITCODE -eq 0) {
             $result | ForEach-Object { Write-OK $_ }
         } else {
@@ -426,7 +433,7 @@ if (-not $tunnelOk) {
 
 # Verify Twilio webhook matches
 if (-not $SkipTwilio) {
-    $twilioVerify = cmd /c "python -c `"from dotenv import load_dotenv; load_dotenv(); import os; from twilio.rest import Client; c=Client(os.environ['TWILIO_ACCOUNT_SID'],os.environ['TWILIO_AUTH_TOKEN']); [print(f'Twilio webhook: {n.voice_url}') for n in c.incoming_phone_numbers.list(phone_number='+19788198953')]`" 2>&1"
+    $twilioVerify = cmd /c "$PythonExe -c `"from dotenv import load_dotenv; load_dotenv(); import os; from twilio.rest import Client; c=Client(os.environ['TWILIO_ACCOUNT_SID'],os.environ['TWILIO_AUTH_TOKEN']); [print(f'Twilio webhook: {n.voice_url}') for n in c.incoming_phone_numbers.list(phone_number='+19788198953')]`" 2>&1"
     if ($twilioVerify -match $TunnelHost) {
         Write-OK ("Twilio webhook verified: matches {0}" -f $TunnelHost)
     } else {
@@ -442,7 +449,7 @@ if ($WithStreamlit) {
     # Dashboard (port 8502)
     $DashLog = Join-Path $env:TEMP "university_dashboard.log"
     $dashArgs = @{
-        FilePath               = "streamlit"
+        FilePath               = $StreamlitExe
         ArgumentList           = "run", "dashboard.py", "--server.port", "$StreamlitDashboardPort", "--server.headless", "true"
         WindowStyle            = "Hidden"
         PassThru               = $true
@@ -455,7 +462,7 @@ if ($WithStreamlit) {
     # Main app (port 8501)
     $AppLog = Join-Path $env:TEMP "university_streamlit.log"
     $appArgs = @{
-        FilePath               = "streamlit"
+        FilePath               = $StreamlitExe
         ArgumentList           = "run", "app.py", "--server.port", "$StreamlitMainPort", "--server.headless", "true"
         WindowStyle            = "Hidden"
         PassThru               = $true

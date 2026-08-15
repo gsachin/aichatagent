@@ -1,46 +1,49 @@
-# University Admissions Voice Assistant — Python dependencies
-# Install: pip install -r requirements.txt
+# Pinned 2026-08-15 — exact versions from the verified-working environment
+# (Python 3.11, Windows 11 + CUDA; same pins apply to macOS/Linux).
+#
+# GPU notes:
+# - torch==2.6.0 below is the PyPI build. The verified Windows CUDA setup used
+#   torch==2.6.0+cu124 from https://download.pytorch.org/whl/cu124 — bootstrap
+#   installs that wheel automatically when a GPU is detected on Windows.
+# - Swap onnxruntime-gpu for onnxruntime on CPU-only machines.
 
-# ── Web framework + ASGI server ──────────────────────────────────────
-fastapi
-uvicorn[standard]
-streamlit
+# ── Web / API ─────────────────────────────────────────────────────────
+fastapi==0.140.0
+uvicorn[standard]==0.51.0
+streamlit==1.59.2
+websockets==15.0.1
+httpx==0.28.1
+python-multipart==0.0.32
+requests==2.34.2
+python-dotenv==1.2.2
 
-# ── WebSocket (client + server) ──────────────────────────────────────
-websockets
+# ── ML / audio ────────────────────────────────────────────────────────
+torch==2.6.0
+onnxruntime-gpu==1.28.0
+numpy==2.4.6
+scipy==1.17.1
+soundfile==0.14.0
+faster-whisper==1.2.1
+kokoro-onnx==0.5.0
+openai-whisper==20250625
+pipecat-ai[whisper,kokoro]==1.6.0
 
-# ── Async HTTP (used by test suite) ──────────────────────────────────
-httpx
+# ── RAG / LLM ─────────────────────────────────────────────────────────
+ollama==0.6.2
+chromadb==1.5.9
+pandas==3.0.3
+pyarrow==24.0.0
+langchain==1.3.14
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+langchain-ollama==1.1.0
+langchain-classic==1.0.8
+pypdf==6.14.2
 
-# ── AI / ML Inference ────────────────────────────────────────────────
-torch
-ollama
-chromadb
+# ── DB / integrations ─────────────────────────────────────────────────
+psycopg2-binary==2.9.12
+twilio==9.10.9
+fpdf2==2.8.7
 
-# ONNX Runtime — GPU version for CUDA-accelerated Kokoro TTS (~2x speedup).
-# Swap to 'onnxruntime' (CPU-only) if no NVIDIA GPU is available.
-onnxruntime-gpu
-
-# ── Speech-to-Text ────────────────────────────────────────────────────
-# openai-whisper used for WhatsApp voice note transcription.
-# Avoids faster-whisper's PyAV DLL blocked by AppLocker on this machine.
-openai-whisper
-
-# ── Voice AI Pipeline (Pipecat) ──────────────────────────────────────
-pipecat-ai[whisper,kokoro]
-
-# ── Database (lead capture — Phase 6) ────────────────────────────────
-psycopg2-binary
-
-# ── Twilio WhatsApp Integration ───────────────────────────────────────
-# REST API client for sending async WhatsApp replies
-twilio
-
-# ── MCP Server (optional — falls back to REST if unavailable) ──────────
-mcp
-
-# ── Lead Management Dashboard ──────────────────────────────────────────
-pandas
-
-# ── PDF Generation (offer letters) ─────────────────────────────────────
-fpdf2
+# ── Optional: MCP server (app/mcp/server.py) — not required for voice/chat/UI.
+mcp==2.0.0

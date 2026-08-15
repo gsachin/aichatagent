@@ -52,6 +52,7 @@
 ### 3.1 Git commits — status
 - Release: **`ac35d6f`** (Meridian pivot) + **`447ddf0`** (runtime-write sync) are committed on **`meridianDataUpdate`**.
 - Review fixes: committed 2026-08-15 (`fix:` commit) — WhatsApp DB-less guard, test env-skips, deployment-doc rebrand completion, `.env.example` refresh, tunnel-script cache hardening, UMD sample PDF removed.
+- One-click bootstrap: `bootstrap_services.py` + `.ps1/.bat/.sh` entry points (2026-08-15) — pre-req check, missing-software install (winget/brew/apt), pinned `requirements.txt`, ordered startup on Windows/macOS/Linux; Twilio voice + status-callback auto-update.
 - Do NOT add: `.tunnel_*` cache files, `app/__pycache__/*.pyc`, `chroma_local_db.bak/` (now deleted anyway).
 - **Store policy:** `chroma_local_db/` is tracked **deliberately** (release artifact — fresh clones work out of the box). Chroma writes bookkeeping rows at runtime; sync those writes with each release (see `447ddf0`) and rebuild via `scripts/rebuild_rag_index.py` whenever the knowledge base changes.
 - Suggested message:
