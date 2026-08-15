@@ -33,7 +33,9 @@ function Write-Err    { Write-Host ("${R}  [DOWN] $($args -join ' ')${N}") }
 
 # Tunnel definitions: port, label, cache file, metrics port
 $Tunnels = @(
-    @{ Port = $FastAPIPort;           Label = "FastAPI";    CacheFile = Join-Path $ProjectRoot ".tunnel_8000"; MetricsPort = 20241 },
+    # NOTE: 20241 is cloudflared's DEFAULT metrics port -- the tunnel started by
+    # start_services.ps1 binds it, so the FastAPI entry must use its own port.
+    @{ Port = $FastAPIPort;           Label = "FastAPI";    CacheFile = Join-Path $ProjectRoot ".tunnel_8000"; MetricsPort = 20244 },
     @{ Port = $StreamlitMainPort;     Label = "Streamlit";  CacheFile = Join-Path $ProjectRoot ".tunnel_8501"; MetricsPort = 20242 },
     @{ Port = $StreamlitDashboardPort; Label = "Dashboard"; CacheFile = Join-Path $ProjectRoot ".tunnel_8502"; MetricsPort = 20243 }
 )
@@ -50,21 +52,21 @@ function Get-TunnelHost($tunnelDef) {
     $cacheFile = $tunnelDef.CacheFile
     $port      = $tunnelDef.Port
 
-    # 1) Check cache file (primary source, verified reachable)
-    if (Test-Path $cacheFile) {
-        $cached = (Get-Content $cacheFile -Raw).Trim()
-        if ($cached -and (Test-Endpoint "https://$cached/")) {
-            return $cached
-        }
-    }
-
-    # 2) Scan ALL cloudflared process log/output for a URL pointing to this port.
-    #    cloudflared on Windows writes to stderr, so we check every temp log we know.
+    # 1) Scan this port's OWN cloudflared logs FIRST -- a reachable URL
+    #    there is always for THIS port (the logs are cleared right before
+    #    a new tunnel starts, so they can never be stale-vs-port).
+    #    cloudflared on Windows writes to stderr, so check both streams,
+    #    plus the launcher's log for the FastAPI port only -- never logs
+    #    belonging to other ports (that would misattribute the URL).
     $knownLogs = @(
-        (Join-Path $env:TEMP "university_cloudflared.log"),          # start_services.ps1
         (Join-Path $env:TEMP "cloudflared_${port}_stdout.log"),      # our own stdout
         (Join-Path $env:TEMP "cloudflared_${port}_stderr.log")       # our own stderr (Windows default)
     )
+    $portLogsExist = $false
+    foreach ($f in $knownLogs) { if (Test-Path $f) { $portLogsExist = $true } }
+    if ($port -eq $FastAPIPort) {
+        $knownLogs += (Join-Path $env:TEMP "university_cloudflared.log")  # start_services.ps1
+    }
 
     foreach ($logPath in $knownLogs) {
         if (Test-Path $logPath) {
@@ -78,6 +80,16 @@ function Get-TunnelHost($tunnelDef) {
                     }
                 }
             }
+        }
+    }
+
+    # 2) Fall back to the cache file ONLY when this port has no logs at all.
+    #    If per-port logs exist but held no reachable URL, a cached hostname
+    #    could belong to a different port (poisoned cache) -- don't trust it.
+    if (-not $portLogsExist -and (Test-Path $cacheFile)) {
+        $cached = (Get-Content $cacheFile -Raw).Trim()
+        if ($cached -and (Test-Endpoint "https://$cached/")) {
+            return $cached
         }
     }
 
@@ -122,8 +134,20 @@ function Start-SingleTunnel($tunnelDef) {
     }
 
     if ($tunnelHost) {
+        # Verify reachable before trusting it (DNS can lag for fresh hostnames).
+        # Cache is written either way -- next run's cache check re-verifies, so a
+        # URL that is only slow to resolve heals itself without tunnel churn.
+        $verify = $false
+        for ($v = 0; $v -lt 6 -and -not $verify; $v++) {
+            if ($v -gt 0) { Start-Sleep -Seconds 3 }
+            $verify = Test-Endpoint "https://$tunnelHost/"
+        }
         [System.IO.File]::WriteAllText($cacheFile, $tunnelHost)
-        Write-OK "$label tunnel started: $tunnelHost"
+        if ($verify) {
+            Write-OK "$label tunnel started: $tunnelHost"
+        } else {
+            Write-Warn "$label tunnel started but not yet reachable (DNS warm-up): $tunnelHost"
+        }
     } else {
         Write-Err "$label tunnel did not start within timeout"
     }
@@ -163,7 +187,7 @@ if ($gpuOk) {
 Write-Step "Docker / PostgreSQL Check"
 
 $dbReady = $false
-$dockerCheck = docker info 2>$null
+docker info 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-OK "Docker Desktop is running"
 

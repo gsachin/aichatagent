@@ -8,7 +8,7 @@
 
 ## 1. One-Line Status
 
-**Fully implemented, verified, and LIVE. All resume-checklist items 2–5 are complete. The only remaining item is the git commit (item 1) — everything is staged on branch `meridianDataUpdate` and a ready-to-use commit message is provided in §3.1.**
+**Fully implemented, verified, and LIVE. The release is committed on branch `meridianDataUpdate` (`ac35d6f` + `447ddf0`); a follow-up `fix:` commit (2026-08-15) resolved the release-review blockers and updated this document's verification numbers.**
 
 ---
 
@@ -24,7 +24,7 @@
 ### 2.2 Verification evidence (all executed)
 | Check | Result |
 |---|---|
-| pytest per-file (12 files) | **101 passed, 0 failed** |
+| pytest per-file (17 files) | **201 passed, 0 failed** (working tree, DB up) · fresh clone without `.env`: 199 passed + 2 env-skips (stats tests) |
 | E2E RAG queries (direct + live WS `/ws/voice/text`) | MBA → $18,500 + citation · BCA → $10,200 · deadlines correct · canaries (Terrapin/UMD) → honest not-found |
 | Store | 31 chunks · cosine · zero blocked markers · negative canary clean |
 | Brand grep gate | clean |
@@ -49,9 +49,11 @@
 
 ## 3. ⏸️ PENDING — only two items
 
-### 3.1 Git commit (do this first — everything is staged)
-- Branch **`meridianDataUpdate`** exists; **all files are staged** (`git add` already done).
+### 3.1 Git commits — status
+- Release: **`ac35d6f`** (Meridian pivot) + **`447ddf0`** (runtime-write sync) are committed on **`meridianDataUpdate`**.
+- Review fixes: committed 2026-08-15 (`fix:` commit) — WhatsApp DB-less guard, test env-skips, deployment-doc rebrand completion, `.env.example` refresh, tunnel-script cache hardening, UMD sample PDF removed.
 - Do NOT add: `.tunnel_*` cache files, `app/__pycache__/*.pyc`, `chroma_local_db.bak/` (now deleted anyway).
+- **Store policy:** `chroma_local_db/` is tracked **deliberately** (release artifact — fresh clones work out of the box). Chroma writes bookkeeping rows at runtime; sync those writes with each release (see `447ddf0`) and rebuild via `scripts/rebuild_rag_index.py` whenever the knowledge base changes.
 - Suggested message:
 
 ```

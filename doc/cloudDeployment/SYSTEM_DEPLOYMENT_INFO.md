@@ -1,7 +1,7 @@
 # Cloud Deployment — System Information
 
-**Project:** University Admissions Voice AI Assistant (UMD / FDU)
-**Branch:** `offerlaterupdate` · **Generated:** 2026-08-13
+**Project:** University Admissions Voice AI Assistant (Meridian University)
+**Branch:** `meridianDataUpdate` · **Generated:** 2026-08-13
 **Purpose:** This document contains everything a cloud provider / DevOps engineer needs to deploy this system. Hand it over as the single source of truth for provisioning.
 
 ---
@@ -17,7 +17,7 @@ A voice-first AI admissions assistant that answers phone calls and WhatsApp mess
 | Web UI (dashboard) | Streamlit | Command Cockpit admin dashboard |
 | LLM | Ollama + Qwen 2.5 7B (Q3_K_M / Q4_K_M) | RAG answer generation, lead extraction, intent classification |
 | Embeddings | Ollama `nomic-embed-text` | RAG vector embeddings |
-| Vector DB | ChromaDB (persistent local) | Admissions knowledge base (from UMD/FDU profile PDF) |
+| Vector DB | ChromaDB (persistent local) | Admissions knowledge base (Meridian — content/meridian markdown) |
 | STT | faster-whisper (`small.en`, CUDA INT8) | Live call + WhatsApp voice-note transcription |
 | TTS | Kokoro-82M (ONNX Runtime, CUDA) | Voice replies over phone / WhatsApp |
 | Relational DB | PostgreSQL 16 (+ pgvector image) | Leads, conversations, call_queue, follow-ups, offers, sentiment |
@@ -164,7 +164,7 @@ Create a `.env` (or set in the platform's secret manager). **Required in product
 | `DATA_DIR` | `data` | Student uploads + offer PDFs — use persistent volume |
 | `MCP_ENABLED` | `true` | Model Context Protocol server |
 | `OUTBOUND_POLL_INTERVAL` / `FOLLOW_UP_POLL_INTERVAL` / `MAX_CALL_ATTEMPTS` | `10` / `30` / `3` | Outbound call engine |
-| `UNIVERSITY_NAME`, `OFFER_EMAIL`, `OFFER_VALID_DAYS`, `OFFER_GUARD_MINUTES`, `DEFAULT_PAYMENT_LINK` | UMD/FDU defaults | Offer-letter content |
+| `UNIVERSITY_NAME`, `OFFER_EMAIL`, `OFFER_VALID_DAYS`, `OFFER_GUARD_MINUTES`, `DEFAULT_PAYMENT_LINK` | Meridian University defaults | Offer-letter content |
 | `SENTIMENT_W1..W4`, `SENTIMENT_EWMA_LAMBDA`, `MIN_LABELED_OUTCOMES` | 0.30/0.30/0.25/0.15, 0.35, 100 | Sentiment scoring weights |
 | `BACKEND_BASE` | `http://localhost:8000` | Streamlit → FastAPI (set to `http://localhost:8000` if same host) |
 

@@ -1348,7 +1348,8 @@ async def twilio_whatsapp_webhook(
     # State machine for collecting missing info
     if not lead_name and is_name_like and not has_email:
         # User likely provided their name
-        await update_lead(lead["id"], name=Body.strip())
+        if lead_id:
+            await update_lead(lead_id, name=Body.strip())
         lead_name = Body.strip()  # Refresh local
         if not lead_email:
             answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
@@ -1356,7 +1357,8 @@ async def twilio_whatsapp_webhook(
             answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with Meridian admissions?"
     elif not lead_email and has_email:
         # User provided their email
-        await update_lead(lead["id"], email=Body.strip())
+        if lead_id:
+            await update_lead(lead_id, email=Body.strip())
         lead_email = Body.strip()  # Refresh local
         if not lead_name:
             answer = f"Got your email! And what's your name?"
@@ -1374,9 +1376,11 @@ async def twilio_whatsapp_webhook(
         # ── Admission intent detection ──────────────────────────
         is_interested, detected_prog = await _detect_admission_intent_whatsapp(msg_lower)
         if is_interested:
-            await update_lead(lead["id"], status="in_progress")
+            if lead_id:
+                await update_lead(lead_id, status="in_progress")
             if detected_prog and not lead_program:
-                await update_lead(lead["id"], program_interest=detected_prog)
+                if lead_id:
+                    await update_lead(lead_id, program_interest=detected_prog)
                 lead_program = detected_prog
             if not lead_program:
                 answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
@@ -1421,7 +1425,8 @@ async def twilio_whatsapp_webhook(
         elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
             detected = _detect_meridian_program(msg_lower)
             if detected:
-                await update_lead(lead["id"], program_interest=detected)
+                if lead_id:
+                    await update_lead(lead_id, program_interest=detected)
                 lead_program = detected
                 answer = (
                     f"**{detected}** — great choice! 🎓\n\n"

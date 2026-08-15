@@ -28,8 +28,8 @@
       <div class="crossnote markdown-preview  ">
       
 <h1 id="cloud-deployment--system-information">Cloud Deployment — System Information </h1>
-<p><strong>Project:</strong> University Admissions Voice AI Assistant (UMD / FDU)<br>
-<strong>Branch:</strong> <code>offerlaterupdate</code> · <strong>Generated:</strong> 2026-08-13<br>
+<p><strong>Project:</strong> University Admissions Voice AI Assistant (Meridian University)<br>
+<strong>Branch:</strong> <code>meridianDataUpdate</code> · <strong>Generated:</strong> 2026-08-13<br>
 <strong>Purpose:</strong> This document contains everything a cloud provider / DevOps engineer needs to deploy this system. Hand it over as the single source of truth for provisioning.</p>
 <hr>
 <h2 id="1-system-summary">1. System Summary </h2>
@@ -71,7 +71,7 @@
 <tr>
 <td>Vector DB</td>
 <td>ChromaDB (persistent local)</td>
-<td>Admissions knowledge base (from UMD/FDU profile PDF)</td>
+<td>Admissions knowledge base (Meridian — content/meridian markdown)</td>
 </tr>
 <tr>
 <td>STT</td>
@@ -385,7 +385,7 @@ langchain-text-splitters (1.1.2), pypdf (6.14.2)     # ChromaDB build path (RAG)
 </tr>
 <tr>
 <td><code>UNIVERSITY_NAME</code>, <code>OFFER_EMAIL</code>, <code>OFFER_VALID_DAYS</code>, <code>OFFER_GUARD_MINUTES</code>, <code>DEFAULT_PAYMENT_LINK</code></td>
-<td>UMD/FDU defaults</td>
+<td>Meridian University defaults</td>
 <td>Offer-letter content</td>
 </tr>
 <tr>
@@ -418,7 +418,7 @@ langchain-text-splitters (1.1.2), pypdf (6.14.2)     # ChromaDB build path (RAG)
 <td><code>chroma_local_db/</code></td>
 <td>61 MB</td>
 <td>✅</td>
-<td>Vector store. Ship as-is, or rebuild from <code>content/sample_data/UMD_and_FDU_University_Profile_Report.pdf</code> (built by Streamlit app / <code>app/rag.py</code> on first run if empty — requires Ollama + embedding model).</td>
+<td>Vector store. Ship as-is, or rebuild from <code>content/meridian/meridian_knowledge_base.md</code> via <code>scripts/rebuild_rag_index.py</code> (requires Ollama + embedding model).</td>
 </tr>
 <tr>
 <td><code>content/sample_data/*.pdf</code> (+ <code>.docx</code>)</td>
