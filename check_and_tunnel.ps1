@@ -21,6 +21,7 @@ $ProjectRoot = $PSScriptRoot
 $FastAPIPort = 8000
 $StreamlitMainPort = 8501
 $StreamlitDashboardPort = 8502
+$TwilioPhone = if ($env:TWILIO_PHONE_NUMBER) { $env:TWILIO_PHONE_NUMBER } else { "+19788198953" }
 
 $ESC  = [char]27
 $G = "$ESC[92m"; $Y = "$ESC[93m"; $R = "$ESC[91m"; $C = "$ESC[96m"
@@ -31,13 +32,13 @@ function Write-OK     { Write-Host ("${G}  [OK]   $($args -join ' ')${N}") }
 function Write-Warn   { Write-Host ("${Y}  [WARN] $($args -join ' ')${N}") }
 function Write-Err    { Write-Host ("${R}  [DOWN] $($args -join ' ')${N}") }
 
-# Tunnel definitions: port, label, cache file, metrics port
+# Tunnel definitions: port, label, cache file.
+# Metrics ports are NOT pinned -- tunnels start with --metrics localhost:0
+# (ephemeral) so concurrent/duplicate starts can never clash on a bind.
 $Tunnels = @(
-    # NOTE: 20241 is cloudflared's DEFAULT metrics port -- the tunnel started by
-    # start_services.ps1 binds it, so the FastAPI entry must use its own port.
-    @{ Port = $FastAPIPort;           Label = "FastAPI";    CacheFile = Join-Path $ProjectRoot ".tunnel_8000"; MetricsPort = 20244 },
-    @{ Port = $StreamlitMainPort;     Label = "Streamlit";  CacheFile = Join-Path $ProjectRoot ".tunnel_8501"; MetricsPort = 20242 },
-    @{ Port = $StreamlitDashboardPort; Label = "Dashboard"; CacheFile = Join-Path $ProjectRoot ".tunnel_8502"; MetricsPort = 20243 }
+    @{ Port = $FastAPIPort;           Label = "FastAPI";    CacheFile = Join-Path $ProjectRoot ".tunnel_8000" },
+    @{ Port = $StreamlitMainPort;     Label = "Streamlit";  CacheFile = Join-Path $ProjectRoot ".tunnel_8501" },
+    @{ Port = $StreamlitDashboardPort; Label = "Dashboard"; CacheFile = Join-Path $ProjectRoot ".tunnel_8502" }
 )
 
 # ---- Helper ----------------------------------------------------------------
@@ -100,7 +101,15 @@ function Start-SingleTunnel($tunnelDef) {
     $port      = $tunnelDef.Port
     $label     = $tunnelDef.Label
     $cacheFile = $tunnelDef.CacheFile
-    $metrics   = $tunnelDef.MetricsPort
+
+    # Never double-start: a live cloudflared for this port may exist without
+    # a usable cache URL (e.g. logs were cleaned).
+    $existing = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "localhost:$port" }
+    if ($existing) {
+        Write-Warn "$label tunnel process already running but URL unknown -- kill cloudflared and re-run to recreate"
+        return $null
+    }
 
     $stdoutLog = Join-Path $env:TEMP "cloudflared_${port}_stdout.log"
     $stderrLog = Join-Path $env:TEMP "cloudflared_${port}_stderr.log"
@@ -111,7 +120,7 @@ function Start-SingleTunnel($tunnelDef) {
     }
 
     Start-Process -FilePath "cloudflared" `
-        -ArgumentList "tunnel", "--url", "http://localhost:$port", "--metrics", "localhost:$metrics" `
+        -ArgumentList "tunnel", "--url", "http://localhost:$port", "--metrics", "localhost:0" `
         -RedirectStandardOutput $stdoutLog `
         -RedirectStandardError $stderrLog `
         -WindowStyle Hidden
@@ -232,6 +241,12 @@ else              { Write-Err "Streamlit Dashboard  http://localhost:$StreamlitD
 # ==== Step 4: Check / start Cloudflare tunnels =============================
 Write-Step "Cloudflare Tunnels"
 
+if (-not (Get-Command "cloudflared" -ErrorAction SilentlyContinue) -and -not $SkipTunnel) {
+    Write-Err "cloudflared not found! Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/"
+    Write-Err "Re-run with -SkipTunnel to see the status card without tunnels."
+    exit 1
+}
+
 $TunnelHosts = @{}  # port -> hostname
 
 foreach ($t in $Tunnels) {
@@ -251,6 +266,14 @@ foreach ($t in $Tunnels) {
     } else {
         Write-Err "$label tunnel DOWN (SkipTunnel set)"
     }
+}
+
+# Keep the app's own tunnel file in sync when the FastAPI tunnel is known
+# (the app resolves its public webhooks from .whatsapp_tunnel).
+if ($TunnelHosts[$FastAPIPort]) {
+    $whatsappFile = Join-Path $ProjectRoot ".whatsapp_tunnel"
+    [System.IO.File]::WriteAllText($whatsappFile, $TunnelHosts[$FastAPIPort])
+    Write-OK ".whatsapp_tunnel updated -> $($TunnelHosts[$FastAPIPort])"
 }
 
 # ==== Step 5: Status table =================================================
@@ -310,7 +333,7 @@ if ($fTunnel) {
     # -- Voice webhook (auto-updated by start_services.ps1, shown for reference)
     Write-Host "${B}1. Voice Webhook (Phone Number)${N}"
     Write-Host "   URL:  ${G}https://$fTunnel/twilio/voice${N}"
-    Write-Host "   Where: Twilio Console -> Phone Numbers -> +19788198953 -> Voice & Fax"
+    Write-Host "   Where: Twilio Console -> Phone Numbers -> $TwilioPhone -> Voice & Fax"
     Write-Host "          Set 'A call comes in' to this URL (HTTP GET)"
     Write-Host "   Auto:  start_services.ps1 updates this via API -- no manual step needed"
     Write-Host ""
@@ -326,7 +349,7 @@ if ($fTunnel) {
     # -- Status callback (for reference)
     Write-Host "${B}3. Outbound Call Status (optional)${N}"
     Write-Host "   URL:  ${C}https://$fTunnel/twilio/outbound/status${N}"
-    Write-Host "   Where: Twilio Console -> Phone Numbers -> +19788198953 -> Voice & Fax"
+    Write-Host "   Where: Twilio Console -> Phone Numbers -> $TwilioPhone -> Voice & Fax"
     Write-Host "          Set 'Call status changes' to this URL (HTTP POST)"
     Write-Host ""
 }

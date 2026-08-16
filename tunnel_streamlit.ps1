@@ -14,12 +14,25 @@ $G = "$ESC[92m"; $Y = "$ESC[93m"; $R = "$ESC[91m"; $C = "$ESC[96m"
 $B = "$ESC[1m"; $N = "$ESC[0m"
 
 $Tunnels = @(
-    @{ Port = 8501; Label = "Streamlit Main"; Cache = Join-Path $ProjectRoot ".tunnel_8501"; Metrics = 20242 },
-    @{ Port = 8502; Label = "Dashboard";      Cache = Join-Path $ProjectRoot ".tunnel_8502"; Metrics = 20243 }
+    @{ Port = 8501; Label = "Streamlit Main"; Cache = Join-Path $ProjectRoot ".tunnel_8501" },
+    @{ Port = 8502; Label = "Dashboard";      Cache = Join-Path $ProjectRoot ".tunnel_8502" }
 )
 
 function Test-Url($url) {
     try { return (curl.exe -s -o NUL -w "%{http_code}" $url 2>$null) -eq "200" } catch { return $false }
+}
+
+# cloudflared must exist before we burn 40s timeouts per port
+if (-not (Get-Command "cloudflared" -ErrorAction SilentlyContinue)) {
+    Write-Host "${R}cloudflared not found! Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/${N}"
+    exit 1
+}
+
+# A tunnel for a port may already be running (started by check_and_tunnel.ps1
+# or bootstrap) with no usable cache — never start a second one.
+function Get-TunnelProcessForPort($port) {
+    Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "localhost:$port" }
 }
 
 Write-Host "${B}${C}Starting Streamlit Tunnels...${N}`n"
@@ -28,7 +41,6 @@ foreach ($t in $Tunnels) {
     $port    = $t.Port
     $label   = $t.Label
     $cache   = $t.Cache
-    $metrics = $t.Metrics
 
     # Check if a tunnel is already alive for this port
     $hostname = $null
@@ -41,13 +53,22 @@ foreach ($t in $Tunnels) {
     }
 
     if (-not $hostname) {
+        # Never double-start: a live cloudflared for this port may exist
+        # without a usable cache URL (e.g. logs were cleaned).
+        $existing = Get-TunnelProcessForPort $port
+        if ($existing) {
+            Write-Host "${Y}  [..]   $label tunnel process is running but its URL is unknown${N}"
+            Write-Host "${Y}         Kill it and re-run to recreate: pkill -f cloudflared / taskkill /IM cloudflared.exe${N}"
+            continue
+        }
+
         Write-Host "${Y}  [..]   Starting $label tunnel on port $port ...${N}"
         $stdoutLog = Join-Path $env:TEMP "cloudflared_${port}_stdout.log"
         $stderrLog = Join-Path $env:TEMP "cloudflared_${port}_stderr.log"
         foreach ($f in @($stdoutLog, $stderrLog)) { if (Test-Path $f) { Remove-Item $f -Force } }
 
         Start-Process -FilePath "cloudflared" `
-            -ArgumentList "tunnel", "--url", "http://localhost:$port", "--metrics", "localhost:$metrics" `
+            -ArgumentList "tunnel", "--url", "http://localhost:$port", "--metrics", "localhost:0" `
             -RedirectStandardOutput $stdoutLog `
             -RedirectStandardError $stderrLog `
             -WindowStyle Hidden
@@ -68,8 +89,19 @@ foreach ($t in $Tunnels) {
         }
 
         if ($hostname) {
+            # Verify reachable before declaring OK — fresh quick-tunnel
+            # hostnames can take a minute to resolve (DNS propagation).
+            $verify = $false
+            for ($v = 0; $v -lt 6 -and -not $verify; $v++) {
+                if ($v -gt 0) { Start-Sleep -Seconds 3 }
+                $verify = Test-Url "https://$hostname/"
+            }
             [System.IO.File]::WriteAllText($cache, $hostname)
-            Write-Host "${G}  [OK]   $label tunnel started: $hostname${N}"
+            if ($verify) {
+                Write-Host "${G}  [OK]   $label tunnel started: $hostname${N}"
+            } else {
+                Write-Host "${Y}  [..]   $label tunnel started but not yet reachable (DNS warm-up): $hostname${N}"
+            }
         } else {
             Write-Host "${R}  [FAIL] $label tunnel did not start${N}"
         }
@@ -85,7 +117,12 @@ foreach ($t in $Tunnels) {
     $label = $t.Label
     if (Test-Path $cache) {
         $hostname = (Get-Content $cache -Raw).Trim()
-        Write-Host "  ${label}: ${C}https://$hostname${N}"
+        # Re-verify before sharing — a cached URL can outlive its tunnel.
+        if ($hostname -and (Test-Url "https://$hostname/")) {
+            Write-Host "  ${label}: ${C}https://$hostname${N}"
+        } else {
+            Write-Host "  ${label}: ${R}tunnel down (re-run to recreate)${N}"
+        }
     } else {
         Write-Host "  ${label}: ${R}not running${N}"
     }
