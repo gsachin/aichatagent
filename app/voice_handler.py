@@ -83,7 +83,7 @@ def _get_tts_engine():
 
     from kokoro_onnx import Kokoro
 
-    cache_dir = os.path.expanduser(r"~\.cache\pipecat\kokoro-onnx")
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "pipecat", "kokoro-onnx")
     _tts_engine = Kokoro(
         os.path.join(cache_dir, "kokoro-v1.0.onnx"),
         os.path.join(cache_dir, "voices-v1.0.bin"),

@@ -218,7 +218,7 @@ def load_tts():
     """Load Kokoro TTS engine (local onnx, no internet needed)."""
     try:
         from kokoro_onnx import Kokoro
-        cache_dir = os.path.expanduser(r"~\.cache\pipecat\kokoro-onnx")
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "pipecat", "kokoro-onnx")
         model_path = os.path.join(cache_dir, "kokoro-v1.0.onnx")
         voices_path = os.path.join(cache_dir, "voices-v1.0.bin")
         return Kokoro(model_path, voices_path)
