@@ -99,11 +99,10 @@ def main() -> int:
     # 3. Negative canary: no blocked markers anywhere in the built store
     try:
         import chromadb
-        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
-        from app.rag import EMBED_MODEL, OLLAMA_BASE_URL
+        from app.llm_backend import get_embedding_function
 
         client = chromadb.PersistentClient(path=str(TARGET))
-        ef = OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+        ef = get_embedding_function()
         collections = client.list_collections()
         first = collections[0]
         coll_name = first if isinstance(first, str) else first.name

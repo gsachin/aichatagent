@@ -1206,9 +1206,9 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
 
     # LLM confirmation
     try:
-        import ollama
-        response = ollama.chat(
-            model="qwen2.5:7b-instruct-q3_K_M",
+        from app.llm_backend import chat as backend_chat
+
+        raw = backend_chat(
             messages=[{
                 "role": "user",
                 "content": (
@@ -1224,9 +1224,9 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
                     f"User message:\n{msg_lower[-800:]}"
                 ),
             }],
-            options={"num_ctx": 1024},
-        )
-        raw = response["message"]["content"].strip().lower()
+            preferred=["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"],
+            num_ctx=1024,
+        ).strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
             return True, detected_program

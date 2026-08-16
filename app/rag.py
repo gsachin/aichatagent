@@ -18,11 +18,9 @@ Provides:
     retrieve_context(q)  — MMR (or hybrid) retrieval, returns formatted context
 """
 
-import json
 import logging
 import os
 import re
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -154,11 +152,11 @@ def get_vector_store():
 def _load_with_langchain():
     """Load the persisted collection through LangChain (MMR-capable)."""
     from langchain_community.vectorstores import Chroma
-    from langchain_ollama import OllamaEmbeddings
+    from app.llm_backend import get_langchain_embeddings
 
     return Chroma(
         persist_directory=str(CHROMA_DB_PATH),
-        embedding_function=OllamaEmbeddings(model=EMBED_MODEL),
+        embedding_function=get_langchain_embeddings(),
     )
 
 
@@ -192,7 +190,7 @@ def build_vector_store(dest_dir=None):
     """
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_community.vectorstores import Chroma
-    from langchain_ollama import OllamaEmbeddings
+    from app.llm_backend import get_langchain_embeddings
 
     dest = Path(dest_dir) if dest_dir else CHROMA_DB_PATH
 
@@ -231,7 +229,7 @@ def build_vector_store(dest_dir=None):
         return None
 
     logger.info(f"Building {len(all_chunks)} chunks into {dest} (cosine space)")
-    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+    embeddings = get_langchain_embeddings()
     return Chroma.from_documents(
         documents=all_chunks,
         embedding=embeddings,
@@ -244,8 +242,8 @@ def _build_raw_chromadb():
     """Fallback: load existing ChromaDB without LangChain dependency."""
     import chromadb
     try:
-        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
-        embed_fn = OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+        from app.llm_backend import get_embedding_function
+        embed_fn = get_embedding_function()
     except Exception:
         embed_fn = None
 
@@ -391,10 +389,10 @@ def retrieve_context_hybrid(query: str, top_k: int = MMR_K, fetch_k: int = MMR_F
     Falls back to MMR via retrieve_context() on any failure.
     """
     import chromadb
-    from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
+    from app.llm_backend import get_embedding_function
 
     client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-    ef = OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+    ef = get_embedding_function()
     col = client.get_collection("langchain", embedding_function=ef)
 
     # ── Dense side: Chroma KNN ──────────────────────────────────────
@@ -470,25 +468,10 @@ def retrieve_context(query: str) -> str:
 # ── LLM Query ──────────────────────────────────────────────────────────
 
 def _get_available_model() -> str:
-    """Find the best available Ollama model, preferring instruct variants."""
-    try:
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
+    """Find the best available model for the active backend (see llm_backend)."""
+    from app.llm_backend import pick_model
 
-        # Prefer instruct models, then any qwen
-        for preference in ("qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b-instruct", "qwen2.5:7b"):
-            if preference in models:
-                return preference
-
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        if qwen_models:
-            return qwen_models[0]
-
-        return OLLAMA_MODEL
-    except Exception:
-        return OLLAMA_MODEL
+    return pick_model(("qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b-instruct", "qwen2.5:7b"))
 
 
 def _best_distance(query: str) -> float | None:
@@ -498,10 +481,10 @@ def _best_distance(query: str) -> float | None:
     """
     try:
         import chromadb
-        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
+        from app.llm_backend import get_embedding_function
 
         client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-        ef = OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+        ef = get_embedding_function()
         col = client.get_collection("langchain", embedding_function=ef)
         r = col.query(query_texts=[query], n_results=1, include=["distances"])
         dists = (r.get("distances") or [[None]])[0]
@@ -545,23 +528,19 @@ def query_rag(question: str) -> str | None:
         )
     prompt += f"Student's question: {question}"
 
-    # Step 3: Query LLM
+    # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)
     try:
-        import ollama
+        from app.llm_backend import chat as backend_chat
 
         model = _get_available_model()
         logger.info(f"RAG query: model={model}, context_chars={len(context)}")
 
-        options = {"num_ctx": OLLAMA_NUM_CTX}
-        if OLLAMA_TEMPERATURE:
-            options["temperature"] = float(OLLAMA_TEMPERATURE)
-
-        response = ollama.chat(
-            model=model,
+        return backend_chat(
             messages=[{"role": "user", "content": prompt}],
-            options=options,
+            model=model,
+            num_ctx=OLLAMA_NUM_CTX,
+            temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
         )
-        return response["message"]["content"]
 
     except Exception:
         logger.exception("LLM query failed")

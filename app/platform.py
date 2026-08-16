@@ -53,17 +53,26 @@ _DEVICE_CONFIG: Optional[DeviceConfig] = None
 
 
 def _get_system_memory_gb() -> float:
-    """Get total system RAM in GB."""
+    """Get total system RAM in GB (psutil, POSIX sysconf, or torch fallback)."""
     if psutil:
-        return psutil.virtual_memory().total / (1024**3)
-    
+        try:
+            return psutil.virtual_memory().total / (1024**3)
+        except Exception:
+            pass
+
+    # POSIX fallback (macOS/Linux): page size × physical pages.
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024**3)
+    except (AttributeError, ValueError, OSError):
+        pass
+
     # Fallback: estimate from common platforms
     if torch is not None:
         try:
             return torch.tensor([]).device.total_memory / (1024**3)
         except Exception:
             pass
-    
+
     return 0.0  # Unknown
 
 
@@ -228,6 +237,21 @@ def supports_fp16() -> bool:
 def get_device() -> str:
     """Get device string for PyTorch model.to(device)."""
     return detect_compute_device()["device"]
+
+
+def get_whisper_device_config() -> tuple[str, str]:
+    """
+    Get (device, compute_type) for faster-whisper / CTranslate2.
+
+    CTranslate2 supports only 'cpu' and 'cuda' — it has no Metal backend,
+    so passing device="mps" on Apple Silicon raises ValueError
+    ("unsupported device mps") and silently kills STT. Map MPS to CPU
+    with int8 (NEON-accelerated on Apple Silicon); leave CUDA/CPU as-is.
+    """
+    config = detect_compute_device()
+    if config["device"] == "mps":
+        return "cpu", "int8"
+    return config["device"], config["compute_type"]
 
 
 def get_compute_type() -> str:

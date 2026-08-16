@@ -19,7 +19,10 @@ python-dotenv==1.2.2
 
 # ── ML / audio ────────────────────────────────────────────────────────
 torch==2.6.0
-onnxruntime-gpu==1.28.0
+# GPU-capable onnxruntime ships no macOS wheels — plain build on Darwin.
+# Darwin is pinned to 1.24.x because pipecat-ai 1.6.0 requires onnxruntime~=1.24.3.
+onnxruntime-gpu==1.28.0; platform_system=="Windows" or platform_system=="Linux"
+onnxruntime==1.24.3; platform_system=="Darwin"
 numpy==2.4.6
 scipy==1.17.1
 soundfile==0.14.0
@@ -47,3 +50,12 @@ fpdf2==2.8.7
 
 # ── Optional: MCP server (app/mcp/server.py) — not required for voice/chat/UI.
 mcp==2.0.0
+
+# ── macOS Apple Silicon (MLX backend; replaces Ollama for LLM on Mac) ──
+# Windows/Linux keep using Ollama (see app/llm_backend.py). Versions pinned
+# from the verified macOS install (pip-resolved 2026-08-15).
+mlx-lm==0.31.3; platform_system=="Darwin"
+langchain-openai==1.5.1; platform_system=="Darwin"
+openai==2.54.0; platform_system=="Darwin"
+einops==0.8.2; platform_system=="Darwin"
+mlx-whisper==0.4.3; platform_system=="Darwin"

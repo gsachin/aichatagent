@@ -32,7 +32,6 @@ import json as _json
 import logging
 import os
 import re
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -80,21 +79,10 @@ class CompositeScore:
 
 
 def _get_llm_model() -> str:
-    """Find the best available Ollama model for sentiment extraction."""
-    try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = _json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-        # Prefer qwen, fall back to any available model
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        if qwen_models:
-            return qwen_models[0]
-        if models:
-            return models[0]
-    except Exception:
-        pass
-    return "qwen2.5:7b"
+    """Best available model for sentiment extraction (see llm_backend)."""
+    from app.llm_backend import pick_model
+
+    return pick_model(["qwen2.5:7b"])
 
 
 SENTIMENT_EXTRACTION_PROMPT = """You are a sales-call sentiment analyzer for a university admissions team.
@@ -147,14 +135,15 @@ async def extract_sentiment(transcript: str) -> ScoreResult:
     model = _get_llm_model()
 
     try:
-        import ollama
+        from app.llm_backend import chat as backend_chat
 
-        response = ollama.chat(
-            model=model,
+        raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 4096, "temperature": 0.1},
-        )
-        raw = response["message"]["content"].strip()
+            model=model,
+            num_ctx=4096,
+            temperature=0.1,
+            json_mode=True,
+        ).strip()
         logger.debug(f"Sentiment LLM raw: {raw[:200]}")
 
         # Parse JSON from response

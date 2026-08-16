@@ -9,22 +9,19 @@ Run:   python admissions_bot.py
 import os
 import sys
 import warnings
-import requests
 
 warnings.filterwarnings("ignore")
 
-# ── Step 0: Verify Ollama ──────────────────────────────────────────
+# ── Step 0: Verify LLM backend (Ollama or MLX) ─────────────────────
 print("--> Checking if AI server is running...")
-try:
-    resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
-    if resp.status_code == 200:
-        models = [m["name"] for m in resp.json().get("models", [])]
-        print(f"   Active. Models: {', '.join(models)}")
-    else:
-        print(f"   ERROR: Unexpected status {resp.status_code}")
-        sys.exit(1)
-except requests.ConnectionError:
-    print("   ERROR: AI not reachable. Is it running in system tray?")
+from app.llm_backend import is_ready, list_models, provider_name
+
+if is_ready():
+    models = list_models()
+    print(f"   Active ({provider_name()}). Models: {', '.join(models) or '(none listed)'}")
+else:
+    print(f"   ERROR: {provider_name()} backend not reachable. "
+          f"Is it running? (start_services.sh / start_services.ps1)")
     sys.exit(1)
 
 # ── Step 1: Load the shared vector store ────────────────────────────
@@ -43,13 +40,13 @@ if retriever is None:
 print("   Vector store loaded (shared Meridian store).")
 
 # ── Step 3: Build RAG chain ────────────────────────────────────────
-from langchain_ollama import ChatOllama
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from app.llm_backend import get_chat_model
 
-print("\n--> Booting Qwen 2.5 7B (temp=0.0)...")
-llm = ChatOllama(model="qwen2.5:7b", temperature=0.0)
+print(f"\n--> Booting Qwen 2.5 (temp=0.0) via {provider_name()}...")
+llm = get_chat_model(model="qwen2.5:7b", temperature=0.0)
 
 system_prompt = (
     "You are a warm, helpful, and highly precise University Admissions Advisor. "

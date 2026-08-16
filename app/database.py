@@ -167,8 +167,6 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
     """
     import json as _json
     import re
-    import urllib.request
-
     prompt = (
         "Extract candidate Name, Email, and Program from the following "
         "conversation transcript. Return ONLY valid JSON with keys: "
@@ -176,26 +174,15 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         f"\n\nTranscript:\n{transcript}"
     )
 
-    # Find available Ollama model
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = _json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        model = qwen_models[0] if qwen_models else "qwen2.5:7b"
-    except Exception:
-        model = "qwen2.5:7b"
+        from app.llm_backend import chat as backend_chat
 
-    try:
-        import ollama
-
-        response = ollama.chat(
-            model=model,
+        raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 2048},
+            preferred=["qwen2.5:7b"],
+            num_ctx=2048,
+            json_mode=True,
         )
-        raw = response["message"]["content"]
         logger.debug(f"LLM extraction raw: {raw}")
 
         # Try to parse JSON from the response

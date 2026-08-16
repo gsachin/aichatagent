@@ -54,6 +54,28 @@ REQUIRED_MODELS = ["qwen2.5:7b-instruct-q3_K_M", "nomic-embed-text"]
 OLLAMA_API = "http://127.0.0.1:11434"
 DOCKER_DESKTOP_WIN = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
 
+# Apple MLX backend (macOS Apple Silicon only — replaces Ollama there)
+MLX_MODEL = os.environ.get("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
+MLX_EMBED_MODEL = os.environ.get("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+MLX_PORT = int(os.environ.get("MLX_PORT", "1234"))
+MLX_BASE_URL = os.environ.get("MLX_BASE_URL", f"http://127.0.0.1:{MLX_PORT}")
+IS_APPLE_SILICON = IS_MACOS and platform.machine() in ("arm64", "aarch64")
+
+
+def _llm_provider() -> str:
+    """'mlx' on Apple Silicon unless LLM_PROVIDER says otherwise, else 'ollama'."""
+    explicit = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+    if explicit in ("mlx", "ollama"):
+        return explicit
+    return "mlx" if IS_APPLE_SILICON else "ollama"
+
+
+def _hf_model_cached(model_id: str) -> bool:
+    """Filesystem-only check that a HuggingFace model is fully downloaded."""
+    org, repo = model_id.split("/", 1)
+    hub = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+    return (hub / f"models--{org}--{repo}").is_dir()
+
 # winget package IDs (Windows)
 WINGET_PACKAGES = {
     "python": "Python.Python.3.11",
@@ -193,7 +215,32 @@ def _missing_models(models: list) -> list:
     ]
 
 
-def check_ollama() -> bool:
+def _mlx_models_served() -> list:
+    data = _http_get(f"{MLX_BASE_URL}/v1/models")
+    if data is None:
+        return []
+    try:
+        return [m.get("id", "") for m in json.loads(data).get("data", [])]
+    except Exception:
+        return []
+
+
+def check_llm() -> bool:
+    """Verify the active LLM backend (MLX on Apple Silicon, Ollama elsewhere)."""
+    if _llm_provider() == "mlx":
+        if not _hf_model_cached(MLX_MODEL):
+            err(f"MLX model not downloaded: {MLX_MODEL} (install phase pulls it)")
+            return False
+        if not _port_listening(MLX_PORT):
+            warn(f"MLX model cached but server not serving on :{MLX_PORT}")
+            return False
+        served = _mlx_models_served()
+        if served and not any(m.startswith(MLX_MODEL) for m in served):
+            warn(f"MLX server serving different model: {served[0]}")
+            return False
+        ok(f"MLX server up on :{MLX_PORT} serving {MLX_MODEL}")
+        return True
+
     if not which("ollama"):
         err("ollama binary not found")
         return False
@@ -241,8 +288,16 @@ def check_gpu() -> None:
             ok(f"GPU: {r.stdout.strip().replace(chr(10), ' | ')}")
         else:
             warn("nvidia-smi present but query failed")
-    else:
-        warn("No NVIDIA GPU detected — STT/TTS will fall back to CPU (slow)")
+        return
+    if IS_APPLE_SILICON:
+        try:
+            r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+            mem_gb = int(r.stdout.strip()) / (1024**3)
+            ok(f"Apple Silicon (Metal/MLX): {mem_gb:.0f} GB unified memory")
+        except Exception:
+            ok("Apple Silicon (Metal/MLX) detected")
+        return
+    warn("No NVIDIA GPU detected — STT/TTS will fall back to CPU (slow)")
 
 
 def check_env_file() -> bool:
@@ -272,7 +327,10 @@ def check_rag_store() -> bool:
 
 
 def check_ports() -> None:
-    for name, port in (("8000 (FastAPI)", 8000), ("8501 (Chatbot)", 8501), ("8502 (Dashboard)", 8502)):
+    ports = [("8000 (FastAPI)", 8000), ("8501 (Chatbot)", 8501), ("8502 (Dashboard)", 8502)]
+    if _llm_provider() == "mlx":
+        ports.append((f"{MLX_PORT} (MLX LLM)", MLX_PORT))
+    for name, port in ports:
         if _port_listening(port):
             warn(f"port {port} in use ({name}) — may already be running")
         else:
@@ -316,7 +374,9 @@ def install_macos() -> None:
         warn("Homebrew missing — install with:")
         print('    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
         return
-    for pkg in ("python@3.11", "ollama", "cloudflared", "ffmpeg"):
+    # Note: no ollama on macOS — the LLM runs on Apple MLX (mlx-lm,
+    # installed via pip into .venv by ensure_venv/requirements markers).
+    for pkg in ("python@3.11", "cloudflared", "ffmpeg"):
         if not which(pkg):
             run(["brew", "install", pkg])
     if not which("docker"):
@@ -404,7 +464,36 @@ def ensure_env_file() -> None:
             warn(f".env missing {key} — related features will degrade")
 
 
-def ensure_ollama_up() -> bool:
+def ensure_llm_up() -> bool:
+    """Start the LLM backend for this platform (MLX server or Ollama)."""
+    if _llm_provider() == "mlx":
+        return _ensure_mlx_up()
+    return _ensure_ollama_up()
+
+
+def _ensure_mlx_up() -> bool:
+    if _port_listening(MLX_PORT):
+        return True
+    if DRY_RUN:
+        print(f"    $ start mlx_lm.server on :{MLX_PORT} (model {MLX_MODEL})")
+        return True
+    if not VENV_PY.is_file():
+        warn("no venv — cannot start the MLX server; run full bootstrap first")
+        return False
+    logs = ROOT / "logs"
+    logs.mkdir(exist_ok=True)
+    _detach(
+        [str(VENV_PY), "-m", "mlx_lm.server", "--model", MLX_MODEL,
+         "--host", "127.0.0.1", "--port", str(MLX_PORT)],
+        logs / "mlx_server.log",
+    )
+    # First load of a 14B model can take well over a minute.
+    return _wait_for(
+        "MLX server", lambda: _http_get(f"{MLX_BASE_URL}/v1/models") is not None,
+        90, 2, f"MLX server up on :{MLX_PORT} serving {MLX_MODEL}")
+
+
+def _ensure_ollama_up() -> bool:
     if _port_listening(11434):
         return True
     if DRY_RUN:
@@ -425,6 +514,22 @@ def ensure_ollama_up() -> bool:
 
 
 def ensure_models() -> None:
+    if _llm_provider() == "mlx":
+        step("Ensuring MLX models (HuggingFace downloads)")
+        if not VENV_PY.is_file():
+            warn("no venv — cannot download MLX models; run full bootstrap first")
+            return
+        for model_id in (MLX_MODEL, MLX_EMBED_MODEL):
+            if _hf_model_cached(model_id):
+                ok(f"model cached: {model_id}")
+                continue
+            print(f"    downloading {model_id} (one-time, several GB)...")
+            run([str(VENV_PY), "-c",
+                 f"from huggingface_hub import snapshot_download; "
+                 f"snapshot_download('{model_id}')"])
+            ok(f"downloaded {model_id}")
+        return
+
     models = _ollama_models()
     missing = _missing_models(models)
     for m in REQUIRED_MODELS:
@@ -525,6 +630,47 @@ def _detach(cmd, log_path: Path, cwd=ROOT):
     f.close()
 
 
+def _prewarm_llm() -> None:
+    """Keep the LLM resident in memory before the first real call (PS1 parity)."""
+    if DRY_RUN:
+        print("    $ (pre-warm LLM)")
+        return
+    if _llm_provider() == "mlx":
+        body = json.dumps({
+            "model": MLX_MODEL,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{MLX_BASE_URL}/v1/chat/completions", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120):
+                ok(f"MLX model pre-warmed ({MLX_MODEL})")
+        except Exception:
+            warn("MLX pre-warm request failed")
+        return
+
+    models = _ollama_models()
+    if not models:
+        warn("No Ollama models found — run: ollama pull qwen2.5:7b")
+        return
+    for model in models:
+        body = json.dumps({
+            "model": model, "prompt": "ping", "keep_alive": "24h", "max_tokens": 1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_API}/api/generate", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120):
+                ok(f"pre-warmed {model} (keep_alive=24h)")
+        except Exception:
+            warn(f"pre-warm failed for {model}")
+
+
 def start_unix(args) -> None:
     step("Phase D — starting services (native orchestration)")
     logs = ROOT / "logs"
@@ -536,6 +682,9 @@ def start_unix(args) -> None:
         _detach([py, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
                 logs / "fastapi.log")
     _wait_for("FastAPI", lambda: _port_listening(8000), 90, 2, "FastAPI up on :8000")
+
+    # 1b. LLM pre-warm (MLX chat or Ollama keep_alive=24h, PS1 parity)
+    _prewarm_llm()
 
     # 2. Cloudflare tunnel for FastAPI
     tunnel_log = logs / "cloudflared_8000.log"
@@ -620,7 +769,7 @@ def main() -> int:
     step("Phase B — pre-requisite check")
     check_python()
     check_docker()
-    check_ollama()
+    check_llm()
     check_cloudflared()
     check_ffmpeg()
     check_gpu()
@@ -645,7 +794,7 @@ def main() -> int:
             ensure_docker_daemon()
             ensure_venv()
             ensure_env_file()
-            ensure_ollama_up()
+            ensure_llm_up()
             ensure_models()
             ensure_postgres()
             ensure_rag_store()
@@ -659,7 +808,7 @@ def main() -> int:
     else:
         ensure_docker_daemon()
         ensure_postgres()
-        ensure_ollama_up()
+        ensure_llm_up()
         start_unix(args)
 
     print("\n" + _c("g", "Bootstrap complete."))

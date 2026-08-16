@@ -52,16 +52,23 @@ GPU_AVAILABLE = PLATFORM_CONFIG["device"] != "cpu"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _vram_info() -> str:
-    """Human-readable GPU VRAM string for logging."""
+    """Human-readable GPU VRAM string for logging (CUDA or Apple unified)."""
     if not GPU_AVAILABLE:
         return "VRAM: N/A"
     try:
-        import torch
-        total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        used = torch.cuda.memory_allocated(0) / (1024**3)
-        return f"VRAM: {used:.2f} GB used / {total:.2f} GB total"
+        if PLATFORM_CONFIG["device"] == "cuda":
+            import torch
+            total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            used = torch.cuda.memory_allocated(0) / (1024**3)
+            return f"VRAM: {used:.2f} GB used / {total:.2f} GB total"
+        if PLATFORM_CONFIG["platform"] == "apple_silicon":
+            from app.platform import _get_system_memory_gb
+            total = _get_system_memory_gb()
+            if total > 0:
+                return f"Unified memory: {total:.1f} GB (Metal/MLX shared)"
     except Exception:
-        return "VRAM: N/A"
+        pass
+    return "VRAM: N/A"
 
 
 # ── ChromaDB context retriever ───────────────────────────────────────
@@ -95,6 +102,46 @@ def build_rag_prompt(transcript: str) -> str:
 
 
 # ── Pipeline factory ─────────────────────────────────────────────────
+
+def _build_llm_service():
+    """
+    Build the Pipecat LLM service for the active backend.
+
+    Ollama (Windows/Linux) -> OLLamaLLMService (unchanged).
+    MLX (Apple Silicon)    -> OpenAILLMService pointed at mlx_lm.server
+                              (OpenAI-compatible, streaming included).
+    Returns None when the service is unavailable or init fails.
+    """
+    from app.llm_backend import provider_name, MLX_MODEL, MLX_BASE_URL
+
+    try:
+        if provider_name() == "mlx":
+            from pipecat.services.openai.llm import OpenAILLMService
+
+            llm = OpenAILLMService(
+                settings=OpenAILLMService.Settings(model=MLX_MODEL),
+                base_url=f"{MLX_BASE_URL}/v1",
+                api_key="mlx",  # local server — any non-empty key works
+            )
+            logger.info(f"  [OK] OpenAILLMService initialized (MLX model={MLX_MODEL})")
+            return llm
+
+        from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
+
+        llm = OLLamaLLMService(
+            model=DEFAULT_LLM_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            settings=OllamaLLMSettings(),
+        )
+        logger.info(f"  [OK] OLLamaLLMService initialized (model={DEFAULT_LLM_MODEL})")
+        return llm
+    except ImportError:
+        logger.warning("  [SKIP] LLM service not available for this backend")
+        return None
+    except Exception as e:
+        logger.warning(f"  [SKIP] LLM init failed: {e}")
+        return None
+
 
 async def create_local_voice_pipeline(transport=None):
     """
@@ -140,13 +187,17 @@ async def create_local_voice_pipeline(transport=None):
     # ---- 2. Speech-to-Text (Faster-Whisper) --------------------------
     try:
         from pipecat.services.whisper.stt import WhisperSTTService, WhisperSTTSettings
+        from app.platform import get_whisper_device_config
 
+        # CTranslate2 has no Metal backend — on Apple Silicon this maps
+        # mps -> cpu + int8 (NEON-accelerated) instead of raising.
+        stt_device, stt_compute = get_whisper_device_config()
         stt = WhisperSTTService(
             settings=WhisperSTTSettings(model=STT_MODEL),
-            device=DEVICE,
-            compute_type=COMPUTE_TYPE,
+            device=stt_device,
+            compute_type=stt_compute,
         )
-        logger.info(f"  [OK] WhisperSTTService initialized (model={STT_MODEL}, device={DEVICE})")
+        logger.info(f"  [OK] WhisperSTTService initialized (model={STT_MODEL}, device={stt_device})")
     except ImportError:
         logger.warning("  [SKIP] WhisperSTTService not available")
         stt = None
@@ -154,22 +205,8 @@ async def create_local_voice_pipeline(transport=None):
         logger.warning(f"  [SKIP] STT init failed: {e}")
         stt = None
 
-    # ---- 3. LLM (Ollama / Qwen) --------------------------------------
-    try:
-        from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
-
-        llm = OLLamaLLMService(
-            model=DEFAULT_LLM_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            settings=OllamaLLMSettings(),
-        )
-        logger.info(f"  [OK] OLLamaLLMService initialized (model={DEFAULT_LLM_MODEL})")
-    except ImportError:
-        logger.warning("  [SKIP] OLLamaLLMService not available")
-        llm = None
-    except Exception as e:
-        logger.warning(f"  [SKIP] LLM init failed: {e}")
-        llm = None
+    # ---- 3. LLM (Ollama on Windows/Linux, MLX server on Apple Silicon)
+    llm = _build_llm_service()
 
     # ---- 4. Text-to-Speech (Kokoro) ----------------------------------
     try:
@@ -274,25 +311,13 @@ async def test_pipeline_with_text(user_text: str) -> str | None:
     prompt = build_rag_prompt(user_text)
 
     try:
-        import ollama
+        from app.llm_backend import chat as backend_chat
 
-        # Find available model
-        import urllib.request
-
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        model = qwen_models[0] if qwen_models else DEFAULT_LLM_MODEL
-
-        response = ollama.chat(
-            model=model,
+        answer = backend_chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": NUM_CTX},
+            preferred=[DEFAULT_LLM_MODEL],
+            num_ctx=NUM_CTX,
         )
-        answer = response["message"]["content"]
         logger.info(f"LLM response: {answer[:100]}...")
         return answer
 

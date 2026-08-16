@@ -138,23 +138,10 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
 
     # Try to parse a date from the reason using the LLM
     try:
-        import ollama
-        import urllib.request
-
-        # Find available model
-        try:
-            req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = _json.loads(resp.read())
-                models = [m.get("name", "") for m in data.get("models", [])]
-            qwen_models = [m for m in models if "qwen" in m.lower()]
-            model = qwen_models[0] if qwen_models else "qwen2.5:7b"
-        except Exception:
-            model = "qwen2.5:7b"
+        from app.llm_backend import chat as backend_chat
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        response = ollama.chat(
-            model=model,
+        raw = backend_chat(
             messages=[
                 {
                     "role": "user",
@@ -169,9 +156,9 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
                     ),
                 }
             ],
-            options={"num_ctx": 512},
-        )
-        raw = response["message"]["content"].strip()
+            preferred=["qwen2.5:7b"],
+            num_ctx=512,
+        ).strip()
         # Extract ISO-ish string
         match = re.search(
             r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?", raw
@@ -339,23 +326,9 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
         if kw in lower:
             # Use LLM to confirm
             try:
-                import json as _json
-                import urllib.request
+                from app.llm_backend import chat as backend_chat
 
-                try:
-                    req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        data = _json.loads(resp.read())
-                        models = [m.get("name", "") for m in data.get("models", [])]
-                    qwen_models = [m for m in models if "qwen" in m.lower()]
-                    model = qwen_models[0] if qwen_models else "qwen2.5:7b"
-                except Exception:
-                    model = "qwen2.5:7b"
-
-                import ollama
-
-                response = ollama.chat(
-                    model=model,
+                raw = backend_chat(
                     messages=[
                         {
                             "role": "user",
@@ -368,9 +341,9 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
                             ),
                         }
                     ],
-                    options={"num_ctx": 2048},
-                )
-                raw = response["message"]["content"].strip().lower()
+                    preferred=["qwen2.5:7b"],
+                    num_ctx=2048,
+                ).strip().lower()
                 if raw.startswith("yes"):
                     return True, kw
             except Exception:
@@ -415,9 +388,9 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
         return False, ""
 
     try:
-        import ollama
-        response = ollama.chat(
-            model="qwen2.5:7b-instruct-q3_K_M",
+        from app.llm_backend import chat as backend_chat
+
+        raw = backend_chat(
             messages=[{
                 "role": "user",
                 "content": (
@@ -432,9 +405,9 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
                     f"Transcript (last 1000 chars):\n{transcript[-1000:]}"
                 ),
             }],
-            options={"num_ctx": 1024},
-        )
-        raw = response["message"]["content"].strip().lower()
+            preferred=["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"],
+            num_ctx=1024,
+        ).strip().lower()
         if raw.startswith("yes"):
             return True, "llm_detected"
     except Exception:

@@ -51,12 +51,11 @@ def _get_stt_model():
 
     from faster_whisper import WhisperModel
 
-    # Detect compute device
+    # Detect compute device — CTranslate2 has no Metal backend, so Apple
+    # Silicon (mps) maps to CPU with NEON-accelerated int8.
     try:
-        from app.platform import detect_compute_device
-        platform = detect_compute_device()
-        device = platform["device"]
-        compute_type = platform["compute_type"]
+        from app.platform import get_whisper_device_config
+        device, compute_type = get_whisper_device_config()
     except Exception:
         device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
         compute_type = "int8" if device == "cuda" else "float32"

@@ -165,21 +165,21 @@ st.caption("Ask me anything about Meridian — type or use your voice.")
 @st.cache_resource(show_spinner=False)
 def load_rag_chain():
     """Initialize the full RAG pipeline and return the chain."""
-    from langchain_ollama import ChatOllama
     from langchain_classic.chains import create_retrieval_chain
     from langchain_classic.chains.combine_documents import create_stuff_documents_chain
     from langchain_core.prompts import ChatPromptTemplate
 
     # Use shared RAG module — single source of truth for all interfaces
     from app.rag import get_retriever, SYSTEM_PROMPT
+    from app.llm_backend import get_chat_model
 
     retriever = get_retriever()
     if retriever is None:
         st.error("Failed to initialize vector store. Check that the PDF exists.")
         st.stop()
 
-    # Use the VRAM-optimized Qwen instruct model
-    llm = ChatOllama(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
+    # Ollama (Windows/Linux) or MLX server (Apple Silicon)
+    llm = get_chat_model(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
 
     system_prompt = SYSTEM_PROMPT
 
@@ -197,11 +197,10 @@ def load_rag_chain():
 def load_stt_model():
     """Load the Faster-Whisper model for speech-to-text."""
     from faster_whisper import WhisperModel
-    from app.platform import detect_compute_device
+    from app.platform import get_whisper_device_config
 
-    platform_config = detect_compute_device()
-    device = platform_config["device"]
-    compute_type = platform_config["compute_type"]
+    # CTranslate2 supports only cpu/cuda — mps is mapped to cpu+int8 here.
+    device, compute_type = get_whisper_device_config()
     model = WhisperModel("small.en", device=device, compute_type=compute_type)
     return model
 
@@ -282,14 +281,14 @@ def transcribe_audio(audio_bytes: bytes, sample_rate: int = 16000) -> str:
 # ── Initialize ─────────────────────────────────────────────────────
 if "rag_chain" not in st.session_state:
     with st.spinner("🔧 Loading PDF, building vector store, booting Qwen 2.5 7B..."):
-        # Quick health check
-        try:
-            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=3)
-            if r.status_code != 200:
-                st.error("❌ Ollama responded unexpectedly. Is it running?")
-                st.stop()
-        except requests.ConnectionError:
-            st.error("❌ Cannot reach Ollama. Make sure the app is running in your system tray.")
+        # Quick LLM backend health check (Ollama or MLX server)
+        from app.llm_backend import is_ready, provider_name
+
+        if not is_ready():
+            if provider_name() == "mlx":
+                st.error("❌ Cannot reach the MLX server. Start it with start_services.sh.")
+            else:
+                st.error("❌ Cannot reach Ollama. Make sure the app is running in your system tray.")
             st.stop()
 
         st.session_state.rag_chain = load_rag_chain()
