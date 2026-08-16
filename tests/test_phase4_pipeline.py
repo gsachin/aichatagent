@@ -42,15 +42,9 @@ def _has_gpu() -> bool:
 
 
 def _ollama_available() -> bool:
-    import urllib.request
-
-    try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            return "models" in data
-    except Exception:
-        return False
+    """Return True if the active LLM backend (Ollama or MLX) is reachable."""
+    from app.llm_backend import is_ready
+    return is_ready()
 
 
 def _is_applocker_block(error: Exception) -> bool:
@@ -143,7 +137,11 @@ class TestPhase4PipelineAssembly:
             pass
 
         try:
-            from pipecat.services.ollama.llm import OLLamaLLMService
+            from app.llm_backend import provider_name
+            if provider_name() == "mlx":
+                from pipecat.services.openai.llm import OpenAILLMService
+            else:
+                from pipecat.services.ollama.llm import OLLamaLLMService
             services.append("LLM")
         except ImportError:
             pass
@@ -194,13 +192,10 @@ class TestPhase4PipelineAssembly:
             # Fallback: use STT as placeholder to test pipeline shape
             tts = stt
 
-        # LLM — requires Ollama
+        # LLM — Ollama on Windows/Linux, OpenAI-compat MLX server on Apple Silicon
         if _ollama_available():
-            from pipecat.services.ollama.llm import OLLamaLLMService
-            llm = OLLamaLLMService(
-                model="qwen2.5:7b",
-                base_url="http://localhost:11434",
-            )
+            from app.pipeline import _build_llm_service
+            llm = _build_llm_service()
         else:
             llm = stt  # placeholder
 
@@ -353,18 +348,21 @@ class TestPhase4PipelineE2E:
 
         content = pipeline_path.read_text(encoding="utf-8")
 
-        # Check for key components
+        # Check for key components. The LLM step is backend-aware:
+        # OLLamaLLMService (Windows/Linux) or OpenAILLMService (Apple MLX).
         checks = [
             ("SileroVADAnalyzer", "VAD"),
             ("WhisperSTTService", "STT"),
-            ("OLLamaLLMService", "LLM"),
+            (("OLLamaLLMService", "OpenAILLMService"), "LLM"),
             ("KokoroTTSService", "TTS"),
             ("Pipeline", "Pipeline assembly"),
         ]
 
         for keyword, label in checks:
-            assert keyword in content, (
-                f"app/pipeline.py missing {label} component: '{keyword}' not found"
+            alternatives = keyword if isinstance(keyword, tuple) else (keyword,)
+            assert any(k in content for k in alternatives), (
+                f"app/pipeline.py missing {label} component: "
+                f"none of {alternatives} found"
             )
 
     def test_run_pipeline_test_script_exists(self):

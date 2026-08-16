@@ -156,27 +156,54 @@ python3 test_environment.py
 **Expected Output:**
 ```
 [OK] Python 3.11
-[OK] PyTorch 2.8.0
+[OK] PyTorch 2.6.0
 [OK] GPU available: apple_silicon (mps)
-[OK] VRAM Budget: 36.00 GB available, 16.00 GB required
-[OK] Ollama reachable
+[OK] VRAM Budget: 36.00 GB available, 12.00 GB required
+[OK] mlx backend reachable - 1 model(s) found
 ```
 
 ---
 
-## Next (Phase 4-5 - Optional)
+## macOS LLM backend — Apple MLX (implemented 2026-08-15)
 
-When ready to deploy:
-1. Create platform-specific requirements files
-2. Update documentation
-3. Run full end-to-end tests
-4. Release as v2.1.0
+On Apple Silicon the LLM now runs on **Apple MLX** (`mlx_lm.server`,
+OpenAI-compatible API on `127.0.0.1:1234`) instead of Ollama/llama.cpp.
+Windows and Linux keep using Ollama unchanged. `app/llm_backend.py`
+selects the backend at runtime (`LLM_PROVIDER=auto` by default).
+
+- LLM model: `mlx-community/Qwen2.5-14B-Instruct-4bit` (~9 GB one-time
+  download, configurable via `MLX_MODEL`)
+- Embeddings on Mac: `nomic-ai/nomic-embed-text-v1.5` via
+  sentence-transformers (same 768-dim family as Ollama's
+  nomic-embed-text → Chroma store stays compatible)
+- STT on Mac: faster-whisper CPU + int8 (CTranslate2 has no Metal
+  backend — `app.platform.get_whisper_device_config()` handles the mps→cpu
+  mapping automatically)
+
+### Run on macOS
+
+```bash
+# One-time bootstrap (installs brew deps, venv, downloads models)
+python3.11 bootstrap_services.py
+
+# One-shot launcher (kills stale services, FastAPI, MLX pre-warm,
+# Cloudflare tunnel, Twilio webhook update, optional Streamlit)
+bash start_services.sh --with-streamlit
+```
+
+Check everything:
+
+```bash
+python3 test_environment.py        # platform-aware (MLX on Mac)
+.venv/bin/python validate_platform_readiness.py
+```
 
 ---
 
 ## Documentation
 
 For more details, see:
+- `README_DEPLOYMENT.md` — deployment & platform matrix
 - `IMPLEMENTATION_COMPLETE.md` - Full implementation results
 - `TRD_APPLE_SILICON_SUPPORT.md` - Technical details
 - `APPLE_SILICON_IMPLEMENTATION_GUIDE.md` - Future phases
@@ -186,6 +213,7 @@ For more details, see:
 
 **You're all set!** 🚀
 
-The multi-platform GPU support is live and working on your M3 Max.
-Simply use the app as normal — it will automatically use Metal GPU.
+The app runs natively on Windows (CUDA/Ollama), Linux (Ollama), and
+macOS Apple Silicon (MLX). The platform is detected automatically —
+no manual config needed.
 

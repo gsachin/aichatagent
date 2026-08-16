@@ -88,26 +88,28 @@ def check_vram_budget() -> bool:
 
 
 def check_ollama_reachable() -> bool:
-    """Ollama API must respond on localhost:11434."""
-    try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            if "models" in data:
-                print(f"  [OK] Ollama API reachable - {len(data['models'])} model(s) found")
-                return True, data.get("models", [])
-            else:
-                print("  [FAIL] Ollama responded but response is malformed")
-                return False, []
-    except Exception as e:
-        print(f"  [FAIL] Ollama not reachable: {e}")
-        print("         Start Ollama and try again.")
-        return False, []
+    """The active LLM backend API (Ollama or MLX) must respond."""
+    from app.llm_backend import is_ready, provider_name, list_models
+
+    if is_ready():
+        models = list_models()
+        print(f"  [OK] {provider_name()} backend reachable - {len(models)} model(s) found")
+        return True, models
+    print(f"  [FAIL] {provider_name()} backend not reachable")
+    print("         Start it first (start_services.sh / start_services.ps1).")
+    return False, []
 
 
 def check_ollama_model(models: list, required: str) -> bool:
-    """Check if the required model is pulled."""
-    model_names = [m.get("name", "") for m in models]
+    """Check if the required model is available on the active backend."""
+    from app.llm_backend import provider_name, pick_model
+
+    if provider_name() == "mlx":
+        model = pick_model([required])
+        print(f"  [OK] MLX model configured: {model}")
+        return True
+
+    model_names = [m.get("name", "") if isinstance(m, dict) else m for m in models]
 
     # Exact match
     if required in model_names:
@@ -129,7 +131,22 @@ def check_ollama_model(models: list, required: str) -> bool:
 
 def check_embed_model(models: list) -> bool:
     """Check if an embedding model is available for ChromaDB."""
-    model_names = [m.get("name", "") for m in models]
+    from app.llm_backend import provider_name, MLX_EMBED_MODEL
+
+    if provider_name() == "mlx":
+        import os
+        from pathlib import Path
+
+        org, repo = MLX_EMBED_MODEL.split("/", 1)
+        hub = Path(os.environ.get(
+            "HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+        if (hub / f"models--{org}--{repo}").is_dir():
+            print(f"  [OK] Embedding model available: {MLX_EMBED_MODEL}")
+            return True
+        print(f"  [WARN] Embedding model not downloaded yet: {MLX_EMBED_MODEL}")
+        return False
+
+    model_names = [m.get("name", "") if isinstance(m, dict) else m for m in models]
     embed_models = [m for m in model_names if "nomic" in m or "embed" in m]
 
     if embed_models:
@@ -166,8 +183,9 @@ def main() -> int:
     print(f"  VRAM budget: {'Met' if vram_ok else 'Check warnings above'}")
     print()
 
-    # 3. Ollama
-    print("-- Ollama --")
+    # 3. LLM backend (Ollama on Windows/Linux, MLX on Apple Silicon)
+    from app.llm_backend import provider_name
+    print(f"-- LLM Backend ({provider_name()}) --")
     ollama_ok, models = check_ollama_reachable()
     results["ollama"] = ollama_ok
 

@@ -163,7 +163,7 @@ def check_metal_available(report: ValidationReport):
 
 def check_platform_modules(report: ValidationReport):
     """Check platform abstraction modules exist."""
-    root = Path(__file__).parent.parent
+    root = Path(__file__).resolve().parent
     
     platform_file = root / "app" / "platform.py"
     memory_file = root / "app" / "memory_budget.py"
@@ -202,51 +202,53 @@ def check_platform_detection_works(report: ValidationReport):
 
 
 def check_ollama_service(report: ValidationReport):
-    """Check Ollama is running."""
-    try:
-        import urllib.request
-        import json
-        
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read())
-            models = data.get("models", [])
-            
-            report.add_check(
-                "Ollama Service",
-                True,
-                f"{len(models)} model(s) available"
-            )
-    except Exception:
+    """Check the active LLM backend (Ollama or MLX) is running."""
+    from app.llm_backend import is_ready, provider_name, list_models
+
+    if is_ready():
+        models = list_models()
         report.add_check(
-            "Ollama Service",
+            "LLM Backend",
+            True,
+            f"{provider_name()} reachable, {len(models)} model(s) available"
+        )
+    else:
+        report.add_check(
+            "LLM Backend",
             False,
-            "Not running at localhost:11434. Start: ollama serve"
+            f"{provider_name()} not reachable. "
+            "Start: start_services.sh / start_services.ps1"
         )
 
 
 def check_requirements_files(report: ValidationReport):
-    """Check requirements files exist."""
-    root = Path(__file__).parent.parent
-    
+    """Check requirements files exist.
+
+    requirements-cuda.txt / requirements-metal.txt are legacy optional
+    files — platform-specific pins now live in requirements.txt as
+    PEP 508 environment markers, so their absence is only a warning.
+    """
+    root = Path(__file__).resolve().parent
+
     files = {
-        "requirements.txt": root / "requirements.txt",
-        "requirements-cuda.txt": root / "requirements-cuda.txt",
-        "requirements-metal.txt": root / "requirements-metal.txt",
+        "requirements.txt": (root / "requirements.txt", True),
+        "requirements-cuda.txt": (root / "requirements-cuda.txt", False),
+        "requirements-metal.txt": (root / "requirements-metal.txt", False),
     }
-    
-    for name, path in files.items():
+
+    for name, (path, required) in files.items():
         ok = path.exists()
         report.add_check(
             f"Requirements: {name}",
-            ok,
-            "Exists" if ok else "Missing (optional for v2.0)"
+            ok if required else True,
+            "Exists" if ok else
+            "Missing (optional — markers in requirements.txt handle platforms) [WARN]"
         )
 
 
 def check_documentation(report: ValidationReport):
     """Check documentation exists."""
-    root = Path(__file__).parent.parent
+    root = Path(__file__).resolve().parent
     
     docs = {
         "TRD": root / "doc" / "TRD_APPLE_SILICON_SUPPORT.md",
@@ -265,7 +267,7 @@ def check_documentation(report: ValidationReport):
 
 def check_tests(report: ValidationReport):
     """Check test files updated."""
-    root = Path(__file__).parent.parent
+    root = Path(__file__).resolve().parent
     
     test_files = [
         "tests/test_phase1_environment.py",
@@ -283,20 +285,23 @@ def check_tests(report: ValidationReport):
 
 
 def run_basic_tests(report: ValidationReport):
-    """Run basic pytest tests."""
+    """Run the platform detection pytest module (via the project venv)."""
+    root = Path(__file__).resolve().parent
+    pytest_cmd = [str(root / ".venv" / "bin" / "python"), "-m", "pytest",
+                  "tests/test_phase1_environment.py", "-q", "--tb=short"]
     try:
         result = subprocess.run(
-            ["pytest", "tests/test_platform_detection.py", "-v", "--tb=short"],
-            cwd=Path(__file__).parent.parent,
+            pytest_cmd,
+            cwd=root,
             capture_output=True,
-            timeout=30
+            timeout=120
         )
-        
+
         ok = result.returncode == 0
         details = "All platform tests passed" if ok else "Some tests failed"
         if not ok and result.stdout:
             details += " (see test output)"
-        
+
         report.add_check(
             "Platform Detection Tests",
             ok,

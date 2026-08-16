@@ -112,13 +112,18 @@ class TestPhase1GpuDetection:
             pytest.fail(f"Device {device} not accessible: {e}")
 
 
-# ── Phase 1.2: Ollama Service ────────────────────────────────────────
+# ── Phase 1.2: LLM Backend (Ollama on Windows/Linux, MLX on Apple Silicon)
 
 class TestPhase1OllamaService:
-    """Verify Ollama is running and the required model is available."""
+    """Verify the active LLM backend is running with its required model."""
 
     OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
     REQUIRED_MODEL = "qwen2.5:6b-instruct-q4_K_M"
+
+    @staticmethod
+    def _on_mlx() -> bool:
+        from app.llm_backend import provider_name
+        return provider_name() == "mlx"
 
     def _ollama_reachable(self) -> bool:
         """Check if Ollama HTTP API responds."""
@@ -147,7 +152,14 @@ class TestPhase1OllamaService:
             return []
 
     def test_ollama_service_installed(self):
-        """ollama CLI or Python package must be available."""
+        """Backend client packages must be available (per platform)."""
+        if self._on_mlx():
+            try:
+                import mlx_lm  # noqa: F401
+                import transformers  # noqa: F401  # local nomic embeddings
+            except ImportError as e:
+                pytest.fail(f"MLX backend packages missing on macOS: {e}")
+            return
         try:
             import ollama  # noqa: F401
         except ImportError:
@@ -156,15 +168,33 @@ class TestPhase1OllamaService:
             )
 
     def test_ollama_api_reachable(self):
-        """Ollama HTTP API must respond on localhost:11434."""
-        if not self._ollama_reachable():
+        """The active LLM backend API must respond."""
+        from app.llm_backend import is_ready, provider_name
+
+        if not is_ready():
             pytest.fail(
-                "Ollama API not reachable at http://127.0.0.1:11434/api/tags.\n"
-                "Start Ollama and try again."
+                f"{provider_name()} backend not reachable.\n"
+                "Start it first (start_services.sh / start_services.ps1)."
             )
 
     def test_qwen_model_pulled(self):
-        """Required model qwen2.5:6b-instruct-q4_K_M must be pulled."""
+        """The required LLM model must be available."""
+        if self._on_mlx():
+            import os
+            from pathlib import Path
+            from app.llm_backend import MLX_MODEL
+
+            org, repo = MLX_MODEL.split("/", 1)
+            hub = Path(os.environ.get(
+                "HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+            cached = (hub / f"models--{org}--{repo}").is_dir()
+            if not cached:
+                pytest.skip(
+                    f"MLX model not downloaded yet: {MLX_MODEL}\n"
+                    "bootstrap_services.py pulls it during install."
+                )
+            return
+
         if not self._ollama_reachable():
             pytest.skip("Ollama not reachable — cannot check models")
 
@@ -183,7 +213,22 @@ class TestPhase1OllamaService:
         )
 
     def test_nomic_embed_model_available(self):
-        """nomic-embed-text should be available for ChromaDB embeddings."""
+        """Embedding model should be available for ChromaDB embeddings."""
+        if self._on_mlx():
+            import os
+            from pathlib import Path
+            from app.llm_backend import MLX_EMBED_MODEL
+
+            org, repo = MLX_EMBED_MODEL.split("/", 1)
+            hub = Path(os.environ.get(
+                "HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+            if not (hub / f"models--{org}--{repo}").is_dir():
+                pytest.skip(
+                    f"Embedding model not downloaded yet: {MLX_EMBED_MODEL}\n"
+                    "bootstrap_services.py pulls it during install."
+                )
+            return
+
         if not self._ollama_reachable():
             pytest.skip("Ollama not reachable — cannot check models")
 

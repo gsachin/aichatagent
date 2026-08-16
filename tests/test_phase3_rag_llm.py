@@ -40,16 +40,9 @@ SAMPLE_DOCS = [
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _ollama_available() -> bool:
-    """Return True if Ollama API is reachable."""
-    import urllib.request
-
-    try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            return "models" in data
-    except Exception:
-        return False
+    """Return True if the active LLM backend (Ollama or MLX) is reachable."""
+    from app.llm_backend import is_ready
+    return is_ready()
 
 
 def _ollama_has_model(name: str) -> bool:
@@ -67,16 +60,10 @@ def _ollama_has_model(name: str) -> bool:
 
 
 def _ollama_find_qwen() -> str | None:
-    """Return the name of any pulled Qwen model, or None."""
-    import urllib.request
-
+    """Return the best available model for the active backend, or None."""
+    from app.llm_backend import pick_model
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-            qwen = [m for m in models if "qwen" in m.lower()]
-            return qwen[0] if qwen else None
+        return pick_model(["qwen2.5:6b-instruct-q4_K_M", "qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"])
     except Exception:
         return None
 
@@ -181,36 +168,31 @@ class TestPhase3OllamaRag:
 
     @pytest.fixture(autouse=True)
     def _check_ollama(self):
-        """Skip all tests if Ollama/model not available; use best available Qwen model."""
-        if not _ollama_available():
-            pytest.skip("Ollama not reachable — start Ollama and try again")
+        """Skip all tests if the LLM backend is unavailable; pick the best model."""
+        from app.llm_backend import is_ready, provider_name
 
-        # If the dev-plan model is pulled, use it
-        if _ollama_has_model(self.LLM_MODEL):
-            return
+        if not is_ready():
+            pytest.skip(f"{provider_name()} backend not reachable — start it and try again")
 
-        # Otherwise find any Qwen model
         fallback = _ollama_find_qwen()
         if fallback:
             self.LLM_MODEL = fallback
-            print(f"\nUsing fallback LLM model: {fallback}")
+            print(f"\nLLM backend: {provider_name()}, model: {fallback}")
         else:
             pytest.skip(
                 f"No Qwen model pulled. Run: ollama pull {self.LLM_MODEL}"
             )
 
     def test_ollama_basic_chat(self):
-        """Ollama must respond to a simple prompt."""
-        import ollama
+        """The backend LLM must respond to a simple prompt."""
+        from app.llm_backend import chat
 
-        response = ollama.chat(
-            model=self.LLM_MODEL,
+        answer = chat(
             messages=[{"role": "user", "content": "Say 'hello' and nothing else."}],
+            model=self.LLM_MODEL,
         )
-        assert "message" in response
-        assert "content" in response["message"]
-        assert len(response["message"]["content"]) > 0
-        print(f"\nLLM response: {response['message']['content']}")
+        assert isinstance(answer, str) and len(answer) > 0
+        print(f"\nLLM response: {answer}")
 
     def test_ollama_rag_query_returns_context_aware_answer(self):
         """
@@ -220,7 +202,7 @@ class TestPhase3OllamaRag:
         Query:   "What is the tuition fee and deadline?"
         Expected: Answer mentions $15,000 and August 1st.
         """
-        import ollama
+        from app.llm_backend import chat
 
         context = (
             "Undergraduate tuition fee for 2026 is $15,000 per year. "
@@ -235,14 +217,12 @@ class TestPhase3OllamaRag:
             "Question: What is the tuition fee and deadline?"
         )
 
-        response = ollama.chat(
-            model=self.LLM_MODEL,
+        answer = chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 2048},
-        )
-
-        answer = response["message"]["content"].lower()
-        print(f"\nRAG answer: {response['message']['content']}")
+            model=self.LLM_MODEL,
+            num_ctx=2048,
+        ).lower()
+        print(f"\nRAG answer: {answer}")
 
         # Must contain the key facts from context
         assert "15000" in answer or "15,000" in answer or "$15,000" in answer, (
@@ -253,20 +233,28 @@ class TestPhase3OllamaRag:
         )
 
     def test_ollama_num_ctx_setting(self):
-        """Ollama must accept num_ctx: 2048 without error."""
-        import ollama
+        """The backend must accept a num_ctx/max_tokens budget without error."""
+        from app.llm_backend import chat
 
-        response = ollama.chat(
-            model=self.LLM_MODEL,
+        answer = chat(
             messages=[{"role": "user", "content": "Reply with just the word OK."}],
-            options={"num_ctx": 2048},
+            model=self.LLM_MODEL,
+            num_ctx=2048,
         )
-        assert "message" in response
+        assert isinstance(answer, str)
         # num_ctx doesn't error → the KV cache budget is respected
-        print(f"\nnum_ctx=2048 response: {response['message']['content']}")
+        print(f"\nnum_ctx=2048 response: {answer}")
 
     def test_ollama_streaming_supported(self):
         """Ollama must support streaming responses (required for Pipecat pipeline)."""
+        from app.llm_backend import provider_name
+
+        if provider_name() == "mlx":
+            pytest.skip(
+                "MLX streaming is exercised through pipecat's OpenAILLMService "
+                "(SSE via mlx_lm.server); this test covers the Ollama API only."
+            )
+
         import ollama
 
         stream = ollama.chat(
@@ -299,10 +287,9 @@ class TestPhase3RagPipelineIntegration:
           3. Return generated answer
         """
         import chromadb
-        import ollama
 
         if not _ollama_available():
-            pytest.skip("Ollama not reachable")
+            pytest.skip("LLM backend not reachable")
 
         # 1. Build an in-memory ChromaDB collection
         client = chromadb.Client()
@@ -315,6 +302,8 @@ class TestPhase3RagPipelineIntegration:
 
         # 2. Define the query function (mirrors development plan)
         def query_admissions_bot(user_query: str) -> str:
+            from app.llm_backend import chat
+
             results = collection.query(
                 query_texts=[user_query],
                 n_results=2,
@@ -329,21 +318,11 @@ class TestPhase3RagPipelineIntegration:
                 f"Question: {user_query}"
             )
 
-            # Find any available Qwen model
-            import urllib.request
-
-            req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read())
-                models = [m.get("name", "") for m in data.get("models", [])]
-            qwen = next((m for m in models if "qwen" in m.lower()), models[0])
-
-            response = ollama.chat(
-                model=qwen,
+            return chat(
                 messages=[{"role": "user", "content": prompt}],
-                options={"num_ctx": 2048},
+                preferred=["qwen2.5:6b-instruct-q4_K_M", "qwen2.5:7b"],
+                num_ctx=2048,
             )
-            return response["message"]["content"]
 
         # 3. Test
         answer = query_admissions_bot("What is the tuition fee and deadline?")

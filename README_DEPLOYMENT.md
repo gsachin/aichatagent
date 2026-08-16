@@ -90,6 +90,44 @@ docker-compose up -d    # ~2-3 min
 
 ---
 
+## 🍏 macOS Apple Silicon — MLX Backend (2026-08-15)
+
+On macOS the LLM runs on **Apple MLX** (`mlx_lm.server`, OpenAI-compatible
+API on `127.0.0.1:1234`) instead of Ollama/llama.cpp. Windows and Linux
+keep using Ollama. `app/llm_backend.py` selects the backend at runtime —
+`LLM_PROVIDER=auto` picks MLX on Darwin+arm64 and Ollama everywhere else.
+
+### Platform Matrix
+
+| Component | Windows / Linux | macOS Apple Silicon |
+|-----------|-----------------|---------------------|
+| LLM | Ollama `qwen2.5:7b-instruct-q3_K_M` (:11434) | MLX `mlx-community/Qwen2.5-14B-Instruct-4bit` (:1234) |
+| Embeddings | Ollama `nomic-embed-text` | sentence-transformers `nomic-embed-text-v1.5` (local, 768-dim compatible) |
+| STT (faster-whisper) | CUDA int8 / CPU | CPU int8 (CTranslate2 has no Metal backend) |
+| TTS (Kokoro) | CUDA / CPU | CPU (onnxruntime) |
+| Launcher | `start_services.ps1` | `start_services.sh` |
+
+### Run on macOS
+
+```bash
+# One-time: brew deps + .venv + model downloads (~9 GB LLM + ~550 MB embeddings)
+python3.11 bootstrap_services.py
+
+# One-shot launcher: kills stale services, starts FastAPI, MLX pre-warm,
+# Cloudflare tunnel, Twilio webhook update, optional Streamlit
+bash start_services.sh --with-streamlit
+```
+
+### Docker caveat
+
+Containers run Linux — inside them `LLM_PROVIDER=auto` resolves to
+`ollama` (compose provides the `ollama` service), which is correct.
+Leave `LLM_PROVIDER` unset (or `auto`) in the shared `.env`; setting
+`LLM_PROVIDER=mlx` would point containers at a local MLX server that
+only exists on the Mac host.
+
+---
+
 ## 🌐 After Setup - Service Access
 
 | Service | URL | Purpose |
@@ -216,7 +254,8 @@ bash stop.sh
 ### Default Ports
 - FastAPI: `8000`
 - Streamlit: `8501`
-- Ollama: `11434`
+- Ollama: `11434` (Windows/Linux)
+- MLX server: `1234` (macOS Apple Silicon)
 
 ### Customize in .env
 ```bash
@@ -284,11 +323,11 @@ tail -f logs/*.log
          │
          ├─────────────────┬──────────────┐
          ↓                 ↓              ↓
-    ┌─────────┐       ┌──────────┐   ┌──────────┐
-    │ Ollama  │       │ Whisper  │   │ Kokoro   │
-    │ (LLM)   │       │ (STT)    │   │ (TTS)    │
-    │ 11434   │       │ Metal    │   │ ONNX     │
-    └────┬────┘       └────┬─────┘   └─────┬────┘
+    ┌──────────────┐  ┌──────────┐   ┌──────────┐
+    │ Ollama/MLX   │  │ Whisper  │   │ Kokoro   │
+    │ (LLM)        │  │ (STT)    │   │ (TTS)    │
+    │ 11434 / 1234 │  │ CPU/GPU  │   │ ONNX     │
+    └──────┬───────┘  └────┬─────┘   └─────┬────┘
          │                 │               │
          └─────────────────┴───────────────┘
                     │
@@ -359,9 +398,10 @@ tail -f logs/*.log
 - Port conflicts managed
 
 ### ✅ Multi-Platform Support
-- NVIDIA GPUs (CUDA)
-- Apple Silicon (Metal)
-- CPU fallback
+- Windows: NVIDIA GPUs (CUDA) + Ollama
+- Linux: Ollama (+ NVIDIA CUDA where available)
+- Apple Silicon (macOS): Metal + Apple MLX LLM
+- CPU fallback everywhere
 
 ### ✅ Local & Private
 - All processing local
