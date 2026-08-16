@@ -344,6 +344,9 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 
 TUNNEL_LOG="$LOG_DIR/cloudflared_8000.log"
+# Truncate before starting -- the URL grep must only ever see THIS run's
+# hostname (PS1 parity: Start-Process redirect truncates on Windows).
+: > "$TUNNEL_LOG"
 
 if [ "$NAMED_TUNNEL" = "true" ]; then
     write_ok "Named tunnel mode: $TUNNEL_NAME"
