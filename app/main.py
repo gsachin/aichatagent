@@ -93,6 +93,24 @@ MUTE_STT_DURING_TTS = os.environ.get("MUTE_STT_DURING_TTS", "1") == "1"
 from contextlib import asynccontextmanager
 
 
+async def _ws_send(websocket, text: str) -> bool:
+    """
+    Send one JSON text frame over a call WebSocket.
+
+    Twilio closes media streams on caller hangup, no-answer, or tunnel
+    blips; an in-flight send then raises. Treat every send failure as a
+    clean disconnect (returns False) instead of crashing the handler —
+    crashing made Twilio play the "We seem to have lost the connection"
+    fallback <Say> while the call was still live.
+    """
+    try:
+        await websocket.send_text(text)
+        return True
+    except Exception as e:
+        logger.info(f"WS send failed (stream closed): {type(e).__name__}")
+        return False
+
+
 async def _hangup_twilio_call(call_sid: str) -> None:
     """
     End a live Twilio call via REST — used by the deterministic hangup
@@ -497,8 +515,11 @@ async def websocket_twilio(websocket: WebSocket):
                             "streamSid": stream_sid or "",
                             "media": {"payload": out_payload},
                         })
-                        await websocket.send_text(response)
+                        if not await _ws_send(websocket, response):
+                            raise WebSocketDisconnect(code=1000)
                     logger.info("AI greeting sent via TTS")
+                except WebSocketDisconnect:
+                    raise  # stream is dead — exit the handler cleanly
                 except Exception:
                     logger.exception("Failed to send AI greeting (non-fatal)")
 
@@ -549,7 +570,8 @@ async def websocket_twilio(websocket: WebSocket):
                                 "streamSid": stream_sid or "",
                                 "media": {"payload": out_payload},
                             })
-                            await websocket.send_text(response)
+                            if not await _ws_send(websocket, response):
+                                raise WebSocketDisconnect(code=1000)
                     finally:
                         tts_playing = False
 
@@ -572,8 +594,14 @@ async def websocket_twilio(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WS /ws/twilio: client disconnected")
+        # Stream died while the call may still be live (caller hangup,
+        # no-answer, or tunnel blip) — end the call via REST so Twilio
+        # never plays the "We seem to have lost the connection" fallback
+        # <Say> into the caller's ear.
+        await _hangup_twilio_call(call_sid)
     except Exception:
         logger.exception("WS /ws/twilio: unexpected error")
+        await _hangup_twilio_call(call_sid)
     finally:
         # Clear the active-call entry on ANY exit path — prevents phantom
         # "active calls" when Twilio's stop event never arrives.
@@ -669,8 +697,11 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                                 "media": {"payload": out_payload},
                             }
                         )
-                        await websocket.send_text(response)
+                        if not await _ws_send(websocket, response):
+                            raise WebSocketDisconnect(code=1000)
                     logger.info("AI greeting sent via TTS")
+                except WebSocketDisconnect:
+                    raise  # stream is dead — exit the handler cleanly
                 except Exception:
                     logger.exception("Failed to send AI greeting (non-fatal)")
 
@@ -723,7 +754,8 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                                     "media": {"payload": out_payload},
                                 }
                             )
-                            await websocket.send_text(response)
+                            if not await _ws_send(websocket, response):
+                                raise WebSocketDisconnect(code=1000)
                     finally:
                         tts_playing = False
 
@@ -748,8 +780,12 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WS /ws/twilio-outbound: client disconnected")
+        # Stream died while the call may still be live — end it via REST
+        # so Twilio never plays the "lost connection" fallback <Say>.
+        await _hangup_twilio_call(call_sid)
     except Exception:
         logger.exception("WS /ws/twilio-outbound: unexpected error")
+        await _hangup_twilio_call(call_sid)
     finally:
         # Clear the active-call entry on ANY exit path — prevents phantom
         # "active calls" when Twilio's stop event never arrives.
