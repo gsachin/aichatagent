@@ -178,8 +178,15 @@ def load_rag_chain():
         st.error("Failed to initialize vector store. Check that the PDF exists.")
         st.stop()
 
-    # Ollama (Windows/Linux) or MLX server (Apple Silicon)
-    llm = get_chat_model(model="qwen2.5:7b-instruct-q3_K_M", temperature=0.0, num_ctx=2048)
+    # Ollama (Windows/Linux) or MLX server (Apple Silicon).
+    # Model and context come from .env (OLLAMA_MODEL / OLLAMA_NUM_CTX,
+    # sized by scripts/predeploy.py) — defaults preserve prior behavior.
+    import os as _os
+    llm = get_chat_model(
+        model=_os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M"),
+        temperature=0.0,
+        num_ctx=None,
+    )
 
     system_prompt = SYSTEM_PROMPT
 

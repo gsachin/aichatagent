@@ -81,6 +81,8 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
       - PYTHONDONTWRITEBYTECODE=1
       - OLLAMA_URL=http://ollama:11434
       - FASTAPI_HOST=0.0.0.0
@@ -135,6 +137,8 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
       - PYTHONDONTWRITEBYTECODE=1
       - OLLAMA_URL=http://ollama:11434
       - DATABASE_URL=${DATABASE_URL:-postgresql://elearning:elearning_secret@postgres:5432/admissions}
@@ -171,6 +175,8 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
       - PYTHONDONTWRITEBYTECODE=1
       - OLLAMA_URL=http://ollama:11434
       - DATABASE_URL=${DATABASE_URL:-postgresql://elearning:elearning_secret@postgres:5432/admissions}

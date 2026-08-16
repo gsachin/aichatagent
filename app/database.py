@@ -175,12 +175,12 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
     )
 
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
         raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
-            preferred=["qwen2.5:7b"],
-            num_ctx=2048,
+            preferred=default_model(["qwen2.5:7b"]),
+            num_ctx=small_task_num_ctx(2048),
             json_mode=True,
         )
         logger.debug(f"LLM extraction raw: {raw}")

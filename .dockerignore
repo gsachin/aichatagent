@@ -1,0 +1,21 @@
+# Never bake secrets or machine-specific state into images
+.env
+.machine_profile.json
+.tunnel_*
+.whatsapp_tunnel
+
+# Local runtime state
+.venv/
+venv/
+logs/
+chroma_local_db/
+data/
+models/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# VCS / docs noise
+.git/
+.github/
+*.md

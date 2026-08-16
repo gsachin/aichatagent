@@ -95,6 +95,17 @@ fi
 MLX_MODEL="${MLX_MODEL:-mlx-community/Qwen2.5-14B-Instruct-4bit}"
 MLX_BASE_URL="${MLX_BASE_URL:-http://127.0.0.1:$MLX_PORT}"
 
+# ---- Machine profile (.env sizing) ------------------------------------------
+# Re-size .env if the machine changed since last deploy. Idempotent no-op
+# (~0.3s) when the profile matches. Disable with MACHINE_PROFILE_CHECK=0.
+if [ "${MACHINE_PROFILE_CHECK:-1}" != "0" ] \
+   && [ -f "$PROJECT_ROOT/scripts/predeploy.py" ] \
+   && [ -f "$PROJECT_ROOT/.env" ]; then
+    if ! "$PYTHON" "$PROJECT_ROOT/scripts/predeploy.py" --auto --quiet 2>/dev/null; then
+        printf "  WARN: machine profile out of date — run: python scripts/predeploy.py\n"
+    fi
+fi
+
 # ---- Colours --------------------------------------------------------------
 ESC="$(printf '\033')"
 GREEN="$ESC[32m"; YELLOW="$ESC[33m"; RED="$ESC[31m"

@@ -53,7 +53,10 @@ SOURCES = [
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
+# Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
+# 8192 default — voice calls run the full production voice system prompt
+# (~3.5k tokens) plus RAG context; scripts/predeploy.py sizes it per machine.
+from app.llm_backend import DEFAULT_NUM_CTX as OLLAMA_NUM_CTX  # noqa: E402
 OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE", "")  # "" = ollama default
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 
@@ -469,9 +472,9 @@ def retrieve_context(query: str) -> str:
 
 def _get_available_model() -> str:
     """Find the best available model for the active backend (see llm_backend)."""
-    from app.llm_backend import pick_model
+    from app.llm_backend import default_model, pick_model
 
-    return pick_model(("qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b-instruct", "qwen2.5:7b"))
+    return pick_model(default_model(("qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b-instruct", "qwen2.5:7b")))
 
 
 def _best_distance(query: str) -> float | None:
@@ -517,16 +520,14 @@ def query_rag(question: str) -> str | None:
     # Step 1: Retrieve context
     context = retrieve_context(question)
 
-    # Step 2: Build prompt
-    if context:
-        prompt = SYSTEM_PROMPT.format(context=context)
-    else:
-        prompt = (
-            "You are a helpful university admissions assistant. "
-            "Answer the user's question to the best of your ability. "
-            "If you're unsure, say so.\n\n"
-        )
-    prompt += f"Student's question: {question}"
+    # Step 2: Build prompt — live voice calls use the production voice
+    # system prompt (interruption handling, spoken-output rules) with the
+    # retrieved context grounded in. Text chat UIs (Streamlit app.py,
+    # admissions_bot.py) keep the Markdown-oriented SYSTEM_PROMPT above.
+    from app.voice_system_prompt import build_voice_system_prompt
+
+    prompt = build_voice_system_prompt(context)
+    prompt += f"\n\nStudent's question: {question}"
 
     # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)
     try:

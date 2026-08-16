@@ -80,9 +80,9 @@ class CompositeScore:
 
 def _get_llm_model() -> str:
     """Best available model for sentiment extraction (see llm_backend)."""
-    from app.llm_backend import pick_model
+    from app.llm_backend import default_model, pick_model
 
-    return pick_model(["qwen2.5:7b"])
+    return pick_model(default_model(["qwen2.5:7b"]))
 
 
 SENTIMENT_EXTRACTION_PROMPT = """You are a sales-call sentiment analyzer for a university admissions team.
@@ -135,12 +135,12 @@ async def extract_sentiment(transcript: str) -> ScoreResult:
     model = _get_llm_model()
 
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import chat as backend_chat, small_task_num_ctx
 
         raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
             model=model,
-            num_ctx=4096,
+            num_ctx=small_task_num_ctx(4096),
             temperature=0.1,
             json_mode=True,
         ).strip()

@@ -102,7 +102,7 @@ def check_ollama_reachable() -> bool:
 
 def check_ollama_model(models: list, required: str) -> bool:
     """Check if the required model is available on the active backend."""
-    from app.llm_backend import provider_name, pick_model
+    from app.llm_backend import provider_name, pick_model, default_model
 
     if provider_name() == "mlx":
         model = pick_model([required])
@@ -190,7 +190,10 @@ def main() -> int:
     results["ollama"] = ollama_ok
 
     if ollama_ok:
-        model_ok = check_ollama_model(models, "qwen2.5:6b-instruct-q4_K_M")
+        # Required model comes from .env (OLLAMA_MODEL, sized by predeploy)
+        import os as _os
+        required_model = _os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
+        model_ok = check_ollama_model(models, required_model)
         results["llm_model"] = model_ok
         embed_ok = check_embed_model(models)
         results["embed_model"] = embed_ok

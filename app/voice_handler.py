@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io as _io
+import re
 import logging
 import os
 from pathlib import Path
@@ -61,7 +62,15 @@ def _get_stt_model():
         compute_type = "int8" if device == "cuda" else "float32"
 
     logger.info(f"Loading faster-whisper {_STT_MODEL_SIZE} on {device} ({compute_type})...")
-    _stt_model = WhisperModel(_STT_MODEL_SIZE, device=device, compute_type=compute_type)
+    # WHISPER_NUM_THREADS is sized per machine by scripts/predeploy.py.
+    # Note: pipecat's WhisperSTTSettings has no cpu_threads param, so this
+    # applies to the voice_handler STT path only.
+    _stt_model = WhisperModel(
+        _STT_MODEL_SIZE,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=int(os.environ.get("WHISPER_NUM_THREADS", "4")),
+    )
     logger.info(f"faster-whisper {_STT_MODEL_SIZE} ready on {device}")
     return _stt_model
 
@@ -132,6 +141,55 @@ def generate_ulaw_greeting(text: str) -> list[bytes]:
 
 # ── VoiceCallSession — runs the full AI pipeline per utterance ────────
 
+_CLARIFICATION_RE = re.compile(
+    r"(which (specific )?(program|course)|could you (please )?"
+    r"(specify|clarify|tell me)|did you mean|just to confirm|"
+    r"are you (looking|asking|interested|referring))",
+    re.IGNORECASE,
+)
+
+
+def _is_clarification(text: str) -> bool:
+    """True when an assistant turn reads as a clarification question."""
+    return "?" in text and bool(_CLARIFICATION_RE.search(text))
+
+
+# ── STT noise gate + deterministic hangup (pre-LLM guardrails) ────────
+
+STT_MIN_AVG_LOGPROB = float(os.environ.get("STT_MIN_AVG_LOGPROB", "-4.0"))
+STT_MAX_NO_SPEECH_PROB = float(os.environ.get("STT_MAX_NO_SPEECH_PROB", "0.8"))
+STT_MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "3"))
+# Utterances shorter than this are treated as noise bursts (15 × 20 ms = 300 ms).
+MIN_UTTERANCE_FRAMES = int(os.environ.get("MIN_UTTERANCE_FRAMES", "15"))
+
+_NOISE_WORDS = {"is", "uh", "um", "oh", "ah", "hmm", "hm", "mhm", "eh", "huh"}
+
+#: Fixed reply for gated/noisy input — deliberately bypasses the LLM.
+NOISE_REPLY = "Sorry, I didn't quite catch that — could you repeat that?"
+
+CLOSING_PHRASES_RE = re.compile(
+    r"\b(bye|bye[- ]bye|goodbye|see ya|see you|talk later|"
+    r"that's all|thank you bye|have a good day)\b",
+    re.IGNORECASE,
+)
+
+#: Fixed closing line for the deterministic hangup path.
+CLOSING_REPLY = "Thank you for calling Meridian University Admissions. Have a great day!"
+
+
+def is_closing_phrase(text: str) -> bool:
+    """Hard sign-off cues — handled deterministically, before the LLM."""
+    return bool(CLOSING_PHRASES_RE.search(text))
+
+
+def is_noise_fragment(text: str) -> bool:
+    """Ultra-short or single-noise-word transcripts (STT artifacts)."""
+    t = text.strip().strip(".,!?;").lower()
+    if len(t) < STT_MIN_CHARS:
+        return True
+    return len(t.split()) == 1 and t in _NOISE_WORDS
+
+
 class VoiceCallSession:
     """
     Handles a single outbound (or inbound) voice call.
@@ -146,10 +204,12 @@ class VoiceCallSession:
         silence_threshold_frames: int = 30,  # ~600 ms at 20 ms/frame
         max_utterance_frames: int = 300,     # ~6 seconds max
         sample_rate: int = 8000,             # Twilio uses 8 kHz
+        direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
     ):
         self._silence_threshold = silence_threshold_frames
         self._max_utterance = max_utterance_frames
         self._sample_rate = sample_rate
+        self.direction = direction
 
         # Audio buffer
         self._audio_buffer: list[bytes] = []      # raw µ-law chunks
@@ -209,18 +269,29 @@ class VoiceCallSession:
             return True
         return False
 
-    async def process_utterance(self) -> tuple[list[bytes], str]:
+    async def process_utterance(self) -> tuple[list[bytes], str, bool]:
         """
         Run the full pipeline on the accumulated audio:
 
            µ-law buffer → PCM WAV → Whisper STT → RAG + LLM → Kokoro TTS → µ-law chunks
 
-        Returns a tuple of (ulaw_chunks, transcript_dialogue) where
-        transcript_dialogue is the full exchange (caller + AI) for logging.
+        Returns a tuple of (ulaw_chunks, transcript_dialogue, end_call) where
+        transcript_dialogue is the full exchange (caller + AI) for logging and
+        end_call is True when a hard sign-off cue was detected (the caller
+        should hang up after playing the returned audio).
         """
         if not self._audio_buffer:
             self.reset_utterance()
-            return [], ""
+            return [], "", False
+
+        # ── Min-burst filter: drop sub-300ms noise bursts before STT ──
+        if self._total_frames < MIN_UTTERANCE_FRAMES:
+            logger.info(
+                f"VoiceCall: dropped {self._total_frames}-frame burst "
+                f"(<{MIN_UTTERANCE_FRAMES * 20} ms) as noise"
+            )
+            self.reset_utterance()
+            return [], "", False
 
         # ── Step 1: Decode µ-law → PCM WAV bytes ─────────────────
         combined_ulaw = b"".join(self._audio_buffer)
@@ -247,24 +318,51 @@ class VoiceCallSession:
         )
 
         # ── Step 2: Whisper STT ───────────────────────────────────
-        transcript = await self._transcribe(audio_16k_int16)
+        transcript, low_conf = await self._transcribe(audio_16k_int16)
         self.reset_utterance()
 
         if not transcript or not transcript.strip():
             logger.info("VoiceCall: empty transcript — nothing to answer")
-            return [], ""
+            return [], "", False
 
         logger.info(f"VoiceCall: transcript = \"{transcript[:120]}\"")
 
         # Add to conversation history
         self._conversation_history.append(f"Caller: {transcript}")
 
+        # ── Step 2b: Noise gate — short fragments / low-confidence STT
+        #    get a fixed one-line check; the LLM never sees them.
+        if low_conf or is_noise_fragment(transcript):
+            logger.info(
+                f"VoiceCall: noise-gated \"{transcript[:60]}\" "
+                f"(low_conf={low_conf}) — fixed fallback reply"
+            )
+            reply = NOISE_REPLY
+            dialogue = f"Caller: {transcript}\nAssistant: {reply}"
+            self._conversation_history.append(f"Assistant: {reply}")
+            tts_pcm = await self._synthesise(reply)
+            if tts_pcm is None or len(tts_pcm) == 0:
+                return [], dialogue, False
+            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+
+        # ── Step 2c: Deterministic hangup — hard sign-off cues end the
+        #    call with a static closing; the LLM never sees them.
+        if is_closing_phrase(transcript):
+            logger.info(f"VoiceCall: closing phrase detected: \"{transcript[:60]}\"")
+            reply = CLOSING_REPLY
+            dialogue = f"Caller: {transcript}\nAssistant: {reply}"
+            self._conversation_history.append(f"Assistant: {reply}")
+            tts_pcm = await self._synthesise(reply)
+            if tts_pcm is None or len(tts_pcm) == 0:
+                return [], dialogue, True
+            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, True
+
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         answer = await self._query_llm(transcript)
         if not answer:
             # Return transcript even if LLM fails — still useful for logging
             dialogue = f"Caller: {transcript}\nAssistant: (no response)"
-            return [], dialogue
+            return [], dialogue, False
 
         self._conversation_history.append(f"Assistant: {answer}")
         logger.info(f"VoiceCall: answer ({len(answer)} chars) = \"{answer[:120]}...\"")
@@ -275,10 +373,10 @@ class VoiceCallSession:
         # ── Step 4: Kokoro TTS → PCM ──────────────────────────────
         tts_pcm = await self._synthesise(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
-            return [], dialogue  # Transcript saved even if TTS fails
+            return [], dialogue, False  # Transcript saved even if TTS fails
 
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
-        return self._pcm_to_ulaw_chunks(tts_pcm), dialogue
+        return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
 
     # ── Domain dictionary for phone audio corrections ──────────────
 
@@ -305,40 +403,65 @@ class VoiceCallSession:
 
     # ── Internal ──────────────────────────────────────────────────
 
-    async def _transcribe(self, audio_16k_int16: np.ndarray) -> str:
+    async def _transcribe(self, audio_16k_int16: np.ndarray) -> tuple[str, bool]:
         """Run faster-whisper STT in a thread (GPU via CTranslate2).
 
         Accepts int16 numpy array directly — no PyAV/file I/O needed,
         which avoids the AppLocker DLL block on this machine.
+
+        Returns (transcript, low_confidence): low_confidence is True when
+        the best segment's avg_logprob falls below STT_MIN_AVG_LOGPROB or
+        no_speech_prob exceeds STT_MAX_NO_SPEECH_PROB.
         """
         try:
             model = _get_stt_model()
             # Convert int16 → float32 for faster-whisper
             audio_float = audio_16k_int16.astype(np.float32) / 32768.0
 
-            # faster-whisper API returns (segments, info) — different from openai-whisper
+            # faster-whisper API returns (segments, info) — different from openai-whisper.
+            # Greedy decoding (beam_size=1) + condition_on_previous_text=False:
+            # on noisy phone audio, beam search and previous-text conditioning
+            # are what produce hallucination loops ("Listen to her again").
             segments, info = await asyncio.to_thread(
                 lambda: model.transcribe(
                     audio_float,
                     language="en",
-                    beam_size=5,
+                    beam_size=1,
+                    best_of=1,
+                    temperature=0.0,
+                    condition_on_previous_text=False,
                     vad_filter=True,
                     vad_parameters=dict(
                         threshold=0.5,
                         min_speech_duration_ms=250,
+                        min_silence_duration_ms=500,
+                        speech_pad_ms=100,
                     ),
                 )
             )
-            transcript = " ".join(seg.text.strip() for seg in segments)
-            transcript = self._post_process_transcript(transcript)
+            texts, logprobs, no_speech_probs = [], [], []
+            for seg in segments:
+                texts.append(seg.text.strip())
+                logprobs.append(seg.avg_logprob)
+                no_speech_probs.append(seg.no_speech_prob)
+            transcript = self._post_process_transcript(" ".join(texts))
+            low_conf = bool(
+                logprobs
+                and (
+                    min(logprobs) < STT_MIN_AVG_LOGPROB
+                    or max(no_speech_probs) > STT_MAX_NO_SPEECH_PROB
+                )
+            )
             logger.info(
                 f"STT: \"{transcript[:100]}\" "
-                f"(lang={info.language}, prob={info.language_probability:.2f})"
+                f"(lang={info.language}, prob={info.language_probability:.2f}, "
+                f"min_logprob={min(logprobs) if logprobs else None:.2f}, "
+                f"low_conf={low_conf})"
             )
-            return transcript
+            return transcript, low_conf
         except Exception:
             logger.exception("VoiceCall: STT failed")
-            return ""
+            return "", True
 
     async def _query_llm(self, question: str) -> str:
         """Query the shared RAG + LLM pipeline in a thread."""
@@ -349,13 +472,37 @@ class VoiceCallSession:
             if self._conversation_history:
                 context = "\n".join(self._conversation_history[-6:])
                 prompt = (
+                    f"This is an {self.direction} call.\n"
                     f"Previous conversation:\n{context}\n\n"
                     f"The caller just said: \"{question}\"\n"
                     f"Answer naturally as a university admissions advisor. "
-                    f"Keep responses concise for voice (under 3 sentences)."
+                    f"Keep responses concise for voice (under 3 sentences). "
+                    f"NEVER ask the same or similar clarifying question twice "
+                    f"in a row. If the caller repeats a similar answer, STOP "
+                    f"asking — state your best interpretation and answer with "
+                    f"concrete information from the university profile, then "
+                    f"invite the caller to correct you."
                 )
+                # Deterministic loop-breaker: if the assistant's own last
+                # two turns were both clarification questions, force an
+                # answer this turn — quantized models sometimes ignore
+                # prompt-only guidance.
+                assistant_turns = [
+                    h for h in self._conversation_history if h.startswith("Assistant: ")
+                ]
+                if (
+                    len(assistant_turns) >= 2
+                    and _is_clarification(assistant_turns[-1])
+                    and _is_clarification(assistant_turns[-2])
+                ):
+                    prompt += (
+                        "\nCRITICAL: Your last two replies were already "
+                        "clarification questions. Do NOT ask any question "
+                        "this turn. Answer directly with concrete "
+                        "information from the university profile."
+                    )
             else:
-                prompt = question
+                prompt = f"This is an {self.direction} call.\n{question}"
 
             return await asyncio.to_thread(run_rag_query_sync, prompt) or ""
         except Exception:

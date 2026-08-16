@@ -17,6 +17,12 @@ def outbound_connect_twiml(host: str) -> str:
     WebSocket for AI conversation.  The AI sends its own TTS greeting
     as soon as the stream starts (handled in main.py).
     """
+    # NOTE: Twilio's <Stream> verb has no echoCancellation/AEC attribute
+    # (verified against the TwiML reference — only url/name/track/
+    # statusCallback are supported). Assistant-TTS bleed into the caller's
+    # audio track is instead mitigated downstream: faster-whisper's
+    # internal VAD plus the STT confidence/fragment noise gate in
+    # app/voice_handler.py.
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"

@@ -70,6 +70,29 @@ def _llm_provider() -> str:
     return "mlx" if IS_APPLE_SILICON else "ollama"
 
 
+def _env_value(key: str, default: str) -> str:
+    """
+    Read a value from .env on disk (last definition wins, matching
+    python-dotenv). Never imports into os.environ — bootstrap must
+    reflect what scripts/predeploy.py just wrote.
+    """
+    env = ROOT / ".env"
+    if not env.is_file():
+        return default
+    try:
+        found = default
+        for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.lstrip()
+            if s.startswith("#") or "=" not in s:
+                continue
+            k, _, v = s.partition("=")
+            if k.strip() == key and v.strip():
+                found = v.strip()
+        return found
+    except OSError:
+        return default
+
+
 def _hf_model_cached(model_id: str) -> bool:
     """Filesystem-only check that a HuggingFace model is fully downloaded."""
     org, repo = model_id.split("/", 1)
@@ -207,10 +230,11 @@ def _ollama_models() -> list:
         return []
 
 
-def _missing_models(models: list) -> list:
+def _missing_models(models: list, required: list | None = None) -> list:
     """Tags may carry suffixes (nomic-embed-text:latest) — match by prefix."""
+    required = required if required is not None else REQUIRED_MODELS
     return [
-        m for m in REQUIRED_MODELS
+        m for m in required
         if not any(name == m or name.startswith(m + ":") for name in models)
     ]
 
@@ -306,6 +330,21 @@ def check_env_file() -> bool:
         ok(".env present")
         return True
     warn(".env missing — will be created from .env.example")
+    return False
+
+
+def check_machine_profile() -> bool:
+    """Verify .env was sized for this machine (scripts/predeploy.py --check)."""
+    predeploy = ROOT / "scripts" / "predeploy.py"
+    if not predeploy.is_file():
+        return True  # optional component
+    r = run([sys.executable, str(predeploy), "--check"], check=False)
+    if r is None:
+        return True  # dry-run
+    if r.returncode == 0:
+        ok("machine profile matches this machine (scripts/predeploy.py)")
+        return True
+    warn("machine profile missing or stale — Phase C will size .env for this machine")
     return False
 
 
@@ -472,10 +511,12 @@ def ensure_llm_up() -> bool:
 
 
 def _ensure_mlx_up() -> bool:
+    # Model from .env (predeploy may have sized it for this machine).
+    model = _env_value("MLX_MODEL", MLX_MODEL)
     if _port_listening(MLX_PORT):
         return True
     if DRY_RUN:
-        print(f"    $ start mlx_lm.server on :{MLX_PORT} (model {MLX_MODEL})")
+        print(f"    $ start mlx_lm.server on :{MLX_PORT} (model {model})")
         return True
     if not VENV_PY.is_file():
         warn("no venv — cannot start the MLX server; run full bootstrap first")
@@ -483,7 +524,7 @@ def _ensure_mlx_up() -> bool:
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
     _detach(
-        [str(VENV_PY), "-m", "mlx_lm.server", "--model", MLX_MODEL,
+        [str(VENV_PY), "-m", "mlx_lm.server", "--model", model,
          "--host", "127.0.0.1", "--port", str(MLX_PORT)],
         logs / "mlx_server.log",
     )
@@ -514,12 +555,18 @@ def _ensure_ollama_up() -> bool:
 
 
 def ensure_models() -> None:
+    # Model names come from .env — scripts/predeploy.py sizes them per
+    # machine before this runs, so the sized model gets pulled/warmed.
     if _llm_provider() == "mlx":
         step("Ensuring MLX models (HuggingFace downloads)")
         if not VENV_PY.is_file():
             warn("no venv — cannot download MLX models; run full bootstrap first")
             return
-        for model_id in (MLX_MODEL, MLX_EMBED_MODEL):
+        required = (
+            _env_value("MLX_MODEL", MLX_MODEL),
+            _env_value("MLX_EMBED_MODEL", MLX_EMBED_MODEL),
+        )
+        for model_id in required:
             if _hf_model_cached(model_id):
                 ok(f"model cached: {model_id}")
                 continue
@@ -530,15 +577,34 @@ def ensure_models() -> None:
             ok(f"downloaded {model_id}")
         return
 
+    required = [
+        _env_value("OLLAMA_MODEL", REQUIRED_MODELS[0]),
+        _env_value("EMBED_MODEL", REQUIRED_MODELS[1]),
+    ]
     models = _ollama_models()
-    missing = _missing_models(models)
-    for m in REQUIRED_MODELS:
+    missing = _missing_models(models, required)
+    for m in required:
         if m not in missing:
             ok(f"model present: {m}")
         else:
             print(f"    pulling {m} (one-time, several GB)...")
             run(["ollama", "pull", m])
             ok(f"pulled {m}")
+
+
+def ensure_machine_profile() -> None:
+    """
+    Size .env for this machine (scripts/predeploy.py --auto).
+
+    Idempotent: exits 0 without writing when the profile already matches.
+    Only machine-derived keys inside the marked block are touched —
+    Twilio/DB creds and manual overrides are never modified.
+    """
+    predeploy = ROOT / "scripts" / "predeploy.py"
+    if not predeploy.is_file():
+        return
+    step("Machine profile (.env sizing)")
+    run([sys.executable, str(predeploy), "--auto"], check=False)
 
 
 def ensure_postgres() -> bool:
@@ -774,6 +840,7 @@ def main() -> int:
     check_ffmpeg()
     check_gpu()
     check_env_file()
+    check_machine_profile()
     check_venv()
     check_rag_store()
     check_ports()
@@ -794,6 +861,7 @@ def main() -> int:
             ensure_docker_daemon()
             ensure_venv()
             ensure_env_file()
+            ensure_machine_profile()  # size .env for this machine
             ensure_llm_up()
             ensure_models()
             ensure_postgres()

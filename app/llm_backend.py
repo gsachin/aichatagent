@@ -38,7 +38,11 @@ logger = logging.getLogger("llm_backend")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
+# Single source of truth for the default context window (env: OLLAMA_NUM_CTX).
+# 8192 — the production voice system prompt (~3.5k tokens) plus RAG context
+# needs this much; scripts/predeploy.py sizes it per machine.
+DEFAULT_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+OLLAMA_NUM_CTX = DEFAULT_NUM_CTX  # backward-compat alias
 OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE", "")  # "" = ollama default
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 
@@ -48,6 +52,9 @@ MLX_BASE_URL = os.environ.get("MLX_BASE_URL", "http://127.0.0.1:1234")
 MLX_MODEL = os.environ.get("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
 MLX_PORT = int(os.environ.get("MLX_PORT", "1234"))
 MLX_EMBED_MODEL = os.environ.get("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+# mlx_lm.server has no context-size flag — max_tokens is the only output
+# window control on the MLX path.
+MLX_MAX_TOKENS = int(os.environ.get("MLX_MAX_TOKENS", "2048"))
 
 _provider: str | None = None
 
@@ -77,16 +84,36 @@ def _max_tokens(num_ctx: int) -> int:
 
     mlx_lm.server defaults max_tokens to 512 (would truncate RAG answers)
     and caps its default context at 8192 — keep answers within a sane
-    window while never going below 512.
+    window while never going below 512. Upper bound via MLX_MAX_TOKENS.
     """
-    return min(max(int(num_ctx), 512), 2048)
+    return min(max(int(num_ctx), 512), MLX_MAX_TOKENS)
 
 
-def _chat_mlx(messages, *, model=None, num_ctx=2048, temperature=None) -> str:
+def default_model(preferred=None) -> list[str]:
+    """
+    Ordered model-preference list for the active backend, with the
+    env-configured OLLAMA_MODEL first. Call sites pass their historical
+    fallback tags; the env value (set by scripts/predeploy.py) wins.
+    """
+    prefs = list(preferred or [])
+    return [OLLAMA_MODEL] + [p for p in prefs if p != OLLAMA_MODEL]
+
+
+def small_task_num_ctx(fallback: int) -> int:
+    """
+    Context window for small utility LLM calls (intent detection, lead
+    extraction, sentiment). Defaults preserve each call site's historical
+    value; SMALL_TASK_NUM_CTX overrides all of them from .env.
+    """
+    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(fallback)))
+
+
+def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:
     """POST /v1/chat/completions on the MLX server (OpenAI-compatible)."""
     import httpx
 
     # Model names containing "/" are treated as MLX repo ids.
+    num_ctx = DEFAULT_NUM_CTX if num_ctx is None else num_ctx
     body_model = model if (model and "/" in model) else MLX_MODEL
     payload = {
         "model": body_model,
@@ -105,12 +132,13 @@ def _chat_mlx(messages, *, model=None, num_ctx=2048, temperature=None) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=2048, temperature=None) -> str:
+def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None, temperature=None) -> str:
     """ollama.chat with today's exact option semantics."""
     import ollama
 
     if model is None:
         model = pick_model(list(preferred) if preferred else None)
+    num_ctx = DEFAULT_NUM_CTX if num_ctx is None else num_ctx
     options = {"num_ctx": int(num_ctx)}
     if temperature is not None:
         options["temperature"] = float(temperature)
@@ -123,7 +151,7 @@ def chat(
     *,
     model=None,
     preferred=None,
-    num_ctx=2048,
+    num_ctx=None,
     temperature=None,
     json_mode=False,
 ) -> str:
@@ -330,13 +358,15 @@ def get_langchain_embeddings():
 
 # ── LangChain chat model (chain sites: root app.py, admissions_bot.py) ─
 
-def get_chat_model(model=None, temperature=None, num_ctx=2048):
+def get_chat_model(model=None, temperature=None, num_ctx=None):
     """
     LangChain chat model for the active backend.
 
     Ollama -> ChatOllama (exact current construction).
     MLX    -> ChatOpenAI pointed at the local mlx_lm.server.
     """
+    num_ctx = DEFAULT_NUM_CTX if num_ctx is None else num_ctx
+
     if provider_name() == "mlx":
         from langchain_openai import ChatOpenAI
 

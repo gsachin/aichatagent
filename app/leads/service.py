@@ -138,7 +138,7 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
 
     # Try to parse a date from the reason using the LLM
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         raw = backend_chat(
@@ -156,8 +156,8 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
                     ),
                 }
             ],
-            preferred=["qwen2.5:7b"],
-            num_ctx=512,
+            preferred=default_model(["qwen2.5:7b"]),
+            num_ctx=small_task_num_ctx(512),
         ).strip()
         # Extract ISO-ish string
         match = re.search(
@@ -326,7 +326,7 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
         if kw in lower:
             # Use LLM to confirm
             try:
-                from app.llm_backend import chat as backend_chat
+                from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
                 raw = backend_chat(
                     messages=[
@@ -341,8 +341,8 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
                             ),
                         }
                     ],
-                    preferred=["qwen2.5:7b"],
-                    num_ctx=2048,
+                    preferred=default_model(["qwen2.5:7b"]),
+                    num_ctx=small_task_num_ctx(2048),
                 ).strip().lower()
                 if raw.startswith("yes"):
                     return True, kw
@@ -388,7 +388,7 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
         return False, ""
 
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
         raw = backend_chat(
             messages=[{
@@ -405,8 +405,8 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
                     f"Transcript (last 1000 chars):\n{transcript[-1000:]}"
                 ),
             }],
-            preferred=["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"],
-            num_ctx=1024,
+            preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
+            num_ctx=small_task_num_ctx(1024),
         ).strip().lower()
         if raw.startswith("yes"):
             return True, "llm_detected"

@@ -51,6 +51,7 @@ except ImportError:
 
 import asyncio as _asyncio
 import base64
+import time as _time
 from datetime import datetime, timezone
 import json
 import logging
@@ -82,8 +83,64 @@ _db_available = False
 _outbound_worker = None
 _follow_up_scheduler = None
 
+# AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so
+# while the assistant's TTS is playing we drop incoming caller audio —
+# it is mostly the caller's mic re-capturing our own speech ("Listen to
+# her again" artifacts). Set MUTE_STT_DURING_TTS=0 to disable.
+MUTE_STT_DURING_TTS = os.environ.get("MUTE_STT_DURING_TTS", "1") == "1"
+
 
 from contextlib import asynccontextmanager
+
+
+async def _hangup_twilio_call(call_sid: str) -> None:
+    """
+    End a live Twilio call via REST — used by the deterministic hangup
+    when a hard sign-off phrase ("bye", "see ya") is detected pre-LLM.
+    Safe to call with a stream_sid fallback; Twilio rejects unknown SIDs
+    and we swallow the error.
+    """
+    if not call_sid:
+        return
+    try:
+        from twilio.rest import Client
+
+        from app.config import settings
+
+        def _update():
+            Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN).calls(
+                call_sid
+            ).update(status="completed")
+
+        await _asyncio.to_thread(_update)
+        logger.info(f"Call terminated (sign-off detected): {call_sid}")
+    except Exception:
+        logger.exception("Twilio hangup failed")
+
+
+_machine_profile_cache: dict = {"at": 0.0, "result": None}
+
+
+def _machine_profile_status() -> dict:
+    """
+    Drift status for health/dashboard payloads (5-minute TTL so
+    monitoring polls don't re-probe the hardware every request).
+    """
+    now = _time.monotonic()
+    if _machine_profile_cache["result"] is None or now - _machine_profile_cache["at"] > 300:
+        try:
+            from app.hardware_profile import check_drift
+
+            drift = check_drift()
+            _machine_profile_cache["result"] = {
+                "state": drift["state"],
+                "tier_id": drift.get("tier_id"),
+                "diffs": drift.get("diffs", []),
+            }
+        except Exception:
+            _machine_profile_cache["result"] = {"state": "error", "tier_id": None, "diffs": []}
+        _machine_profile_cache["at"] = now
+    return _machine_profile_cache["result"]
 
 
 @asynccontextmanager
@@ -102,6 +159,25 @@ async def lifespan(app_instance):
     except Exception as e:
         logger.warning(f"Database init skipped: {e}")
         _db_available = False
+
+    # Machine-profile drift check: warn when the hardware differs from
+    # what .env was sized for (scripts/predeploy.py). Cheap (~100 ms),
+    # stdlib-only, never raises.
+    try:
+        from app.hardware_profile import check_drift
+
+        drift = check_drift()
+        if drift["state"] == "drifted":
+            logger.warning(
+                "Machine drift detected: %s — config was sized for tier %s. %s",
+                drift.get("diffs"), drift.get("tier_id"), drift.get("hint"),
+            )
+        elif drift["state"] == "no_profile":
+            logger.info("No machine profile found — run: python scripts/predeploy.py")
+        elif drift["state"] == "ok":
+            logger.info("Machine profile matches config (tier %s)", drift.get("tier_id"))
+    except Exception:
+        logger.debug("Machine-profile drift check skipped", exc_info=True)
 
     # Pre-warm RAG and Whisper so first voice note doesn't timeout
     try:
@@ -367,8 +443,10 @@ async def websocket_twilio(websocket: WebSocket):
     logger.info("WS /ws/twilio: inbound call connected (AI pipeline active)")
 
     stream_sid: str | None = None
+    call_sid: str = ""
+    tts_playing: bool = False
     transcript_parts: list[str] = []
-    session = VoiceCallSession()
+    session = VoiceCallSession()  # direction defaults to "inbound"
 
     try:
         while True:
@@ -385,12 +463,14 @@ async def websocket_twilio(websocket: WebSocket):
                 logger.info("WS /ws/twilio: connected")
 
             elif event == "start":
-                stream_sid = msg.get("streamSid", msg.get("start", {}).get("streamSid", ""))
-                logger.info(f"WS /ws/twilio: stream started — {stream_sid}")
+                start_payload = msg.get("start", {}) or {}
+                stream_sid = msg.get("streamSid", start_payload.get("streamSid", ""))
+                call_sid = msg.get("callSid", start_payload.get("callSid", ""))
+                logger.info(f"WS /ws/twilio: stream started — {stream_sid} (call {call_sid})")
 
                 # Track for SSE live-call monitor
                 _active_call_sids[stream_sid] = {
-                    "call_sid": stream_sid,
+                    "call_sid": call_sid or stream_sid,
                     "direction": "inbound",
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
@@ -432,16 +512,22 @@ async def websocket_twilio(websocket: WebSocket):
                 except Exception:
                     continue
 
+                # AEC workaround: drop caller audio while our TTS is
+                # playing (it is mostly the mic re-capturing our own speech).
+                if MUTE_STT_DURING_TTS and tts_playing:
+                    session.reset_utterance()
+                    continue
+
                 # Feed audio to VAD + utterance detector
                 utterance_ready = session.feed_audio(ulaw_bytes)
 
                 if utterance_ready:
                     # Process the utterance through the full AI pipeline
                     try:
-                        tts_chunks, dialogue = await session.process_utterance()
+                        tts_chunks, dialogue, end_call = await session.process_utterance()
                     except Exception:
                         logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks, dialogue = [], ""
+                        tts_chunks, dialogue, end_call = [], "", False
 
                     # Save transcript for post-call lead extraction
                     if dialogue:
@@ -454,14 +540,24 @@ async def websocket_twilio(websocket: WebSocket):
                             })
 
                     # Send TTS audio chunks back through the WebSocket
-                    for chunk in tts_chunks:
-                        out_payload = base64.b64encode(chunk).decode("ascii")
-                        response = json.dumps({
-                            "event": "media",
-                            "streamSid": stream_sid or "",
-                            "media": {"payload": out_payload},
-                        })
-                        await websocket.send_text(response)
+                    tts_playing = True
+                    try:
+                        for chunk in tts_chunks:
+                            out_payload = base64.b64encode(chunk).decode("ascii")
+                            response = json.dumps({
+                                "event": "media",
+                                "streamSid": stream_sid or "",
+                                "media": {"payload": out_payload},
+                            })
+                            await websocket.send_text(response)
+                    finally:
+                        tts_playing = False
+
+                    # Deterministic hangup: caller sign-off detected → end call
+                    if end_call:
+                        logger.info(f"WS /ws/twilio: ending call after sign-off ({stream_sid})")
+                        await _hangup_twilio_call(call_sid)
+                        break
 
             elif event == "dtmf":
                 dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
@@ -479,6 +575,12 @@ async def websocket_twilio(websocket: WebSocket):
     except Exception:
         logger.exception("WS /ws/twilio: unexpected error")
     finally:
+        # Clear the active-call entry on ANY exit path — prevents phantom
+        # "active calls" when Twilio's stop event never arrives.
+        if stream_sid and stream_sid in _active_call_sids:
+            entry = _active_call_sids.pop(stream_sid, None)
+            if entry and "ended_at" not in entry:
+                _push_transcript_event("call_ended", stream_sid)
         await _handle_disconnect(transcript_parts)
         try:
             await websocket.close()
@@ -505,8 +607,10 @@ async def websocket_twilio_outbound(websocket: WebSocket):
     logger.info("WS /ws/twilio-outbound: outbound call connected (AI pipeline active)")
 
     stream_sid: str | None = None
+    call_sid: str = ""
+    tts_playing: bool = False
     transcript_parts: list[str] = []
-    session = VoiceCallSession()
+    session = VoiceCallSession(direction="outbound")
 
     try:
         while True:
@@ -523,14 +627,16 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 logger.info("WS /ws/twilio-outbound: connected")
 
             elif event == "start":
+                start_payload = msg.get("start", {}) or {}
                 stream_sid = msg.get(
-                    "streamSid", msg.get("start", {}).get("streamSid", "")
+                    "streamSid", start_payload.get("streamSid", "")
                 )
-                logger.info(f"WS /ws/twilio-outbound: stream started — {stream_sid}")
+                call_sid = msg.get("callSid", start_payload.get("callSid", ""))
+                logger.info(f"WS /ws/twilio-outbound: stream started — {stream_sid} (call {call_sid})")
 
                 # Track for SSE live-call monitor
                 _active_call_sids[stream_sid] = {
-                    "call_sid": stream_sid,
+                    "call_sid": call_sid or stream_sid,
                     "direction": "outbound",
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
@@ -539,14 +645,16 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     "direction": "outbound",
                 })
 
-                # Send an initial AI greeting via TTS
+                # Send an initial AI greeting via TTS — identify caller + reason
+                # per the voice system prompt's outbound section.
                 try:
                     from app.voice_handler import generate_ulaw_greeting
+                    from app.voice_system_prompt import AGENT_NAME, COMPANY_NAME
 
                     greeting = (
-                        "Hi, I'm the admissions assistant. "
-                        "Ask me anything about Meridian University programs, "
-                        "tuition fees, or how to apply."
+                        f"Hi, this is {AGENT_NAME} calling from {COMPANY_NAME} "
+                        f"Admissions. Do you have a moment to talk about our "
+                        f"programs, tuition fees, or how to apply?"
                     )
                     chunks = generate_ulaw_greeting(greeting)
                     logger.info(
@@ -576,16 +684,22 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 except Exception:
                     continue
 
+                # AEC workaround: drop caller audio while our TTS is
+                # playing (it is mostly the mic re-capturing our own speech).
+                if MUTE_STT_DURING_TTS and tts_playing:
+                    session.reset_utterance()
+                    continue
+
                 # Feed audio to VAD + utterance detector
                 utterance_ready = session.feed_audio(ulaw_bytes)
 
                 if utterance_ready:
                     # Process the utterance through the full AI pipeline
                     try:
-                        tts_chunks, dialogue = await session.process_utterance()
+                        tts_chunks, dialogue, end_call = await session.process_utterance()
                     except Exception:
                         logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks, dialogue = [], ""
+                        tts_chunks, dialogue, end_call = [], "", False
 
                     # Save transcript for post-call lead extraction
                     if dialogue:
@@ -598,16 +712,26 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                             })
 
                     # Send TTS audio chunks back through the WebSocket
-                    for chunk in tts_chunks:
-                        out_payload = base64.b64encode(chunk).decode("ascii")
-                        response = json.dumps(
-                            {
-                                "event": "media",
-                                "streamSid": stream_sid or "",
-                                "media": {"payload": out_payload},
-                            }
-                        )
-                        await websocket.send_text(response)
+                    tts_playing = True
+                    try:
+                        for chunk in tts_chunks:
+                            out_payload = base64.b64encode(chunk).decode("ascii")
+                            response = json.dumps(
+                                {
+                                    "event": "media",
+                                    "streamSid": stream_sid or "",
+                                    "media": {"payload": out_payload},
+                                }
+                            )
+                            await websocket.send_text(response)
+                    finally:
+                        tts_playing = False
+
+                    # Deterministic hangup: caller sign-off detected → end call
+                    if end_call:
+                        logger.info(f"WS /ws/twilio-outbound: ending call after sign-off ({stream_sid})")
+                        await _hangup_twilio_call(call_sid)
+                        break
 
             elif event == "dtmf":
                 dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
@@ -627,6 +751,12 @@ async def websocket_twilio_outbound(websocket: WebSocket):
     except Exception:
         logger.exception("WS /ws/twilio-outbound: unexpected error")
     finally:
+        # Clear the active-call entry on ANY exit path — prevents phantom
+        # "active calls" when Twilio's stop event never arrives.
+        if stream_sid and stream_sid in _active_call_sids:
+            entry = _active_call_sids.pop(stream_sid, None)
+            if entry and "ended_at" not in entry:
+                _push_transcript_event("call_ended", stream_sid)
         await _handle_disconnect(transcript_parts)
 
 
@@ -1221,7 +1351,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
 
     # LLM confirmation
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
         raw = backend_chat(
             messages=[{
@@ -1239,8 +1369,8 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
                     f"User message:\n{msg_lower[-800:]}"
                 ),
             }],
-            preferred=["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"],
-            num_ctx=1024,
+            preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
+            num_ctx=small_task_num_ctx(1024),
         ).strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
@@ -2182,6 +2312,7 @@ async def api_dashboard_summary():
         "recent_activity": conversations[:10],
         "active_call_details": _active_call_sids,
         "sentiment_stats": await _get_sentiment_stats(),
+        "machine_profile": _machine_profile_status(),
     }
 
 
@@ -2559,6 +2690,7 @@ async def health_check(request: Request):
         "outbound_worker": "active" if _outbound_worker and _outbound_worker._running else "inactive",
         "mcp_enabled": settings.MCP_ENABLED,
         "sentiment_analysis": "enabled",
+        "machine_profile": _machine_profile_status(),
         "endpoints": {
             "health": "/",
             "voice_page": "/voice",

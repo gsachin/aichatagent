@@ -10,6 +10,7 @@ Usage:
     python quick_call.py                          # interactive prompt
     python quick_call.py +917016872149            # call this number
     python quick_call.py +917016872149 "Rahul"    # call with name
+    python quick_call.py +917016872149 "Rahul" --timeout 600   # poll 10 min
 """
 
 from __future__ import annotations
@@ -104,8 +105,8 @@ def quick_call(phone: str, name: str = "") -> dict:
     })
 
 
-def poll_status(lead_id: str, timeout: int = 120) -> str:
-    """Poll call status until terminal state or timeout."""
+def poll_status(lead_id: str, timeout: int = 600) -> str:
+    """Poll call status until terminal state or timeout (default 10 minutes)."""
     print(f"{YELLOW}→ Polling call status (timeout {timeout}s)...{RESET}")
     start = time.time()
     last_status = ""
@@ -225,13 +226,23 @@ def main():
             print(f"{YELLOW}⚠️  Tunnel not available — outbound calls may not work{RESET}")
             print(f"   Start manually: cloudflared tunnel --url http://localhost:8000")
 
-    # 3. Get phone number
+    # 3. Parse CLI args (phone, name, optional --timeout seconds)
+    timeout = 600
+    args = [a for a in sys.argv[1:]]
+    if "--timeout" in args:
+        i = args.index("--timeout")
+        try:
+            timeout = int(args[i + 1])
+            del args[i:i + 2]
+        except (IndexError, ValueError):
+            print(f"{RED}Invalid --timeout value — using 600s{RESET}")
+
     phone = ""
     name = ""
-    if len(sys.argv) > 1:
-        phone = sys.argv[1].strip()
-    if len(sys.argv) > 2:
-        name = sys.argv[2].strip()
+    if len(args) > 0:
+        phone = args[0].strip()
+    if len(args) > 1:
+        name = args[1].strip()
 
     if not phone:
         phone = input(f"{BOLD}Phone number: {RESET}").strip()
@@ -266,11 +277,11 @@ def main():
         wh = f"https://{result['tunnel_host']}/twilio/whatsapp"
         print(f"{CYAN}📋 Twilio Webhook: {wh}{RESET}")
 
-    # 5. Poll until done
+    # 5. Poll until done (10-minute window by default; --timeout to override)
     lead_id = lead.get("id", "")
     if lead_id:
         print()
-        final = poll_status(lead_id)
+        final = poll_status(lead_id, timeout)
         print()
         if final == "completed":
             print(f"{BOLD}{GREEN}🎉 Call completed successfully!{RESET}")

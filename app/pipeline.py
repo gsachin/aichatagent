@@ -38,7 +38,10 @@ DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
 TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
-NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
+# Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
+# Voice calls run the full production voice system prompt (~3.5k tokens)
+# plus RAG context; scripts/predeploy.py sizes it per machine.
+from app.llm_backend import DEFAULT_NUM_CTX as NUM_CTX  # noqa: E402
 
 # ── Platform Detection (Multi-GPU Support) ──────────────────────────
 from app.platform import detect_compute_device
@@ -80,24 +83,21 @@ def _vram_info() -> str:
 
 def build_rag_prompt(transcript: str) -> str:
     """
-    Enrich the transcribed user query with ChromaDB context.
-    Uses shared RAG module for consistent retrieval quality.
+    Enrich the transcribed user query with ChromaDB context and wrap it
+    in the production voice system prompt (app.voice_system_prompt).
+    Retrieval stays centralized in app.rag; the voice behavioral rules
+    (interruption handling, turn-taking, spoken-output) live in the
+    voice prompt so chat interfaces keep their Markdown-oriented prompt.
 
     This function is called between STT output and LLM input.
     """
-    from app.rag import retrieve_context, SYSTEM_PROMPT
+    from app.rag import retrieve_context
+    from app.voice_system_prompt import build_voice_system_prompt
 
     context = retrieve_context(transcript)
 
-    if context:
-        prompt = SYSTEM_PROMPT.format(context=context)
-    else:
-        prompt = (
-            "You are a helpful university admissions assistant. "
-            "Answer the user's question to the best of your ability. "
-            "If you're unsure, say so.\n\n"
-        )
-    prompt += f"Student's question: {transcript}"
+    prompt = build_voice_system_prompt(context)
+    prompt += f"\n\nStudent's question: {transcript}"
     return prompt
 
 

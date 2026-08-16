@@ -161,7 +161,7 @@ else
     nohup python -m uvicorn app.main:app \
         --host 0.0.0.0 \
         --port "$FASTAPI_PORT" \
-        --workers 4 \
+        --workers "${FASTAPI_WORKERS:-4}" \
         > "$PROJECT_ROOT/logs/fastapi.log" 2>&1 &
 fi
 log_success "FastAPI started (PID: $!)"
