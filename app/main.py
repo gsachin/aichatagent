@@ -682,14 +682,29 @@ async def twilio_outbound_status_callback(
             update_lead,
         )
 
-        # 1. Update the call_queue entry by CallSid
+        # 1. Update the call_queue entry by CallSid.
+        # Only true terminal states may mark the entry failed — transient
+        # progress states (ringing / answered) previously flipped the entry
+        # to "failed" the moment the phone started ringing, which made the
+        # CLI report failure and the worker place duplicate retry calls.
+        if CallStatus == "completed":
+            new_status, error = "completed", ""
+        elif CallStatus in ("busy", "no-answer", "failed", "canceled"):
+            new_status, error = "failed", f"Twilio status: {CallStatus}"
+        elif CallStatus in ("answered", "in-progress"):
+            new_status, error = "in-progress", ""
+        elif CallStatus == "ringing":
+            new_status, error = "ringing", ""
+        else:
+            # "initiated" and unknowns — leave the entry as the worker set it
+            new_status, error = None, None
+
         queue_entry = await get_call_queue_by_sid(CallSid)
         if queue_entry:
-            await update_call_queue_status(
-                queue_entry["id"],
-                "completed" if CallStatus == "completed" else "failed",
-                error_message="" if CallStatus == "completed" else f"Twilio status: {CallStatus}",
-            )
+            if new_status is not None:
+                await update_call_queue_status(
+                    queue_entry["id"], new_status, error_message=error
+                )
             logger.info(f"Call queue entry {queue_entry['id']} updated to {CallStatus}")
 
         # 2. Update the lead status
