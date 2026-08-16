@@ -30,6 +30,9 @@ chroma_local_db/
 # Pytest
 .pytest_cache/
 
+# Runtime logs
+logs/
+
 # Cloudflare tunnel hostname (changes every restart)
 .whatsapp_tunnel
 .tunnel_*
