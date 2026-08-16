@@ -10,23 +10,28 @@
 #   optionally starts the Streamlit apps.
 #
 # Usage:
-#   bash start_services.sh
-#   bash start_services.sh --with-streamlit
+#   bash start_services.sh              # everything, including Streamlit UIs
+#   bash start_services.sh --skip-streamlit   # FastAPI + tunnel only
 #   bash start_services.sh --skip-twilio
 #   bash start_services.sh --named-tunnel [--tunnel-name my-tunnel]
+#
+# NOTE: Streamlit starts BY DEFAULT here (unlike the PS1's -WithStreamlit
+# opt-in) -- plain "bash start_services.sh" must leave localhost:8501/8502
+# working. --with-streamlit is accepted for PS1 compatibility.
 #
 # Bash 3.2 compatible (macOS default shell): no associative arrays, no
 # ${var,,}, no [[ =~ ]] regex — grep/awk are used instead.
 # =============================================================================
 
-WITH_STREAMLIT=false
+WITH_STREAMLIT=true
 SKIP_TWILIO=false
 NAMED_TUNNEL=false
 TUNNEL_NAME="admissions-tunnel"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --with-streamlit) WITH_STREAMLIT=true ;;
+        --with-streamlit) WITH_STREAMLIT=true ;;   # PS1-compat (already default)
+        --skip-streamlit) WITH_STREAMLIT=false ;;
         --skip-twilio)    SKIP_TWILIO=true ;;
         --named-tunnel)   NAMED_TUNNEL=true ;;
         --tunnel-name)
@@ -38,7 +43,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: bash start_services.sh [--with-streamlit] [--skip-twilio] [--named-tunnel [--tunnel-name NAME]]"
+            echo "Usage: bash start_services.sh [--skip-streamlit] [--skip-twilio] [--named-tunnel [--tunnel-name NAME]]"
             exit 0
             ;;
         *)
