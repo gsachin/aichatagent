@@ -493,6 +493,7 @@ async def websocket_twilio(websocket: WebSocket):
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
                 }
+                session.call_id = stream_sid
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "inbound",
                 })
@@ -535,7 +536,10 @@ async def websocket_twilio(websocket: WebSocket):
 
                 # AEC workaround: drop caller audio while our TTS is
                 # playing (it is mostly the mic re-capturing our own speech).
+                # Logged as BARGE_IN_DETECTED — pre-Wave-1 the system cannot
+                # cancel TTS playback, only shield STT from the bleed.
                 if MUTE_STT_DURING_TTS and tts_playing:
+                    session.log_event("BARGE_IN_DETECTED")
                     session.reset_utterance()
                     continue
 
@@ -561,6 +565,7 @@ async def websocket_twilio(websocket: WebSocket):
                             })
 
                     # Send TTS audio chunks back through the WebSocket
+                    session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
                     tts_playing = True
                     try:
                         for chunk in tts_chunks:
@@ -574,6 +579,7 @@ async def websocket_twilio(websocket: WebSocket):
                                 raise WebSocketDisconnect(code=1000)
                     finally:
                         tts_playing = False
+                    session.log_event("AGENT_SPEECH_STOPPED")
 
                     # Deterministic hangup: caller sign-off detected → end call
                     if end_call:
@@ -669,6 +675,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
                 }
+                session.call_id = stream_sid
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "outbound",
                 })
@@ -717,7 +724,10 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
                 # AEC workaround: drop caller audio while our TTS is
                 # playing (it is mostly the mic re-capturing our own speech).
+                # Logged as BARGE_IN_DETECTED — pre-Wave-1 the system cannot
+                # cancel TTS playback, only shield STT from the bleed.
                 if MUTE_STT_DURING_TTS and tts_playing:
+                    session.log_event("BARGE_IN_DETECTED")
                     session.reset_utterance()
                     continue
 
@@ -743,6 +753,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                             })
 
                     # Send TTS audio chunks back through the WebSocket
+                    session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
                     tts_playing = True
                     try:
                         for chunk in tts_chunks:
@@ -758,6 +769,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                                 raise WebSocketDisconnect(code=1000)
                     finally:
                         tts_playing = False
+                    session.log_event("AGENT_SPEECH_STOPPED")
 
                     # Deterministic hangup: caller sign-off detected → end call
                     if end_call:

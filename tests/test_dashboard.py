@@ -301,21 +301,23 @@ class TestTwiMLEndpoints:
 
 
 class TestTranscriptFix:
-    """Verify that process_utterance() returns (chunks, dialogue) tuple."""
+    """Verify that process_utterance() returns (chunks, dialogue, end_call) tuple."""
 
     def test_process_utterance_returns_tuple(self):
         session = VoiceCallSession()
-        # Call with empty buffer (no audio) — should return ([], "")
+        # Call with empty buffer (no audio) — should return ([], "", False)
         import asyncio
 
         result = asyncio.run(session.process_utterance())
         assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
-        assert len(result) == 2, f"Expected 2 elements, got {len(result)}"
-        chunks, dialogue = result
+        assert len(result) == 3, f"Expected 3 elements, got {len(result)}"
+        chunks, dialogue, end_call = result
         assert isinstance(chunks, list), f"Expected list for chunks, got {type(chunks)}"
         assert isinstance(dialogue, str), f"Expected str for dialogue, got {type(dialogue)}"
+        assert isinstance(end_call, bool), f"Expected bool for end_call, got {type(end_call)}"
         assert chunks == []  # Empty buffer should give empty chunks
         assert dialogue == ""  # Empty buffer should give empty dialogue
+        assert end_call is False  # No sign-off detected on empty buffer
 
     def test_voice_handler_imports(self):
         """Verify voice_handler module imports correctly."""
