@@ -114,7 +114,13 @@ SYSTEM_PROMPT = (
     "from, e.g. (§ Fees Structure).\n"
     "4. If the context truly has NO relevant data for a question, "
     "say: \"I don't have that specific information in the university profile.\"\n"
-    "5. Be concise and conversational.\n\n"
+    "5. Be concise and conversational.\n"
+    "6. Answer only the question the student asked — give one answer at a "
+    "time, and ask at most one short follow-up question if it is truly "
+    "needed to answer.\n"
+    "7. Never ask the student for personal details (name, phone number, "
+    "email, city, country) and never re-ask details they already shared — "
+    "the chat system collects profile information itself, one field at a time.\n\n"
     "Context:\n{context}"
 )
 

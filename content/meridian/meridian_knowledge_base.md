@@ -236,16 +236,3 @@ Apply online with the application form, submit documents (transcripts, ID, test 
 | Students | Faculty | Placement Rate | Programs |
 |---|---|---|---|
 | 5,000+ | 150+ | 95% | 50+ |
-
----
-
-## Admission Agent Conversation Script
-
-Defines the exact questions the AI Admission Agent should ask a prospective student, in sequence, during a guided admissions conversation.
-
-1. **Greeting** — "Hello! Welcome to the University Admissions Office. How can I help you today?" Then ask: "Are you looking for information about admissions, courses, fees, scholarships, or something else?"
-2. **Student Information** — full name; mobile number; email address; city and country.
-3. **Academic Background** — highest qualification.
-4. **Program Interest** — which course (Undergraduate / Postgraduate / Diploma / PhD); specific program in mind; specialization of interest.
-5. **Admission Details** — planned intake (Fall / Spring / Summer); domestic or international student.
-6. **Follow-up** — schedule a callback; best time to contact; send admission brochure by email or WhatsApp.

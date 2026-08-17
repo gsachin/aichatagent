@@ -207,6 +207,13 @@ async def lifespan(app_instance):
             vs = get_vector_store()
             if vs:
                 logger.info("ChromaDB vector store pre-warmed")
+            # Pre-load the embedding model so the first RAG query doesn't
+            # pay the cold-start cost (HF config checks + model load)
+            from app.llm_backend import get_embedding_function, provider_name
+
+            if provider_name() == "mlx":
+                get_embedding_function()(["warmup"])
+                logger.info("Embedding model pre-warmed")
             # Pre-load Whisper model
             _get_stt_model()
             logger.info("Whisper model pre-warmed")
@@ -1269,7 +1276,10 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     strong = [
         "i want to take admission",
         "i want admission",
-        "take addmission",
+        "take the admission",
+        "take admission",
+        "want to take admission",
+        "take addmission",  # common typo
         "i want to enroll",
         "ready to enroll",
         "sign me up",
