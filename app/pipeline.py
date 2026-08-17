@@ -289,13 +289,16 @@ async def post_call_handler(transcript: str, phone_number: str = "") -> bool:
         return False
 
 
-def run_rag_query_sync(user_text: str) -> str | None:
+def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
     Uses shared RAG module for consistent quality across all interfaces.
+
+    mode: "voice" (default, phone calls) or "chat" (text UIs — Markdown
+    SYSTEM_PROMPT, same style as the Streamlit chat).
     """
     from app.rag import query_rag
-    return query_rag(user_text)
+    return query_rag(user_text, mode=mode)
 
 
 async def test_pipeline_with_text(user_text: str) -> str | None:

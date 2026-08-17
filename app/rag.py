@@ -14,7 +14,7 @@ Meridian pivot (2026-08-14):
 Provides:
     get_vector_store()   — load persisted ChromaDB (LangChain, raw fallback)
     build_vector_store() — validated build used only by the rebuild script
-    query_rag(question)  — full RAG pipeline, returns answer string
+    query_rag(question, mode="voice"|"chat")  — full RAG pipeline, returns answer string
     retrieve_context(q)  — MMR (or hybrid) retrieval, returns formatted context
 """
 
@@ -497,12 +497,18 @@ def _best_distance(query: str) -> float | None:
         return None
 
 
-def query_rag(question: str) -> str | None:
+def query_rag(question: str, *, mode: str = "voice") -> str | None:
     """
     Full RAG pipeline: retrieve context -> build prompt -> query LLM.
 
     This is the single entry point for ALL interfaces.
     Thread-safe (no shared mutable state). Callable from sync or async contexts.
+
+    mode:
+        "voice" (default) — production voice system prompt for live phone
+                            calls (app.voice_handler, inbound/outbound).
+        "chat"            — Markdown-oriented SYSTEM_PROMPT, same answer
+                            style as the Streamlit chat (WhatsApp text).
 
     Returns:
         Answer string, or None if the pipeline failed.
@@ -520,13 +526,20 @@ def query_rag(question: str) -> str | None:
     # Step 1: Retrieve context
     context = retrieve_context(question)
 
-    # Step 2: Build prompt — live voice calls use the production voice
-    # system prompt (interruption handling, spoken-output rules) with the
-    # retrieved context grounded in. Text chat UIs (Streamlit app.py,
-    # admissions_bot.py) keep the Markdown-oriented SYSTEM_PROMPT above.
-    from app.voice_system_prompt import build_voice_system_prompt
+    # Step 2: Build prompt. Live voice calls keep the production voice
+    # system prompt (interruption handling, spoken-output rules).
+    # Text chat interfaces (WhatsApp, Streamlit app.py, admissions_bot.py)
+    # use the Markdown-oriented SYSTEM_PROMPT above so answers match
+    # across text channels.
+    if mode == "chat":
+        prompt = SYSTEM_PROMPT.format(
+            context=context
+            or "(No university profile information was retrieved for this question.)"
+        )
+    else:
+        from app.voice_system_prompt import build_voice_system_prompt
 
-    prompt = build_voice_system_prompt(context)
+        prompt = build_voice_system_prompt(context)
     prompt += f"\n\nStudent's question: {question}"
 
     # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)

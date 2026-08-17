@@ -19,8 +19,7 @@ Endpoints:
     WS   /ws/twilio              — Twilio Media Streams (8 kHz u-law)
     WS   /ws/twilio-outbound     — Twilio Media Streams — outbound calls
     POST /twilio/outbound/status — Outbound call status callback
-    POST /twilio/whatsapp        — WhatsApp webhook (text + voice notes)
-    GET  /audio/{filename}       — Serve generated TTS audio
+    POST /twilio/whatsapp        — WhatsApp webhook (text + documents; voice notes unsupported)
     POST /api/quick-call         — One-shot create lead + queue outbound call
     GET  /api/call-queue         — Poll call status for a lead
     GET  /mcp/sse                — MCP SSE transport
@@ -949,7 +948,7 @@ async def twilio_voice_connect(Digits: str = ""):
     return Response(content=twiml, media_type="application/xml")
 
 
-# ── WhatsApp voice transcription ───────────────────────────────────────
+# ── Shared STT model (voice pipeline warmup) ───────────────────────────
 
 # Reuse the shared STT model from voice_handler (faster-whisper on CUDA)
 
@@ -958,164 +957,6 @@ def _get_stt_model():
     """Reuse the shared faster-whisper model from voice_handler."""
     from app.voice_handler import _get_stt_model as _vh_stt_model
     return _vh_stt_model()
-
-
-async def _transcribe_whatsapp_audio(media_url: str, content_type: str) -> str:
-    """
-    Download WhatsApp voice note from Twilio and transcribe via Whisper.
-    WhatsApp sends audio as OGG/Opus or MP4/AAC — soundfile handles both.
-    Returns transcribed text, or empty string on failure.
-    """
-    import asyncio as _asyncio
-    import io as _io
-    import tempfile
-    import urllib.request
-
-    try:
-        # Download audio from Twilio
-        logger.info(f"Downloading audio: {media_url[:80]}...")
-        req = urllib.request.Request(media_url)
-        # Twilio requires basic auth for media access
-        from app.config import settings
-        auth_str = base64.b64encode(
-            f"{settings.TWILIO_ACCOUNT_SID}:{settings.TWILIO_AUTH_TOKEN}".encode()
-        ).decode()
-        req.add_header("Authorization", f"Basic {auth_str}")
-
-        audio_bytes = await _asyncio.to_thread(
-            lambda: urllib.request.urlopen(req, timeout=30).read()
-        )
-        logger.info(f"Downloaded {len(audio_bytes)} bytes of audio")
-
-        # Convert to 16kHz mono PCM using soundfile (supports OGG/MP4/WAV)
-        import soundfile as sf
-        import numpy as np
-
-        audio_np, orig_sr = sf.read(_io.BytesIO(audio_bytes))
-        if audio_np.ndim > 1:
-            audio_np = audio_np.mean(axis=1)  # Stereo → mono
-
-        # Resample to 16kHz if needed (Whisper expects 16kHz)
-        if orig_sr != 16000 and len(audio_np) > 0:
-            from scipy.signal import resample
-            target_len = int(len(audio_np) * 16000 / orig_sr)
-            audio_np = resample(audio_np, target_len)
-
-        logger.info(f"Audio: {len(audio_np)/16000:.1f}s @ 16kHz")
-
-        # Transcribe with faster-whisper (numpy array, no PyAV needed)
-        model = _get_stt_model()
-        audio_float = audio_np.astype(np.float32) / 32768.0
-        segments, info = model.transcribe(
-            audio_float, language="en", beam_size=5, vad_filter=True
-        )
-        transcript = " ".join(seg.text.strip() for seg in segments)
-
-        logger.info(f"Transcribed ({len(transcript)} chars): {transcript[:100]}...")
-        return transcript
-
-    except Exception as e:
-        logger.exception(f"Voice transcription failed: {e}")
-        return ""
-
-
-# ── Async voice note processing ────────────────────────────────────────
-
-
-def _send_whatsapp_message(
-    to_number: str,
-    from_number: str,
-    body: str,
-    media_url: str | None = None,
-):
-    """Send a WhatsApp message via Twilio REST API, optionally with media."""
-    from app.messaging import send_whatsapp_message
-    ok, _ = send_whatsapp_message(to_number, from_number, body, media_url=media_url)
-    return ok
-
-
-async def _process_voice_note_async(
-    media_url: str,
-    content_type: str,
-    from_number: str,
-    to_number: str,
-):
-    """
-    Background task: process a WhatsApp voice note end-to-end.
-    1. Download + transcribe audio
-    2. Run RAG pipeline
-    3. Send answer via Twilio REST API
-    """
-    from app.pipeline import run_rag_query_sync
-
-    # Step 1: Transcribe
-    transcript = await _transcribe_whatsapp_audio(media_url, content_type)
-    if not transcript:
-        _send_whatsapp_message(
-            to_number=from_number,
-            from_number=to_number,
-            body="I couldn't understand the audio. Please try again or type your question.",
-        )
-        return
-
-    # Step 2: RAG
-    try:
-        answer = await _asyncio.to_thread(run_rag_query_sync, transcript)
-    except Exception:
-        logger.exception("Async RAG failed")
-        answer = None
-
-    if not answer:
-        _send_whatsapp_message(
-            to_number=from_number,
-            from_number=to_number,
-            body="Sorry, I couldn't process your question right now. Please try again.",
-        )
-        return
-
-    # Step 3: Generate TTS audio
-    audio_filename = await _asyncio.to_thread(_generate_tts_audio, answer)
-
-    # Step 4: Resolve tunnel host
-    tunnel_host = _resolve_tunnel_host()
-    if tunnel_host and tunnel_host != "localhost:8000":
-        logger.info(f"Tunnel host: {tunnel_host}")
-
-    # Step 5: Send reply (text always; audio only if available)
-    if audio_filename and tunnel_host:
-        audio_url = f"https://{tunnel_host}/audio/{audio_filename}"
-        _send_whatsapp_message(
-            to_number=from_number,
-            from_number=to_number,
-            body=answer,
-            media_url=audio_url,
-        )
-        logger.info(f"Voice reply sent: text + audio ({audio_filename})")
-    else:
-        if not audio_filename:
-            logger.warning("TTS audio generation failed — sending text-only reply")
-        elif not tunnel_host:
-            logger.warning("TUNNEL_HOST not set — sending text-only reply")
-        _send_whatsapp_message(
-            to_number=from_number,
-            from_number=to_number,
-            body=answer,
-        )
-        logger.info("Voice reply sent: text-only")
-
-    logger.info(f"Voice note processed: {from_number} ← {len(answer)} chars")
-
-    # Log conversation to new leads subsystem
-    try:
-        from app.leads.service import log_interaction
-
-        await log_interaction(
-            phone_number=from_number,
-            channel="whatsapp",
-            transcript=f"User (voice): {transcript}\nAssistant: {answer}",
-        )
-    except Exception:
-        logger.exception("Failed to log voice-note conversation (non-fatal)")
 
 
 # ── WhatsApp conversation logger ──────────────────────────────────────
@@ -1146,65 +987,6 @@ WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Message>{answer}</Message>
 </Response>"""
 
-WHATSAPP_TWIML_VOICE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message><Body>{answer}</Body></Message>
-    <Message><Media>{audio_url}</Media></Message>
-</Response>"""
-
-# Directory for serving generated TTS audio to Twilio
-_AUDIO_DIR = Path(__file__).resolve().parent / "static" / "audio"
-_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _generate_tts_audio(text: str) -> str | None:
-    """
-    Generate TTS audio via Kokoro, save as MP3 for WhatsApp compatibility.
-    Returns filename (mp3), or None if TTS is unavailable or fails.
-    """
-    import io as _io
-    import uuid
-    import numpy as np
-
-    try:
-        from kokoro_onnx import Kokoro
-
-        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "pipecat", "kokoro-onnx")
-        kokoro = Kokoro(
-            os.path.join(cache_dir, "kokoro-v1.0.onnx"),
-            os.path.join(cache_dir, "voices-v1.0.bin"),
-        )
-        # Keep audio short for WhatsApp — max 300 chars
-        tts_text = text[:300] if len(text) > 300 else text
-        audio, sr = kokoro.create(tts_text, voice="af_heart", speed=1.0)
-
-        # WhatsApp supports MP3 — use soundfile to encode directly
-        import soundfile as sf
-        buf = _io.BytesIO()
-        sf.write(buf, audio, sr, format="MP3")
-        buf.seek(0)
-
-        filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
-        filepath = _AUDIO_DIR / filename
-        filepath.write_bytes(buf.read())
-        logger.info(f"TTS audio saved: {filename} ({len(audio)/sr:.1f}s, {filepath.stat().st_size/1024:.0f} KB)")
-        return filename
-
-    except Exception as e:
-        logger.exception(f"TTS generation failed: {e}")
-        return None
-
-
-@app.get("/audio/{filename}")
-async def serve_audio(filename: str):
-    """Serve generated TTS audio files for WhatsApp voice replies."""
-    filepath = _AUDIO_DIR / filename
-    if not filepath.is_file():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    media_type = "audio/mpeg" if filename.endswith(".mp3") else "audio/wav"
-    return FileResponse(filepath, media_type=media_type)
-
-
 # ── WhatsApp helper: document upload from students ─────────────────────
 
 async def _handle_whatsapp_document(
@@ -1215,8 +997,9 @@ async def _handle_whatsapp_document(
 ):
     """
     Download a document sent via WhatsApp, save to data/documents/,
-    record in lead_documents table, and auto-trigger offer letter if
-    the lead has program_interest.
+    record in lead_documents table, and nudge the student to type
+    'done' when everything is uploaded — the webhook generates the
+    offer letter at that point, never per upload.
     """
     import uuid
     import urllib.request
@@ -1289,13 +1072,11 @@ async def _handle_whatsapp_document(
         )
 
         if doc and lead.get("program_interest", "").strip():
-            # Auto-trigger offer letter
-            from app.offers.service import generate_and_send_offer
-            offer = await generate_and_send_offer(lead_id)
-            if offer:
-                logger.info(f"WhatsApp document → offer letter sent: {offer['id']}")
-            else:
-                logger.info(f"WhatsApp document saved, but offer skipped (may already exist)")
+            # Offer letters are generated only when the student types "done"
+            # (see twilio_whatsapp_webhook) — never auto-triggered per upload.
+            logger.info(
+                f"WhatsApp document saved for {lead_id} — awaiting 'done' to generate offer"
+            )
         elif doc:
             # Program not set — proactively ask what the student wants
             from app.offers.service import evaluate_offer_readiness, missing_fields_text
@@ -1355,6 +1136,118 @@ def _detect_meridian_program(msg_lower: str) -> str:
         if alias in msg_lower:
             return canonical
     return ""
+
+
+# Words that mark a message as a knowledge question even when it's short
+# and has no "?" — e.g. "fees", "hostel". Kept narrow so admission intent
+# ("I want to take admission") is never misrouted to RAG.
+_KB_QUESTION_KEYWORDS = (
+    "fees", "tuition", "fee structure", "scholarship", "courses",
+    "programs", "hostel", "placement", "eligibility", "duration",
+    "deadline", "entrance", "intake", "how much", "refund",
+)
+
+
+async def _whatsapp_chat_rag(question: str) -> str:
+    """
+    RAG answer for WhatsApp text chat using the chat-oriented prompt
+    (mode="chat" — same Markdown SYSTEM_PROMPT as the Streamlit chat).
+    """
+    from app.pipeline import run_rag_query_sync
+
+    try:
+        answer = await _asyncio.to_thread(run_rag_query_sync, question, mode="chat")
+        if answer:
+            # Escape for the TwiML XML payload
+            return answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    except Exception:
+        logger.exception("WhatsApp RAG failed")
+    return "Sorry, I couldn't process your question. Please try again."
+
+
+async def _whatsapp_offer_on_done(lead_id: str, lead_name: str) -> str:
+    """
+    Generate + send the offer letter when the student signals that all
+    documents are uploaded ("done").
+
+    Checks readiness, requires at least one uploaded document, then calls
+    generate_and_send_offer — which is itself idempotent (24h guard), so
+    a repeated "done" does not re-send a second offer letter.
+    """
+    from app.offers.models import list_documents
+    from app.offers.service import (
+        evaluate_offer_readiness,
+        generate_and_send_offer,
+        missing_fields_text,
+    )
+
+    try:
+        readiness = await evaluate_offer_readiness(lead_id)
+        if readiness["missing"]:
+            return (
+                "Before I can generate your offer letter, I still need: "
+                f"{missing_fields_text(readiness['missing'])}."
+            )
+
+        docs = await list_documents(lead_id)
+        if not docs:
+            return (
+                "I don't see any documents from you yet. Please send clear photos "
+                "or PDFs of your transcript/marksheet and ID proof, then type 'done'."
+            )
+
+        offer = await generate_and_send_offer(lead_id)
+        if offer:
+            program = offer.get("program") or ""
+            return (
+                f"🎓 Great news, {lead_name}! Your offer letter for {program} is ready — "
+                "I've sent it here on WhatsApp and emailed you a copy. "
+                "Reply 'accept' or 'decline' when you're ready."
+            )
+        return "Hmm, I couldn't generate your offer letter right now. Please try again in a moment."
+    except Exception:
+        logger.exception("WhatsApp offer generation on 'done' failed")
+        return "Hmm, I couldn't generate your offer letter right now. Please try again in a moment."
+
+
+def _strip_markdown(text: str) -> str:
+    """
+    Convert LLM Markdown to plain text for WhatsApp (Twilio renders raw text).
+
+    Handles bold/italic/strikethrough, headers, horizontal rules,
+    blockquotes, bullets, links, inline code, and Markdown table framing.
+    Safe on already-plain text.
+    """
+    import re
+
+    # Links: [text](url) -> text (url)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    # Inline code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Bold / italic / strikethrough
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", text)
+    text = re.sub(r"_{2}([^_]+)_{2}", r"\1", text)
+    text = re.sub(r"(?<!_)_([^_]+)_(?!_)", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+    # Headers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Horizontal rules
+    text = re.sub(r"^\s*([-*_])\s*(?:\1\s*){2,}$", "", text, flags=re.MULTILINE)
+    # Blockquotes
+    text = re.sub(r"^\s*>\s?", "", text, flags=re.MULTILINE)
+    # Bullets -> "• "
+    text = re.sub(r"^\s*[-*+]\s+", "• ", text, flags=re.MULTILINE)
+    # Markdown table framing: drop the |---| separator row, then side pipes
+    text = re.sub(
+        r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", "",
+        text, flags=re.MULTILINE,
+    )
+    text = re.sub(r"^\s*\|", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\|\s*$", "", text, flags=re.MULTILINE)
+    # Collapse 3+ newlines to 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
@@ -1459,16 +1352,16 @@ async def twilio_whatsapp_webhook(
     WaId: str = Form(default=""),
 ):
     """
-    Twilio WhatsApp webhook — receives incoming text, voice, image, or document messages.
+    Twilio WhatsApp webhook — receives incoming text, image, or document messages.
 
-    - Voice (audio/*): async transcription + RAG reply
-    - Document (image/*, application/pdf): save as lead document, trigger offer letter
-    - Text: state machine (name → email → program → admission intent → RAG)
+    - Voice (audio/*): unsupported — politely asked to type instead
+    - Document (image/*, application/pdf): save as lead document
+      (offer letter generated only when the student types 'done')
+    - Text: state machine (name → email → program → admission intent → RAG chat)
 
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
     """
-    from app.pipeline import run_rag_query_sync
 
     # ── Handle media messages ────────────────────────────────────
     num_media = int(NumMedia or "0")
@@ -1476,17 +1369,10 @@ async def twilio_whatsapp_webhook(
         content_type = (MediaContentType0 or "").lower()
 
         if "audio" in content_type:
-            # Voice note — existing flow (transcribe + RAG)
-            logger.info(f"WhatsApp voice note from {From} ({MediaContentType0})")
-            background_tasks.add_task(
-                _process_voice_note_async,
-                media_url=MediaUrl0,
-                content_type=MediaContentType0,
-                from_number=From,
-                to_number=To,
-            )
+            # Voice notes are intentionally unsupported — WhatsApp is chat-only.
+            logger.info(f"WhatsApp voice note from {From} — asking to type instead")
             twiml = WHATSAPP_TWIML_TEMPLATE.format(
-                answer="🎤 Processing your voice note... you'll get a reply shortly."
+                answer="I can't listen to voice notes. Please type your question here in the chat and I'll answer right away!"
             )
             return Response(content=twiml, media_type="application/xml")
 
@@ -1516,7 +1402,7 @@ async def twilio_whatsapp_webhook(
     # ── Handle text ─────────────────────────────────────────────
     if not Body.strip():
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer="Hello! Send me a question about Meridian admissions, or send a voice note."
+            answer="Hello! Send me a question about Meridian admissions."
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -1538,8 +1424,14 @@ async def twilio_whatsapp_webhook(
     has_email = "@" in Body and "." in Body.split("@")[-1] if "@" in Body else False
     is_name_like = len(Body.split()) <= 3 and not has_email and "?" not in Body and len(Body) < 60
 
+    # Greetings and knowledge questions are answered directly — never
+    # mistaken for profile info (e.g. "fees" must not become a name).
+    if msg_lower in ("hi", "hello", "hey", "hii", "hi there", "namaste"):
+        answer = "Hello! 👋 I'm the Meridian University admissions assistant. What's your name?"
+    elif "?" in Body or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
+        answer = await _whatsapp_chat_rag(Body)
     # State machine for collecting missing info
-    if not lead_name and is_name_like and not has_email:
+    elif not lead_name and is_name_like and not has_email and msg_lower not in ("done", "finish", "finished"):
         # User likely provided their name
         if lead_id:
             await update_lead(lead_id, name=Body.strip())
@@ -1612,8 +1504,12 @@ async def twilio_whatsapp_webhook(
                 answer = "Great! Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
         elif msg_lower in ("no", "nope", "wrong", "change"):
             answer = "No problem! What would you like to update? Your name, email, or program interest?"
-        elif msg_lower == "done" and lead_program:
-            answer = f"Thanks {lead_name}! To process your application, say 'I want to take admission' and I'll prepare your offer letter."
+        elif msg_lower in ("done", "finish", "finished"):
+            # All documents uploaded — generate the offer letter now.
+            if not lead_program:
+                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
+            else:
+                answer = await _whatsapp_offer_on_done(lead_id, lead_name)
         # ── FIX: Capture program name from short replies (Critical bug fix) ──
         elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
             detected = _detect_meridian_program(msg_lower)
@@ -1627,25 +1523,20 @@ async def twilio_whatsapp_webhook(
                     f"and I'll guide you through the document upload process."
                 )
             else:
-                answer = "I didn't catch the program name. Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
-        elif "?" in Body or len(Body) > 30:
-            # User is asking a real question — do RAG
-            try:
-                answer = await _asyncio.to_thread(run_rag_query_sync, Body)
-                if answer:
-                    answer = answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                else:
-                    answer = "Sorry, I couldn't find an answer to that. Can you rephrase?"
-            except Exception:
-                answer = "Sorry, I couldn't process your question. Please try again."
+                # Short message that isn't a program — treat it as a question.
+                answer = await _whatsapp_chat_rag(Body)
         else:
-            answer = confirm
+            # Everything else goes to RAG — same knowledge answers as Streamlit.
+            answer = await _whatsapp_chat_rag(Body)
 
     # Safety: fallback answer
     try:
         _ = answer
     except NameError:
         answer = f"I have you as {lead_name or 'there'}. How can I help with Meridian admissions?"
+
+    # WhatsApp renders plain text — strip LLM Markdown before sending.
+    answer = _strip_markdown(answer)
 
     # Log conversation
     background_tasks.add_task(
