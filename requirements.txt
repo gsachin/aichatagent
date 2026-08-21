@@ -2,9 +2,10 @@
 # (Python 3.11, Windows 11 + CUDA; same pins apply to macOS/Linux).
 #
 # GPU notes:
-# - torch==2.6.0 below is the PyPI build. The verified Windows CUDA setup used
-#   torch==2.6.0+cu124 from https://download.pytorch.org/whl/cu124 — bootstrap
-#   installs that wheel automatically when a GPU is detected on Windows.
+# - torch>=2.7.0,<2.8 below is the PyPI (CPU) build. On Windows NVIDIA boxes
+#   bootstrap_services.py installs torch==2.7.1+cu128 from
+#   https://download.pytorch.org/whl/cu128 first — REQUIRED for RTX 50-series
+#   (Blackwell sm_120) GPUs, which torch 2.6.x/cu124 cannot use.
 # - Swap onnxruntime-gpu for onnxruntime on CPU-only machines.
 
 # ── Web / API ─────────────────────────────────────────────────────────
@@ -18,7 +19,7 @@ requests==2.34.2
 python-dotenv==1.2.2
 
 # ── ML / audio ────────────────────────────────────────────────────────
-torch==2.6.0
+torch>=2.7.0,<2.8
 # GPU-capable onnxruntime ships no macOS wheels — plain build on Darwin.
 # Darwin is pinned to 1.24.x because pipecat-ai 1.6.0 requires onnxruntime~=1.24.3.
 onnxruntime-gpu==1.28.0; platform_system=="Windows" or platform_system=="Linux"

@@ -36,6 +36,9 @@ chroma_local_db/
 # Runtime logs
 logs/
 
+# pip install serialization lock (bootstrap_services.py)
+.pip-install.lock
+
 # Cloudflare tunnel hostname (changes every restart)
 .whatsapp_tunnel
 .tunnel_*

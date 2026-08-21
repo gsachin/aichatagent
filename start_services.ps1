@@ -54,6 +54,89 @@ function Write-OK     { Write-Host ("{0}  OK: {1}{2}" -f $GREEN, ($args -join ' 
 function Write-Warn   { Write-Host ("{0}  WARN: {1}{2}" -f $YELLOW, ($args -join ' '), $RESET) }
 function Write-Err    { Write-Host ("{0}  ERROR: {1}{2}" -f $RED, ($args -join ' '), $RESET) }
 
+# ---- Tool discovery (user-scope winget installs are invisible to old shells) ----
+function Find-DockerCli {
+    $cmd = Get-Command "docker" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    foreach ($p in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\resources\bin\docker.exe"),
+        "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Find-DockerDesktopExe {
+    foreach ($p in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\Docker Desktop.exe"),
+        "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Find-CloudflaredExe {
+    $cmd = Get-Command "cloudflared" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $p = Join-Path $env:LOCALAPPDATA "Programs\cloudflared\cloudflared.exe"
+    if (Test-Path $p) { return $p }
+    return $null
+}
+
+function Ensure-ProjectDeps {
+    # Self-heal: if the venv cannot import the app's dependencies (fresh
+    # clone, interrupted bootstrap, empty venv), install them via the
+    # bootstrap's install phase instead of failing 30 waits later.
+    $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $probePy = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+    & $probePy -c "import fastapi, torch" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK "venv dependencies OK (fastapi + torch importable)"
+        return $true
+    }
+
+    Write-Warn "venv dependencies missing or broken -- running installer (bootstrap_services.py --install-only)..."
+    Write-Warn "First run downloads several GB (torch cu128 + pip deps + Ollama models) -- please wait."
+    $boot = Join-Path $ProjectRoot "bootstrap_services.py"
+    if (-not (Test-Path $boot)) {
+        Write-Err "bootstrap_services.py not found -- cannot install dependencies"
+        return $false
+    }
+    if (Get-Command "py" -ErrorAction SilentlyContinue) {
+        & py -3.11 $boot --install-only
+    } else {
+        & python $boot --install-only
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err ("installer failed (exit code {0})" -f $LASTEXITCODE)
+        return $false
+    }
+
+    & $VenvPython -c "import fastapi, torch" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "dependencies still not importable after install -- check the output above"
+        return $false
+    }
+    Write-OK "Dependencies installed and importable"
+    return $true
+}
+
+# ==== Step 0: dependency self-heal =========================================
+# start_services.ps1 is the entry point most people run. If the venv cannot
+# import the app's dependencies (fresh clone, interrupted bootstrap, empty
+# venv), install them here instead of timing out at Step 5.
+if (-not (Ensure-ProjectDeps)) {
+    Write-Err "Cannot start services without working dependencies -- fix the errors above and re-run."
+    exit 1
+}
+# The installer may have just created/fixed the venv -- prefer it from here on.
+if (Test-Path $VenvPython) {
+    $PythonExe = $VenvPython
+    $StreamlitExe = Join-Path $ProjectRoot ".venv\Scripts\streamlit.exe"
+}
+
 # ==== Step 1: Kill stale processes ========================================
 Write-Step "Step 1: Killing stale processes"
 
@@ -151,6 +234,7 @@ if ($gpuOk) {
         Write-OK ("PyTorch: {0}" -f $cudaCheck)
     } else {
         Write-Warn "PyTorch CUDA check failed -- GPU may not be usable from Python"
+        Write-Warn "Fix: .venv\Scripts\pip install torch==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128"
     }
 }
 
@@ -159,47 +243,59 @@ Write-Step "Step 4: Docker / PostgreSQL check"
 
 $dbReady = $false
 
+# Locate the Docker CLI (user-scope winget installs are not on old shells' PATH)
+$DockerCli = Find-DockerCli
+if ($DockerCli) {
+    $env:PATH = "$(Split-Path $DockerCli);$env:PATH"
+    Write-OK ("Docker CLI: {0}" -f $DockerCli)
+} else {
+    Write-Warn "Docker CLI not found (PATH + default install locations)"
+}
+
 # Check Docker is running
 $dockerRunning = $false
-$dockerCheck = docker info 2>$null
-if ($LASTEXITCODE -eq 0) {
+$dockerCheck = if ($DockerCli) { & $DockerCli info 2>$null } else { $null }
+if ($DockerCli -and $LASTEXITCODE -eq 0) {
     Write-OK "Docker Desktop is running"
     $dockerRunning = $true
 } else {
     Write-Warn "Docker Desktop is NOT running -- attempting to start..."
-    $dockerExe = Get-Command "docker" -ErrorAction SilentlyContinue
-    if (-not $dockerExe) {
-        Write-Warn "Docker CLI not found in PATH"
+    $ddExe = Find-DockerDesktopExe
+    if ($ddExe) {
+        Start-Process -FilePath $ddExe -WindowStyle Hidden -ErrorAction SilentlyContinue
+        Write-OK ("Docker Desktop launching ({0}) - this may take 30-60s..." -f $ddExe)
+    } else {
+        Write-Warn "Docker Desktop.exe not found in known locations -- start it manually"
     }
-    Start-Process -FilePath "C:\Program Files\Docker\Docker\Docker Desktop.exe" -WindowStyle Hidden -ErrorAction SilentlyContinue
-    Write-OK "Docker Desktop launching (this may take 30-60s)..."
 
     # Wait for Docker to become responsive
-    $waitAttempt = 0
-    while ($waitAttempt -lt 45) {
-        Start-Sleep -Seconds 2
-        $waitAttempt++
-        docker info 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-OK ("Docker Desktop ready (after ~{0}s)" -f ($waitAttempt * 2))
-            $dockerRunning = $true
-            break
+    if ($DockerCli) {
+        $waitAttempt = 0
+        while ($waitAttempt -lt 45) {
+            Start-Sleep -Seconds 2
+            $waitAttempt++
+            & $DockerCli info 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK ("Docker Desktop ready (after ~{0}s)" -f ($waitAttempt * 2))
+                $dockerRunning = $true
+                break
+            }
         }
     }
 }
 
 # Check PostgreSQL is reachable
 if ($dockerRunning) {
-    $pgCheck = docker exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
+    $pgCheck = & $DockerCli exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
     if ($LASTEXITCODE -eq 0 -and $pgCheck -match "accepting") {
         Write-OK "PostgreSQL: accepting connections on localhost:5432"
         $dbReady = $true
     } else {
         Write-Warn "PostgreSQL container not running -- attempting docker compose up..."
-        docker compose -f (Join-Path $ProjectRoot "docker-compose.yml") up -d postgres 2>$null
+        & $DockerCli compose -f (Join-Path $ProjectRoot "docker-compose.yml") up -d postgres 2>$null
         if ($LASTEXITCODE -eq 0) {
             Start-Sleep -Seconds 5
-            $pgCheck2 = docker exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
+            $pgCheck2 = & $DockerCli exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
             if ($LASTEXITCODE -eq 0 -and $pgCheck2 -match "accepting") {
                 Write-OK "PostgreSQL started and accepting connections"
                 $dbReady = $true
@@ -207,7 +303,7 @@ if ($dockerRunning) {
         } else {
             # Try existing e-learning container
             Write-Warn "docker compose failed -- checking for existing e-learning container..."
-            $elearningCheck = docker ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>$null
+            $elearningCheck = & $DockerCli ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>$null
             if ($elearningCheck -match "healthy") {
                 Write-OK "Found existing elearning-postgres container (healthy)"
                 $dbReady = $true
@@ -293,11 +389,13 @@ if ($ollamaUp) {
 # ==== Step 7: Start Cloudflare tunnel ======================================
 Write-Step "Step 7: Starting Cloudflare tunnel"
 
-$cloudflaredPath = Get-Command "cloudflared" -ErrorAction SilentlyContinue
+$cloudflaredPath = Find-CloudflaredExe
 if (-not $cloudflaredPath) {
-    Write-Err "cloudflared not found! Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/"
+    Write-Err "cloudflared not found! Install with: winget install Cloudflare.cloudflared"
+    Write-Err "or download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/"
     exit 1
 }
+Write-OK ("cloudflared: {0}" -f $cloudflaredPath)
 
 $TunnelLog = Join-Path $env:TEMP "university_cloudflared.log"
 
@@ -305,11 +403,11 @@ if ($NamedTunnel) {
     # ---- Named tunnel (permanent URL) ------------------------------------
     Write-OK ("Named tunnel mode: {0}" -f $TunnelName)
 
-    $tunnelList = cmd /c "cloudflared tunnel list 2>&1"
+    $tunnelList = & $cloudflaredPath tunnel list 2>&1
     $tunnelExists = $tunnelList -match $TunnelName
     if (-not $tunnelExists) {
         Write-OK ("Creating named tunnel: {0} ..." -f $TunnelName)
-        $createResult = cmd /c "cloudflared tunnel create $TunnelName 2>&1"
+        $createResult = & $cloudflaredPath tunnel create $TunnelName 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Err ("Failed to create tunnel '{0}': {1}" -f $TunnelName, ($createResult -join " "))
             Write-Warn "Falling back to ephemeral quick tunnel..."
@@ -321,7 +419,7 @@ if ($NamedTunnel) {
     }
 
     if ($NamedTunnel) {
-        $tunnelCmd = "cloudflared tunnel run --url http://localhost:{0} {1} 2>&1" -f $FastAPIPort, $TunnelName
+        $tunnelCmd = "`"$cloudflaredPath`" tunnel run --url http://localhost:{0} {1} 2>&1" -f $FastAPIPort, $TunnelName
         $cfArgs = @{
             FilePath               = "cmd"
             ArgumentList           = "/c", $tunnelCmd
@@ -337,7 +435,7 @@ if ($NamedTunnel) {
 if (-not $NamedTunnel) {
     # ---- Ephemeral quick tunnel (URL changes every restart) --------------
     Write-Warn "Ephemeral tunnel mode (URL will change on next restart)"
-    $tunnelCmd = "cloudflared tunnel --url http://localhost:{0} 2>&1" -f $FastAPIPort
+    $tunnelCmd = "`"$cloudflaredPath`" tunnel --url http://localhost:{0} 2>&1" -f $FastAPIPort
     $cfArgs = @{
         FilePath               = "cmd"
         ArgumentList           = "/c", $tunnelCmd

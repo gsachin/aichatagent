@@ -53,6 +53,25 @@ IS_LINUX = platform.system() == "Linux"
 REQUIRED_MODELS = ["qwen2.5:7b-instruct-q3_K_M", "nomic-embed-text"]
 OLLAMA_API = "http://127.0.0.1:11434"
 DOCKER_DESKTOP_WIN = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+PIP_LOCK = ROOT / ".pip-install.lock"
+
+# User-scope (no-admin) Docker Desktop installs live under LOCALAPPDATA and
+# are NOT on PATH until a new shell is opened. Probe both locations — winget
+# installs per-user by default on this project's target machine.
+DOCKER_DESKTOP_PATHS = (
+    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe")),
+    Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
+)
+DOCKER_CLI_PATHS = (
+    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe")),
+    Path(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe"),
+)
+OLLAMA_CLI_PATHS = (
+    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")),
+)
+# Standalone exe fallback when the winget MSI fails (it hung on one machine).
+CLOUDFLARED_URL = ("https://github.com/cloudflare/cloudflared/releases/latest/download/"
+                   "cloudflared-windows-amd64.exe")
 
 # Apple MLX backend (macOS Apple Silicon only — replaces Ollama there)
 MLX_MODEL = os.environ.get("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
@@ -139,7 +158,8 @@ def step(title: str) -> None:
 DRY_RUN = False
 
 
-def run(cmd, check: bool = True, capture: bool = False, cwd=None, input_text=None):
+def run(cmd, check: bool = True, capture: bool = False, cwd=None, input_text=None,
+        shell: bool = False):
     """Run a command; in dry-run mode, print it instead of executing."""
     printable = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else cmd
     print(f"    $ {printable}"[:200])
@@ -147,12 +167,131 @@ def run(cmd, check: bool = True, capture: bool = False, cwd=None, input_text=Non
         return None
     return subprocess.run(
         cmd, check=check, capture_output=capture, cwd=cwd, input=input_text,
-        shell=isinstance(cmd, str),
+        shell=shell or isinstance(cmd, str),
     )
 
 
 def which(name: str) -> bool:
     return shutil.which(name) is not None
+
+
+# ── Tool discovery (user-scope winget installs are invisible to old shells) ─
+
+def _find_docker() -> str | None:
+    """Locate docker.exe: PATH first, then known per-user/system install dirs."""
+    found = shutil.which("docker")
+    if found:
+        return found
+    for p in DOCKER_CLI_PATHS:
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def _find_ollama() -> str | None:
+    """Locate ollama.exe: PATH first, then the default per-user install dir."""
+    found = shutil.which("ollama")
+    if found:
+        return found
+    for p in OLLAMA_CLI_PATHS:
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def _persist_user_path(bindir: str) -> None:
+    """
+    Idempotently append bindir to the Windows user PATH so FUTURE shells
+    (and start_services.ps1, which runs in a separate process) can see it.
+    """
+    ps = (
+        "$dir = '{0}'; "
+        "$p = [Environment]::GetEnvironmentVariable('Path','User'); "
+        "if ($p -notlike ('*' + $dir + '*')) {{ "
+        "[Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $dir), 'User') }}"
+    ).format(bindir)
+    subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
+                   capture_output=True, check=False)
+
+
+def ensure_docker_on_path() -> None:
+    """
+    Make the Docker CLI visible to this process AND to future shells.
+
+    winget installs Docker Desktop per-user and only refreshes PATH for new
+    shells — the bootstrap process itself never sees the CLI otherwise, and
+    the launcher scripts (separate processes) need it too.
+    """
+    if not IS_WINDOWS or shutil.which("docker"):
+        return
+    for p in DOCKER_CLI_PATHS:
+        if p.is_file():
+            bindir = str(p.parent)
+            os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
+            print(f"    docker CLI found at {bindir} (added to session + user PATH)")
+            _persist_user_path(bindir)
+            break
+
+
+def _python311_candidates() -> list:
+    """Executables that can provide Python 3.11 (py launcher first, then PATH)."""
+    cands = []
+    if shutil.which("py"):
+        cands.append(["py", "-3.11"])
+    for name in ("python", "python3"):
+        p = shutil.which(name)
+        if p:
+            cands.append([p])
+    return cands
+
+
+def _pip_wait_or_acquire() -> None:
+    """
+    Serialize pip installs with a lockfile. A second installer (e.g. the
+    launcher's self-heal running while another install is in flight) waits
+    instead of running a conflicting concurrent pip.
+    """
+    if PIP_LOCK.exists():
+        age = time.time() - PIP_LOCK.stat().st_mtime
+        if age > 3600:  # stale lock left by a crashed installer — take over
+            warn(f"stale pip lock ({age / 60:.0f} min old) — taking over")
+            PIP_LOCK.unlink(missing_ok=True)
+        else:
+            warn("another pip install is in progress (.pip-install.lock) — waiting...")
+            while PIP_LOCK.exists() and time.time() - PIP_LOCK.stat().st_mtime < 3600:
+                time.sleep(10)
+            if PIP_LOCK.exists():
+                warn("waited an hour — taking over the pip lock")
+                PIP_LOCK.unlink(missing_ok=True)
+    PIP_LOCK.write_text("pip install in progress")
+
+
+def _pip_release() -> None:
+    PIP_LOCK.unlink(missing_ok=True)
+
+
+def _install_cloudflared_manual() -> None:
+    """
+    Fallback when the winget cloudflared MSI fails: download the standalone
+    exe into %LOCALAPPDATA%\Programs\cloudflared and add it to the user PATH.
+    """
+    if not IS_WINDOWS:
+        return
+    target_dir = Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\cloudflared"))
+    target = target_dir / "cloudflared.exe"
+    if target.is_file():
+        ok(f"cloudflared already present at {target}")
+    else:
+        print("    winget install failed — downloading standalone cloudflared.exe...")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(CLOUDFLARED_URL, str(target))
+            ok(f"cloudflared downloaded to {target}")
+        except Exception as e:
+            err(f"cloudflared download failed ({e}) — install manually, then re-run")
+            return
+    os.environ["PATH"] = str(target_dir) + os.pathsep + os.environ.get("PATH", "")
+    _persist_user_path(str(target_dir))
 
 
 def _http_get(url: str, timeout: float = 3.0):
@@ -185,34 +324,36 @@ def _wait_for(desc: str, fn, tries: int, delay: float, ok_msg: str) -> bool:
 # ── Phase B: pre-req checks (never change anything) ─────────────────────
 
 def check_python() -> bool:
-    py = shutil.which("python") or shutil.which("python3")
-    if not py:
-        err("Python not found")
-        return False
-    try:
-        r = subprocess.run([py, "--version"], capture_output=True, text=True)
-        ver = r.stdout.strip()
-    except Exception:
-        err("Python check failed")
-        return False
-    if "3.11" in ver:
-        ok(f"Python {ver} ({py})")
-        return True
-    warn(f"Python {ver} — expected 3.11.x (app requires 3.11, <=3.12)")
-    return True
+    for cand in _python311_candidates():
+        try:
+            r = subprocess.run(cand + ["--version"], capture_output=True, text=True)
+        except Exception:
+            continue
+        ver = (r.stdout or r.stderr).strip()
+        if "3.11" in ver:
+            ok(f"Python {ver} ({' '.join(cand)})")
+            return True
+    err("Python 3.11 not found (the pinned stack requires 3.11, <=3.12)")
+    return False
 
 
 def check_docker() -> bool:
-    if not which("docker"):
+    docker = _find_docker()
+    if not docker:
+        err("docker CLI not found (PATH + default install locations)")
+        return False
+    try:
+        daemon_ok = subprocess.run([docker, "info"], capture_output=True).returncode == 0
+        compose_ok = subprocess.run([docker, "compose", "version"],
+                                    capture_output=True).returncode == 0
+    except FileNotFoundError:
         err("docker CLI not found")
         return False
-    daemon_ok = subprocess.run(["docker", "info"], capture_output=True).returncode == 0
     if daemon_ok:
-        ok("Docker daemon running")
+        ok(f"Docker daemon running ({docker})")
     else:
         warn("Docker CLI present but daemon NOT running")
         return False
-    compose_ok = subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
     if compose_ok:
         ok("docker compose plugin present")
     else:
@@ -265,8 +406,8 @@ def check_llm() -> bool:
         ok(f"MLX server up on :{MLX_PORT} serving {MLX_MODEL}")
         return True
 
-    if not which("ollama"):
-        err("ollama binary not found")
+    if not _find_ollama():
+        err("ollama binary not found (PATH + default install locations)")
         return False
     if not _port_listening(11434):
         warn("Ollama installed but not serving on :11434")
@@ -289,6 +430,10 @@ def check_llm() -> bool:
 def check_cloudflared() -> bool:
     if which("cloudflared"):
         ok("cloudflared present")
+        return True
+    manual = Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\cloudflared\cloudflared.exe"))
+    if manual.is_file():
+        ok(f"cloudflared present ({manual})")
         return True
     err("cloudflared not found")
     return False
@@ -393,16 +538,18 @@ def install_windows() -> None:
         return
     if not check_python():
         if _winget(WINGET_PACKAGES["python"]):
-            warn("Python 3.11 installed — PATH refresh needs a new shell; "
-                 "re-run the .bat shortcut to continue")
+            warn("Python 3.11 installed — re-run the .bat shortcut to continue")
         return
     if not check_docker():
         if _winget(WINGET_PACKAGES["docker"]):
             warn("Docker Desktop installed — starting it now (first start may take minutes)")
-    if not which("ollama"):
+        # User-scope installs never touch the running shell's PATH — repair it.
+        ensure_docker_on_path()
+    if not _find_ollama():
         _winget(WINGET_PACKAGES["ollama"])
     if not which("cloudflared"):
-        _winget(WINGET_PACKAGES["cloudflared"])
+        if not _winget(WINGET_PACKAGES["cloudflared"]):
+            _install_cloudflared_manual()
     if not which("ffmpeg"):
         _winget(WINGET_PACKAGES["ffmpeg"])
 
@@ -455,32 +602,92 @@ def install_linux() -> None:
 
 
 def ensure_docker_daemon() -> bool:
-    if subprocess.run(["docker", "info"], capture_output=True).returncode == 0:
-        return True
-    if IS_WINDOWS and Path(DOCKER_DESKTOP_WIN).is_file():
-        print("    starting Docker Desktop...")
-        subprocess.Popen([DOCKER_DESKTOP_WIN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ensure_docker_on_path()
+    docker = _find_docker()
+    if docker:
+        try:
+            if subprocess.run([docker, "info"], capture_output=True).returncode == 0:
+                return True
+        except FileNotFoundError:
+            docker = None
+    if IS_WINDOWS:
+        for exe in DOCKER_DESKTOP_PATHS:
+            if exe.is_file():
+                print(f"    starting Docker Desktop ({exe})...")
+                subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+        else:
+            warn("Docker Desktop.exe not found in known locations — start it manually")
     elif IS_LINUX:
         run(["systemctl", "start", "docker"], check=False)
+    if not docker:
+        warn("docker CLI not found — PostgreSQL will be skipped")
+        return False
     return _wait_for("docker daemon", lambda: subprocess.run(
-        ["docker", "info"], capture_output=True).returncode == 0,
+        [docker, "info"], capture_output=True).returncode == 0,
         60, 2, "Docker daemon ready")
 
 
+def _venv_python_version() -> str | None:
+    try:
+        r = subprocess.run([str(VENV_PY), "--version"], capture_output=True, text=True)
+        return (r.stdout or r.stderr).strip()
+    except Exception:
+        return None
+
+
 def ensure_venv() -> None:
+    # A venv created with the wrong Python (e.g. 3.14) must be recreated.
+    if VENV_PY.is_file() and "3.11" not in (_venv_python_version() or ""):
+        warn(f"venv exists but is {_venv_python_version()} — recreating with Python 3.11")
+        shutil.rmtree(ROOT / ".venv", ignore_errors=True)
+
+    # A venv that can already import the app's heavy deps is ready. This
+    # also covers a half-created venv (no packages installed yet) — the
+    # earlier code skipped dependency install whenever the venv existed.
     if VENV_PY.is_file():
-        ok("venv already present — skipping creation")
-        return
+        probe = subprocess.run([str(VENV_PY), "-c", "import fastapi, torch"],
+                               capture_output=True)
+        if probe.returncode == 0:
+            ok("venv ready (fastapi + torch importable) — skipping dependency install")
+            return
+        warn("venv present but dependencies missing — installing now")
+
     step("Creating .venv + installing pinned dependencies")
-    py = shutil.which("python") or shutil.which("python3")
-    run([py, "-m", "venv", str(ROOT / ".venv")])
+    if not VENV_PY.is_file():
+        maker = [sys.executable] if sys.version_info[:2] == (3, 11) else None
+        if maker is None:
+            for cand in _python311_candidates():
+                maker = cand
+                break
+        if maker is None:
+            err("Python 3.11 not found — install it with: winget install Python.Python.3.11")
+            sys.exit(1)
+        run(maker + ["-m", "venv", str(ROOT / ".venv")])
+
     pip = str(VENV_PY) + " -m pip"
-    run(pip + " install --upgrade pip setuptools wheel", shell=True)
-    if IS_WINDOWS and which("nvidia-smi"):
-        # GPU Windows box: install the CUDA torch build the verified env used.
-        run(pip + " install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124",
-            shell=True, check=False)
-    run(pip + " install -r " + str(ROOT / "requirements.txt"), shell=True)
+    _pip_wait_or_acquire()
+    try:
+        run(pip + " install --upgrade pip setuptools wheel", shell=True)
+        if IS_WINDOWS and which("nvidia-smi"):
+            # RTX 50-series (Blackwell, sm_120) needs torch >= 2.7 with CUDA 12.8 —
+            # the cu124 wheels used by older cards cannot run on sm_120 GPUs.
+            r = run(pip + " install torch==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128",
+                    shell=True, check=False)
+            if r is not None and r.returncode != 0:
+                warn("CUDA torch install failed — requirements will pull the PyPI (CPU) "
+                     "build; STT/TTS will run on CPU. Re-run this step or see the setup doc.")
+        run(pip + " install -r " + str(ROOT / "requirements.txt"), shell=True)
+        if (IS_WINDOWS or IS_LINUX) and which("nvidia-smi"):
+            # pipecat-ai pins onnxruntime~=1.24.3, which drags the CPU wheel in
+            # next to onnxruntime-gpu. Both extract into the same directory and
+            # whichever installed last wins the import (observed: CPU 1.24.4
+            # shadowed GPU 1.28.0 -> no CUDAExecutionProvider). Reinstall the
+            # GPU wheel last so it always wins on NVIDIA machines.
+            run(pip + " install --force-reinstall --no-deps onnxruntime-gpu==1.28.0",
+                shell=True, check=False)
+    finally:
+        _pip_release()
     ok("dependencies installed")
 
 
@@ -581,6 +788,10 @@ def ensure_models() -> None:
         _env_value("OLLAMA_MODEL", REQUIRED_MODELS[0]),
         _env_value("EMBED_MODEL", REQUIRED_MODELS[1]),
     ]
+    ollama = _find_ollama()
+    if not ollama:
+        err("ollama binary not found (PATH + default install locations) — cannot pull models")
+        return
     models = _ollama_models()
     missing = _missing_models(models, required)
     for m in required:
@@ -588,8 +799,12 @@ def ensure_models() -> None:
             ok(f"model present: {m}")
         else:
             print(f"    pulling {m} (one-time, several GB)...")
-            run(["ollama", "pull", m])
-            ok(f"pulled {m}")
+            r = run([ollama, "pull", m], check=False)
+            if r is None or r.returncode == 0:
+                ok(f"pulled {m}")
+            else:
+                warn(f"pull of {m} failed (another pull may be in progress) — "
+                     "re-run to finish model downloads")
 
 
 def ensure_machine_profile() -> None:
@@ -608,17 +823,21 @@ def ensure_machine_profile() -> None:
 
 
 def ensure_postgres() -> bool:
+    docker = _find_docker()
+    if not docker:
+        warn("docker CLI not found — skipping PostgreSQL (app runs DB-less)")
+        return False
     healthy = subprocess.run(
-        ["docker", "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
+        [docker, "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
         capture_output=True,
     ).returncode == 0
     if healthy:
         ok("PostgreSQL accepting connections")
         return True
     print("    docker compose up -d postgres")
-    run(["docker", "compose", "-f", str(ROOT / "docker-compose.yml"), "up", "-d", "postgres"])
+    run([docker, "compose", "-f", str(ROOT / "docker-compose.yml"), "up", "-d", "postgres"])
     return _wait_for("PostgreSQL", lambda: subprocess.run(
-        ["docker", "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
+        [docker, "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
         capture_output=True).returncode == 0,
         30, 2, "PostgreSQL ready")
 
@@ -822,6 +1041,9 @@ def main() -> int:
     ap.add_argument("--check-only", action="store_true", help="verify pre-reqs and exit (no changes)")
     ap.add_argument("--dry-run", action="store_true", help="print every action without executing")
     ap.add_argument("--skip-install", action="store_true", help="skip install phase (launch only)")
+    ap.add_argument("--install-only", action="store_true",
+                    help="run check + install phases only (no service launch) — "
+                         "used by start_services.ps1 to self-heal a broken/missing venv")
     ap.add_argument("--with-streamlit", action="store_true", help="also start chatbot (8501) + dashboard (8502)")
     ap.add_argument("--with-demo-data", action="store_true", help="seed demo data ONLY when the DB is empty")
     ap.add_argument("--named-tunnel", action="store_true", help="use the named Cloudflare tunnel (Windows)")
@@ -869,6 +1091,10 @@ def main() -> int:
             ensure_demo_data(args.with_demo_data)
     else:
         step("Phase C skipped (--skip-install)")
+
+    if args.install_only:
+        print("\n" + _c("g", "Install-only run complete — services not started."))
+        return 0
 
     # ── Phase D: start ──
     if IS_WINDOWS:

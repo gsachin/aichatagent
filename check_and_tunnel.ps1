@@ -32,6 +32,27 @@ function Write-OK     { Write-Host ("${G}  [OK]   $($args -join ' ')${N}") }
 function Write-Warn   { Write-Host ("${Y}  [WARN] $($args -join ' ')${N}") }
 function Write-Err    { Write-Host ("${R}  [DOWN] $($args -join ' ')${N}") }
 
+# ---- Tool discovery (user-scope winget installs are invisible to old shells) ----
+function Find-DockerCli {
+    $cmd = Get-Command "docker" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    foreach ($p in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\resources\bin\docker.exe"),
+        "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Find-CloudflaredExe {
+    $cmd = Get-Command "cloudflared" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $p = Join-Path $env:LOCALAPPDATA "Programs\cloudflared\cloudflared.exe"
+    if (Test-Path $p) { return $p }
+    return $null
+}
+
 # Tunnel definitions: port, label, cache file.
 # Metrics ports are NOT pinned -- tunnels start with --metrics localhost:0
 # (ephemeral) so concurrent/duplicate starts can never clash on a bind.
@@ -119,7 +140,12 @@ function Start-SingleTunnel($tunnelDef) {
         if (Test-Path $f) { Remove-Item $f -Force }
     }
 
-    Start-Process -FilePath "cloudflared" `
+    $cfExe = Find-CloudflaredExe
+    if (-not $cfExe) {
+        Write-Err "cloudflared.exe not found (PATH + default install locations)"
+        return $null
+    }
+    Start-Process -FilePath $cfExe `
         -ArgumentList "tunnel", "--url", "http://localhost:$port", "--metrics", "localhost:0" `
         -RedirectStandardOutput $stdoutLog `
         -RedirectStandardError $stderrLog `
@@ -184,11 +210,14 @@ if ($nvidiaSmi) {
 }
 
 if ($gpuOk) {
-    $cudaCheck = cmd /c "python -c `"import torch; print(f'CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \`"N/A\`"}')`" 2>&1"
+    $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $PyExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+    $cudaCheck = cmd /c "$PyExe -c `"import torch; print(f'CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \`"N/A\`"}')`" 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-OK "PyTorch: $cudaCheck"
     } else {
         Write-Warn "PyTorch CUDA check failed"
+        Write-Warn "Fix: .venv\Scripts\pip install torch==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128"
     }
 }
 
@@ -196,17 +225,23 @@ if ($gpuOk) {
 Write-Step "Docker / PostgreSQL Check"
 
 $dbReady = $false
-docker info 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$DockerCli = Find-DockerCli
+if ($DockerCli) {
+    $env:PATH = "$(Split-Path $DockerCli);$env:PATH"
+    & $DockerCli info 2>$null | Out-Null
+} else {
+    Write-Warn "Docker CLI not found (PATH + default install locations)"
+}
+if ($DockerCli -and $LASTEXITCODE -eq 0) {
     Write-OK "Docker Desktop is running"
 
-    $pgCheck = docker exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
+    $pgCheck = & $DockerCli exec elearning-postgres pg_isready -U elearning -d admissions 2>$null
     if ($LASTEXITCODE -eq 0 -and $pgCheck -match "accepting") {
         Write-OK "PostgreSQL: accepting connections on localhost:5432"
         $dbReady = $true
     } else {
         Write-Warn "PostgreSQL container not responding -- checking alternative..."
-        $elearningCheck = docker ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>$null
+        $elearningCheck = & $DockerCli ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>$null
         if ($elearningCheck -match "healthy") {
             Write-OK "Found existing elearning-postgres container (healthy)"
             $dbReady = $true
@@ -241,8 +276,9 @@ else              { Write-Err "Streamlit Dashboard  http://localhost:$StreamlitD
 # ==== Step 4: Check / start Cloudflare tunnels =============================
 Write-Step "Cloudflare Tunnels"
 
-if (-not (Get-Command "cloudflared" -ErrorAction SilentlyContinue) -and -not $SkipTunnel) {
-    Write-Err "cloudflared not found! Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/"
+if (-not (Find-CloudflaredExe) -and -not $SkipTunnel) {
+    Write-Err "cloudflared not found! Install with: winget install Cloudflare.cloudflared"
+    Write-Err "or download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/"
     Write-Err "Re-run with -SkipTunnel to see the status card without tunnels."
     exit 1
 }

@@ -9,11 +9,13 @@ Loads from .env file if present (python-dotenv), with defaults for development.
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
-# Load .env file if available
+# Load the project .env from the repo root — anchored to this file so it
+# works regardless of the process CWD (e.g. Streamlit launched elsewhere).
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 except ImportError:
     pass
 

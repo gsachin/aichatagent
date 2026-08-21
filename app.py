@@ -19,6 +19,13 @@ import numpy as np
 warnings.filterwarnings("ignore")
 os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
 
+# Load the project .env from the repo root — this Streamlit entry point reads
+# OLLAMA_MODEL etc. from the environment, and unlike app/main.py nothing in
+# its import chain loads .env. Anchored to this file so CWD doesn't matter.
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from app.streamlit_backend import backend_healthy, sync_lead, sync_program
 from app.offers.service import missing_fields_text
 
