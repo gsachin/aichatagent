@@ -501,7 +501,70 @@ if [ "$WITH_STREAMLIT" = "true" ]; then
     write_ok "Main app starting -> http://localhost:$STREAMLIT_MAIN_PORT"
 fi
 
-# ==== Step 12: Summary =====================================================
+# ==== Step 12: Streamlit chat tunnel (8501) ================================
+# The chat UI needs its own public URL (WebSocket UI can't share the
+# FastAPI tunnel). Reuse the conventions of tunnel_streamlit.sh.
+CHAT_TUNNEL_HOST=""
+if [ "$WITH_STREAMLIT" = "true" ]; then
+    write_step "Step 12: Starting Streamlit chat tunnel"
+    CHAT_TUNNEL_CACHE="$PROJECT_ROOT/.tunnel_8501"
+
+    # Reuse a live cached URL (e.g. started by tunnel_streamlit.sh).
+    if [ -f "$CHAT_TUNNEL_CACHE" ]; then
+        _cached_chat="$(tr -d '[:space:]' < "$CHAT_TUNNEL_CACHE")"
+        if [ -n "$_cached_chat" ] && [ "$(http_code "https://$_cached_chat/")" = "200" ]; then
+            CHAT_TUNNEL_HOST="$_cached_chat"
+            write_ok "Streamlit chat tunnel already alive: $CHAT_TUNNEL_HOST"
+        fi
+    fi
+
+    if [ -z "$CHAT_TUNNEL_HOST" ]; then
+        # Never double-start: a live cloudflared for 8501 may exist without
+        # a usable cache URL (e.g. logs were cleaned).
+        if pgrep -f "cloudflared.*--url.*localhost:$STREAMLIT_MAIN_PORT" >/dev/null 2>&1; then
+            write_warn "Streamlit chat tunnel process already running but its URL is unknown"
+            write_warn "Kill it and re-run to recreate: pkill -f cloudflared"
+        else
+            CHAT_TUNNEL_LOG="$LOG_DIR/cloudflared_8501.log"
+            : > "$CHAT_TUNNEL_LOG"  # clear stale URLs so we never misread an old hostname
+
+            nohup cloudflared tunnel --url "http://localhost:$STREAMLIT_MAIN_PORT" \
+                --metrics "localhost:0" >> "$CHAT_TUNNEL_LOG" 2>&1 &
+            write_ok "Streamlit chat tunnel starting - log: $CHAT_TUNNEL_LOG"
+
+            _chat_attempt=0
+            while [ -z "$CHAT_TUNNEL_HOST" ] && [ "$_chat_attempt" -lt 15 ]; do
+                sleep 3
+                _chat_attempt=$((_chat_attempt + 1))
+                CHAT_TUNNEL_HOST="$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CHAT_TUNNEL_LOG" 2>/dev/null | head -1 | sed 's|https://||')"
+                if [ -z "$CHAT_TUNNEL_HOST" ]; then
+                    write_warn "Waiting for Streamlit chat tunnel URL... ($_chat_attempt/15)"
+                fi
+            done
+
+            if [ -n "$CHAT_TUNNEL_HOST" ]; then
+                printf '%s' "$CHAT_TUNNEL_HOST" > "$CHAT_TUNNEL_CACHE"
+                # Fresh quick-tunnel hostnames can take a minute to resolve.
+                _chat_verify=false
+                _chat_v=0
+                while [ "$_chat_verify" = "false" ] && [ "$_chat_v" -lt 6 ]; do
+                    if [ "$_chat_v" -gt 0 ]; then sleep 3; fi
+                    _chat_v=$((_chat_v + 1))
+                    [ "$(http_code "https://$CHAT_TUNNEL_HOST/")" = "200" ] && _chat_verify=true
+                done
+                if [ "$_chat_verify" = "true" ]; then
+                    write_ok "Streamlit chat tunnel reachable: https://$CHAT_TUNNEL_HOST/"
+                else
+                    write_warn "Streamlit chat tunnel started but not yet reachable (DNS warm-up): $CHAT_TUNNEL_HOST"
+                fi
+            else
+                write_warn "Streamlit chat tunnel did not start -- run ./tunnel_streamlit.sh to retry"
+            fi
+        fi
+    fi
+fi
+
+# ==== Step 13: Summary =====================================================
 printf '\n%s%sALL SERVICES STARTED SUCCESSFULLY%s\n\n' "$GREEN" "$BOLD" "$RESET"
 printf '%sPublic Tunnel:%s\n' "$BOLD" "$RESET"
 printf '%s   https://%s%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
@@ -514,6 +577,10 @@ printf '   Webhook: %shttps://%s/twilio/voice%s\n' "$CYAN" "$TUNNEL_HOST" "$RESE
 printf '\n%sWhatsApp:%s\n' "$BOLD" "$RESET"
 printf '   Webhook: %shttps://%s/twilio/whatsapp%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
 printf '   (Configure in the Twilio Console -> WhatsApp Sandbox)\n'
+if [ -n "$CHAT_TUNNEL_HOST" ]; then
+    printf '\n%sStreamlit Chat:%s\n' "$BOLD" "$RESET"
+    printf '   Public URL: %shttps://%s%s\n' "$CYAN" "$CHAT_TUNNEL_HOST" "$RESET"
+fi
 printf '\n%sLocal Services:%s\n' "$BOLD" "$RESET"
 printf '   FastAPI backend:  %shttp://localhost:%s%s\n' "$CYAN" "$FASTAPI_PORT" "$RESET"
 printf '   LLM backend:      %s (%s)%s\n' "$CYAN" "$LLM_PROVIDER" "$RESET"
