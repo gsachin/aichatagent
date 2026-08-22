@@ -514,16 +514,19 @@ if ($SkipTwilio) {
 Write-Step "Step 10: Verifying URLs"
 
 # Verify tunnel is reachable (with warmup delay for Cloudflare)
+# Quick-tunnel hostnames can take 30-60s to become reachable (DNS + edge
+# warm-up) -- retry generously before giving up.
 $tunnelOk = $false
-for ($tunnelAttempt = 0; $tunnelAttempt -lt 5; $tunnelAttempt++) {
-    if ($tunnelAttempt -gt 0) { Start-Sleep -Seconds 3 }
-    $verifyResult = curl.exe -s -o NUL -w "%{http_code}" "https://$TunnelHost/" 2>$null
+$verifyResult = "000"
+for ($tunnelAttempt = 1; $tunnelAttempt -le 12; $tunnelAttempt++) {
+    $verifyResult = curl.exe -s --connect-timeout 8 -o NUL -w "%{http_code}" "https://$TunnelHost/" 2>$null
     if ($verifyResult -eq "200") {
         Write-OK ("Tunnel reachable: https://{0}/ (HTTP 200)" -f $TunnelHost)
         $tunnelOk = $true
         break
     }
-    Write-Warn ("Tunnel not ready yet (HTTP {0}) -- retry {1}/5..." -f $verifyResult, ($tunnelAttempt + 1))
+    Write-Warn ("Tunnel not ready yet (HTTP {0}) -- retry {1}/12..." -f $verifyResult, $tunnelAttempt)
+    Start-Sleep -Seconds 5
 }
 if (-not $tunnelOk) {
     Write-Err ("Tunnel NOT reachable after 5 attempts: https://{0}/" -f $TunnelHost)
@@ -601,12 +604,14 @@ if ($WithStreamlit) {
             Write-Warn "Kill it and re-run to recreate: taskkill /IM cloudflared.exe"
         } else {
             $ChatTunnelLog = Join-Path $env:TEMP "university_chat_tunnel.log"
+            $ChatTunnelErrLog = Join-Path $env:TEMP "university_chat_tunnel_err.log"
             $chatCfArgs = @{
                 FilePath               = "cloudflared"
                 ArgumentList           = "tunnel", "--url", "http://localhost:$StreamlitMainPort", "--metrics", "localhost:0"
                 WindowStyle            = "Hidden"
                 PassThru               = $true
                 RedirectStandardOutput = $ChatTunnelLog
+                RedirectStandardError  = $ChatTunnelErrLog
             }
             $ChatTunnelProcess = Start-Process @chatCfArgs
             Write-OK ("Streamlit chat tunnel starting (PID {0}) - log: {1}" -f $ChatTunnelProcess.Id, $ChatTunnelLog)
@@ -616,15 +621,20 @@ if ($WithStreamlit) {
             while (-not $chatFound -and $chatAttempt -lt 15) {
                 Start-Sleep -Seconds 3
                 $chatAttempt++
-                if (Test-Path $ChatTunnelLog) {
-                    $chatLogContent = Get-Content $ChatTunnelLog -Raw -ErrorAction SilentlyContinue
-                    if ($chatLogContent) {
-                        $chatRegex = [regex]'https://([a-zA-Z0-9\-]+\.trycloudflare\.com)'
-                        $chatMatch = $chatRegex.Match($chatLogContent)
-                        if ($chatMatch.Success) {
-                            $ChatTunnelHost = $chatMatch.Groups[1].Value
-                            $chatFound = $true
-                        }
+                # cloudflared logs everything (incl. the URL banner) to stderr,
+                # so both redirect logs must be scanned.
+                $chatLogContent = ""
+                foreach ($chatLog in @($ChatTunnelLog, $ChatTunnelErrLog)) {
+                    if (Test-Path $chatLog) {
+                        $chatLogContent += Get-Content $chatLog -Raw -ErrorAction SilentlyContinue
+                    }
+                }
+                if ($chatLogContent) {
+                    $chatRegex = [regex]'https://([a-zA-Z0-9\-]+\.trycloudflare\.com)'
+                    $chatMatch = $chatRegex.Match($chatLogContent)
+                    if ($chatMatch.Success) {
+                        $ChatTunnelHost = $chatMatch.Groups[1].Value
+                        $chatFound = $true
                     }
                 }
                 if (-not $chatFound) {
@@ -636,9 +646,9 @@ if ($WithStreamlit) {
                 [System.IO.File]::WriteAllText($ChatTunnelCache, $ChatTunnelHost)
                 # Fresh quick-tunnel hostnames can take a minute to resolve.
                 $chatVerify = $false
-                for ($chatV = 0; $chatV -lt 6 -and -not $chatVerify; $chatV++) {
-                    if ($chatV -gt 0) { Start-Sleep -Seconds 3 }
-                    $chatVerify = (curl.exe -s -o NUL -w "%{http_code}" "https://$ChatTunnelHost/" 2>$null) -eq "200"
+                for ($chatV = 0; $chatV -lt 10 -and -not $chatVerify; $chatV++) {
+                    if ($chatV -gt 0) { Start-Sleep -Seconds 5 }
+                    $chatVerify = (curl.exe -s --connect-timeout 8 -o NUL -w "%{http_code}" "https://$ChatTunnelHost/" 2>$null) -eq "200"
                 }
                 if ($chatVerify) {
                     Write-OK ("Streamlit chat tunnel reachable: https://{0}/" -f $ChatTunnelHost)
