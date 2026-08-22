@@ -571,7 +571,88 @@ if ($WithStreamlit) {
     Write-OK ("Main app starting (PID {0}) -> http://localhost:{1}" -f $AppProcess.Id, $StreamlitMainPort)
 }
 
-# ==== Step 12: Summary =====================================================
+# ==== Step 12: Streamlit chat tunnel (8501) ================================
+# The chat UI needs its own public URL (WebSocket UI can't share the
+# FastAPI tunnel). Reuse the conventions of tunnel_streamlit.ps1.
+$ChatTunnelHost = $null
+if ($WithStreamlit) {
+    Write-Step "Step 12: Starting Streamlit chat tunnel"
+    $ChatTunnelCache = Join-Path $ProjectRoot ".tunnel_8501"
+
+    # Reuse a live cached URL (e.g. started by tunnel_streamlit.ps1).
+    if (Test-Path $ChatTunnelCache) {
+        $cachedChat = (Get-Content $ChatTunnelCache -Raw).Trim()
+        if ($cachedChat) {
+            $chatCode = curl.exe -s -o NUL -w "%{http_code}" "https://$cachedChat/" 2>$null
+            if ($chatCode -eq "200") {
+                $ChatTunnelHost = $cachedChat
+                Write-OK ("Streamlit chat tunnel already alive: {0}" -f $ChatTunnelHost)
+            }
+        }
+    }
+
+    if (-not $ChatTunnelHost) {
+        # Never double-start: a live cloudflared for 8501 may exist without
+        # a usable cache URL (e.g. logs were cleaned).
+        $chatExisting = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match "localhost:$StreamlitMainPort" }
+        if ($chatExisting) {
+            Write-Warn "Streamlit chat tunnel process already running but its URL is unknown"
+            Write-Warn "Kill it and re-run to recreate: taskkill /IM cloudflared.exe"
+        } else {
+            $ChatTunnelLog = Join-Path $env:TEMP "university_chat_tunnel.log"
+            $chatCfArgs = @{
+                FilePath               = "cloudflared"
+                ArgumentList           = "tunnel", "--url", "http://localhost:$StreamlitMainPort", "--metrics", "localhost:0"
+                WindowStyle            = "Hidden"
+                PassThru               = $true
+                RedirectStandardOutput = $ChatTunnelLog
+            }
+            $ChatTunnelProcess = Start-Process @chatCfArgs
+            Write-OK ("Streamlit chat tunnel starting (PID {0}) - log: {1}" -f $ChatTunnelProcess.Id, $ChatTunnelLog)
+
+            $chatAttempt = 0
+            $chatFound = $false
+            while (-not $chatFound -and $chatAttempt -lt 15) {
+                Start-Sleep -Seconds 3
+                $chatAttempt++
+                if (Test-Path $ChatTunnelLog) {
+                    $chatLogContent = Get-Content $ChatTunnelLog -Raw -ErrorAction SilentlyContinue
+                    if ($chatLogContent) {
+                        $chatRegex = [regex]'https://([a-zA-Z0-9\-]+\.trycloudflare\.com)'
+                        $chatMatch = $chatRegex.Match($chatLogContent)
+                        if ($chatMatch.Success) {
+                            $ChatTunnelHost = $chatMatch.Groups[1].Value
+                            $chatFound = $true
+                        }
+                    }
+                }
+                if (-not $chatFound) {
+                    Write-Warn ("Waiting for Streamlit chat tunnel URL... ({0}/15)" -f $chatAttempt)
+                }
+            }
+
+            if ($ChatTunnelHost) {
+                [System.IO.File]::WriteAllText($ChatTunnelCache, $ChatTunnelHost)
+                # Fresh quick-tunnel hostnames can take a minute to resolve.
+                $chatVerify = $false
+                for ($chatV = 0; $chatV -lt 6 -and -not $chatVerify; $chatV++) {
+                    if ($chatV -gt 0) { Start-Sleep -Seconds 3 }
+                    $chatVerify = (curl.exe -s -o NUL -w "%{http_code}" "https://$ChatTunnelHost/" 2>$null) -eq "200"
+                }
+                if ($chatVerify) {
+                    Write-OK ("Streamlit chat tunnel reachable: https://{0}/" -f $ChatTunnelHost)
+                } else {
+                    Write-Warn ("Streamlit chat tunnel started but not yet reachable (DNS warm-up): {0}" -f $ChatTunnelHost)
+                }
+            } else {
+                Write-Warn "Streamlit chat tunnel did not start -- run .\tunnel_streamlit.ps1 to retry"
+            }
+        }
+    }
+}
+
+# ==== Step 13: Summary =====================================================
 Write-Host ""
 Write-Host ("{0}{1}ALL SERVICES STARTED SUCCESSFULLY{2}" -f $GREEN, $BOLD, $RESET)
 Write-Host ""
@@ -586,6 +667,11 @@ Write-Host ("{0}WhatsApp:{1}" -f $BOLD, $RESET)
 Write-Host ("   Webhook: {0}https://{1}/twilio/whatsapp{2}" -f $CYAN, $TunnelHost, $RESET)
 Write-Host ("   (Configure in the Twilio Console -> WhatsApp Sandbox)")
 Write-Host ""
+if ($ChatTunnelHost) {
+    Write-Host ("{0}Streamlit Chat:{1}" -f $BOLD, $RESET)
+    Write-Host ("   Public URL: {0}https://{1}{2}" -f $CYAN, $ChatTunnelHost, $RESET)
+    Write-Host ""
+}
 Write-Host ("{0}Local Services:{1}" -f $BOLD, $RESET)
 Write-Host ("   FastAPI backend:  {0}http://localhost:{1}{2}" -f $CYAN, $FastAPIPort, $RESET)
 

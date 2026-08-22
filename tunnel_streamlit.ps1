@@ -14,8 +14,8 @@ $G = "$ESC[92m"; $Y = "$ESC[93m"; $R = "$ESC[91m"; $C = "$ESC[96m"
 $B = "$ESC[1m"; $N = "$ESC[0m"
 
 $Tunnels = @(
-    @{ Port = 8501; Label = "Streamlit Main"; Cache = Join-Path $ProjectRoot ".tunnel_8501" },
-    @{ Port = 8502; Label = "Dashboard";      Cache = Join-Path $ProjectRoot ".tunnel_8502" }
+    @{ Port = 8501; Label = "Streamlit Chat (Main)"; Cache = Join-Path $ProjectRoot ".tunnel_8501" },
+    @{ Port = 8502; Label = "Dashboard";            Cache = Join-Path $ProjectRoot ".tunnel_8502" }
 )
 
 function Test-Url($url) {
@@ -125,6 +125,16 @@ foreach ($t in $Tunnels) {
         }
     } else {
         Write-Host "  ${label}: ${R}not running${N}"
+    }
+}
+
+# Final echo of the Streamlit chat public URL — copy/paste ready.
+$chatCache = Join-Path $ProjectRoot ".tunnel_8501"
+if (Test-Path $chatCache) {
+    $chatHost = (Get-Content $chatCache -Raw).Trim()
+    if ($chatHost -and (Test-Url "https://$chatHost/")) {
+        Write-Host ""
+        Write-Host "${B}${G}Streamlit Chat public URL: ${C}https://$chatHost${N}"
     }
 }
 Write-Host ""

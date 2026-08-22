@@ -30,6 +30,37 @@ from app.streamlit_backend import backend_healthy, sync_lead, sync_program
 from app.offers.service import missing_fields_text
 
 
+# ── Public backend URL resolution ───────────────────────────────────
+
+def _resolve_public_backend() -> str:
+    """
+    Base URL for user-facing backend links (e.g. offer-letter PDFs).
+
+    The chat UI is served through its own Cloudflare tunnel, so links to
+    backend endpoints must use a host the user can actually reach — the
+    FastAPI tunnel host — not localhost.
+
+    Order: DASHBOARD_API_URL env var (set by start_services), TUNNEL_HOST
+    env var, .whatsapp_tunnel file, .tunnel_8000 file, localhost fallback.
+    """
+    env_url = os.environ.get("DASHBOARD_API_URL", "") or os.environ.get("TUNNEL_HOST", "")
+    if env_url:
+        return env_url if env_url.startswith("http") else f"https://{env_url}"
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    for fname in (".whatsapp_tunnel", ".tunnel_8000"):
+        fpath = os.path.join(root, fname)
+        try:
+            with open(fpath) as fh:
+                host = fh.read().strip()
+        except OSError:
+            host = ""
+        if host:
+            return f"https://{host}"
+
+    return "http://localhost:8000"
+
+
 # ── Background helper: log interaction + trigger sentiment ──────────
 
 def _log_and_score_async(phone: str, transcript: str, channel: str,
@@ -132,7 +163,7 @@ with st.sidebar:
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
                         offer_id = offer.get("id", "")
-                        pdf_url = f"http://localhost:8000/api/offers/{offer_id}/pdf"
+                        pdf_url = f"{_resolve_public_backend()}/api/offers/{offer_id}/pdf"
                         st.success(f"✅ Document uploaded! Offer letter for {offer.get('program','')} generated and sent!")
                         st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
                         st.balloons()
@@ -833,7 +864,7 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                     if data.get("offer_letter"):
                         offer = data["offer_letter"]
                         offer_id = offer.get("id", "")
-                        pdf_url = f"http://localhost:8000/api/offers/{offer_id}/pdf"
+                        pdf_url = f"{_resolve_public_backend()}/api/offers/{offer_id}/pdf"
                         st.success(f"🎓 Offer letter for *{offer.get('program','')}* generated!")
                         st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
                         st.balloons()
