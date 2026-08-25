@@ -66,6 +66,70 @@ MLX_PORT="${MLX_PORT:-1234}"
 
 mkdir -p "$LOG_DIR"
 
+bootstrap_project_environment() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if ! command -v brew >/dev/null 2>&1; then
+            echo "ERROR: Homebrew is required but not installed. Install it from https://brew.sh" >&2
+            exit 1
+        fi
+
+        for _tool in ffmpeg cloudflared ollama; do
+            if ! command -v "$_tool" >/dev/null 2>&1; then
+                echo "Installing missing tool: $_tool"
+                brew install "$_tool"
+            fi
+        done
+    fi
+
+    PY311_BIN=""
+    for _cand in "$(command -v python3.11 2>/dev/null)" "/opt/homebrew/bin/python3.11" "/usr/local/bin/python3.11"; do
+        if [ -n "$_cand" ] && [ -x "$_cand" ]; then
+            if "$_cand" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)
+PY
+            then
+                PY311_BIN="$_cand"
+                break
+            fi
+        fi
+    done
+
+    if [ -z "$PY311_BIN" ]; then
+        echo "ERROR: Python 3.11 is required but was not found." >&2
+        exit 1
+    fi
+
+    for _venv_dir in "$PROJECT_ROOT/.venv" "$PROJECT_ROOT/venv"; do
+        if [ -x "$_venv_dir/bin/python" ]; then
+            if "$_venv_dir/bin/python" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)
+PY
+            then
+                PYTHON="$_venv_dir/bin/python"
+                break
+            fi
+            echo "WARN: Found stale venv at $_venv_dir with Python < 3.11; recreating it..."
+            rm -rf "$_venv_dir"
+        fi
+    done
+
+    if [ ! -x "$PROJECT_ROOT/.venv/bin/python" ]; then
+        echo "Creating local virtual environment: $PROJECT_ROOT/.venv"
+        "$PY311_BIN" -m venv "$PROJECT_ROOT/.venv"
+    fi
+
+    if [ -f "$PROJECT_ROOT/requirements.txt" ]; then
+        "$PROJECT_ROOT/.venv/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+        "$PROJECT_ROOT/.venv/bin/python" -m pip install -r "$PROJECT_ROOT/requirements.txt" >/dev/null 2>&1 || true
+    fi
+
+    PYTHON="$PROJECT_ROOT/.venv/bin/python"
+}
+
+bootstrap_project_environment
+
 # ---- Load .env (safe for KEY=VALUE lines; comments/blank lines skipped) ----
 if [ -f "$PROJECT_ROOT/.env" ]; then
     while IFS='=' read -r _key _value; do
@@ -74,13 +138,23 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
     done < "$PROJECT_ROOT/.env"
 fi
 
-# ---- Python selection (bootstrap venv -> setup.sh venv -> system) ---------
+# ---- Python selection (prefer the project .venv, then venv, never system 3.9) ---
 if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
     PYTHON="$PROJECT_ROOT/.venv/bin/python"
 elif [ -x "$PROJECT_ROOT/venv/bin/python" ]; then
     PYTHON="$PROJECT_ROOT/venv/bin/python"
 else
     PYTHON="$(command -v python3 || command -v python)"
+fi
+
+if ! "$PYTHON" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)
+PY
+then
+    echo "ERROR: Project runtime must use Python 3.11+; the active interpreter is: $PYTHON" >&2
+    echo "Fix: rerun setup.sh or delete the stale venv and recreate it with python3.11." >&2
+    exit 1
 fi
 
 # ---- LLM provider resolution (matches app/llm_backend.py) -----------------
@@ -94,6 +168,7 @@ if [ "$LLM_PROVIDER" = "auto" ]; then
 fi
 MLX_MODEL="${MLX_MODEL:-mlx-community/Qwen2.5-14B-Instruct-4bit}"
 MLX_BASE_URL="${MLX_BASE_URL:-http://127.0.0.1:$MLX_PORT}"
+MLX_WARMUP_TIMEOUT="${MLX_WARMUP_TIMEOUT:-20}"
 
 # ---- Machine profile (.env sizing) ------------------------------------------
 # Re-size .env if the machine changed since last deploy. Idempotent no-op
@@ -252,6 +327,7 @@ fi
 write_step "Step 5: Starting FastAPI backend (port $FASTAPI_PORT)"
 
 SERVER_LOG="$LOG_DIR/fastapi.log"
+: > "$SERVER_LOG"
 echo "  Python: $PYTHON"
 nohup "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port "$FASTAPI_PORT" \
     >> "$SERVER_LOG" 2>&1 &
@@ -280,7 +356,46 @@ fi
 write_step "Step 6: LLM pre-warming ($LLM_PROVIDER)"
 
 if [ "$LLM_PROVIDER" = "mlx" ]; then
-    # ---- Apple MLX: ensure mlx_lm.server is up, then warm it -----------
+    # ---- Apple MLX: ensure model is cached and mlx_lm.server is ready ----
+    # Install huggingface_hub if missing so we can pre-download with progress
+    if ! "$PYTHON" -c "import huggingface_hub" >/dev/null 2>&1; then
+        write_warn "Required Python package 'huggingface_hub' not found -- installing..."
+        "$PYTHON" -m pip install --upgrade huggingface_hub || true
+    fi
+
+    # Check whether the MLX model is already present in the HF cache. If not,
+    # run snapshot_download in the foreground so the user sees progress.
+    write_step "Checking MLX model cache: $MLX_MODEL"
+    if "$PYTHON" - <<PY
+import sys
+from huggingface_hub import snapshot_download
+repo = "${MLX_MODEL}"
+try:
+    snapshot_download(repo, local_files_only=True)
+    print('MODEL_CACHED')
+    sys.exit(0)
+except Exception as e:
+    print('MODEL_NOT_CACHED', e)
+    sys.exit(2)
+PY
+    then
+        write_ok "Model already cached: $MLX_MODEL"
+    else
+        write_warn "Model not cached: will download now (this may take many minutes)"
+        write_warn "If the download appears stuck, check your network / HF_TOKEN"
+        # Run the download in the foreground so progress bars are visible to the user
+        "$PYTHON" - <<PY
+from huggingface_hub import snapshot_download
+import os
+repo = "${MLX_MODEL}"
+token = os.environ.get('HF_TOKEN')
+snapshot_download(repo, token=token, library_name='mlx_lm')
+print('MODEL_DOWNLOAD_COMPLETE')
+PY
+        write_ok "Model download finished: $MLX_MODEL"
+    fi
+
+    # Now start the MLX server (it will load from cache rather than re-downloading)
     if [ -z "$(port_pids "$MLX_PORT")" ]; then
         write_warn "MLX server not running -- starting mlx_lm.server on :$MLX_PORT..."
         nohup "$PYTHON" -m mlx_lm.server --model "$MLX_MODEL" \
@@ -307,13 +422,14 @@ if [ "$LLM_PROVIDER" = "mlx" ]; then
         exit 1
     fi
 
-    if curl -s -X POST "$MLX_BASE_URL/v1/chat/completions" \
+    if curl -sS --connect-timeout 5 --max-time "$MLX_WARMUP_TIMEOUT" \
+        -X POST "$MLX_BASE_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "{\"model\":\"$MLX_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
         -o /dev/null 2>/dev/null; then
         write_ok "  $MLX_MODEL loaded into memory"
     else
-        write_warn "  Pre-warm request failed for $MLX_MODEL"
+        write_warn "  Pre-warm request timed out or failed for $MLX_MODEL -- continuing startup"
     fi
 else
     # ---- Ollama: /api/tags + per-model keep_alive pre-warm (PS1 parity) ---
@@ -489,6 +605,31 @@ fi
 # ==== Step 11: Optional Streamlit apps =====================================
 if [ "$WITH_STREAMLIT" = "true" ]; then
     write_step "Step 11: Starting Streamlit apps"
+
+    # Ensure the persisted RAG vector store exists so the Streamlit app
+    # doesn't block trying to build or fail with the "Check that the PDF exists" message.
+    CHROMA_DIR="$PROJECT_ROOT/chroma_local_db"
+    if [ -n "${CHROMA_DB_PATH:-}" ]; then
+        CHROMA_DIR="$CHROMA_DB_PATH"
+    fi
+    if [ ! -d "$CHROMA_DIR" ] || [ -z "$(ls -A "$CHROMA_DIR" 2>/dev/null)" ]; then
+        write_warn "Chroma DB missing or empty at $CHROMA_DIR — rebuilding index (scripts/rebuild_rag_index.py)"
+        # Run rebuild; allow it to fail without aborting the whole startup (user can inspect logs)
+        if "$PYTHON" "$PROJECT_ROOT/scripts/rebuild_rag_index.py"; then
+            write_ok "Rebuilt Chroma DB: $CHROMA_DIR"
+        else
+            write_warn "Rebuild script failed — Streamlit may show a vector-store error"
+        fi
+    else
+        write_ok "Found existing Chroma DB: $CHROMA_DIR"
+    fi
+
+    # Export backend URL and timeout for the Streamlit processes so
+    # `app.streamlit_backend` uses the correct address instead of
+    # falling back to a possibly different host.
+    export BACKEND_BASE="http://127.0.0.1:$FASTAPI_PORT"
+    export BACKEND_TIMEOUT=10
+    write_ok "Exported BACKEND_BASE=$BACKEND_BASE BACKEND_TIMEOUT=$BACKEND_TIMEOUT"
 
     nohup "$PYTHON" -m streamlit run dashboard.py \
         --server.port "$STREAMLIT_DASH_PORT" --server.headless true \

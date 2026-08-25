@@ -134,11 +134,26 @@ log_info "Cleaning up background processes..."
 kill_by_name "uvicorn" || true
 kill_by_name "streamlit" || true
 
+# ---- Stop LLM services (MLX / Ollama) -----------------------------------
+MLX_PORT=${MLX_PORT:-1234}
+OLLAMA_PORT=${OLLAMA_PORT:-11434}
+
+# Stop MLX (mlx_lm.server) if running on the standard port or by name
+kill_port_process "$MLX_PORT" "MLX (mlx_lm.server)" || true
+kill_by_name "mlx_lm.server" || true
+kill_by_name "mlx_lm" || true
+
+# Stop Ollama if running on its API port or by name
+if lsof -ti:$OLLAMA_PORT >/dev/null 2>&1; then
+    kill_port_process "$OLLAMA_PORT" "Ollama" || true
+    kill_by_name "ollama" || true
+else
+    log_warn "Ollama not running on port $OLLAMA_PORT"
+fi
+
 # Kill Ollama if requested (usually manual startup)
 log_info ""
-log_warn "Note: Ollama service was not started by this script"
-log_info "If you want to stop Ollama manually, run:"
-log_info "  pkill ollama"
+log_info "LLM services (MLX / Ollama) have been signalled to stop"
 
 log_section "Cleanup Complete"
 
@@ -146,8 +161,10 @@ cat << EOF
 
 Services Status:
 
-  FastAPI:   $(lsof -ti:8000 >/dev/null 2>&1 && echo "❌ Still running" || echo "✓ Stopped")
-  Streamlit: $(lsof -ti:8501 >/dev/null 2>&1 && echo "❌ Still running" || echo "✓ Stopped")
+    FastAPI:   $(lsof -ti:8000 >/dev/null 2>&1 && echo "❌ Still running" || echo "✓ Stopped")
+    Streamlit: $(lsof -ti:8501 >/dev/null 2>&1 && echo "❌ Still running" || echo "✓ Stopped")
+    MLX:       $(lsof -ti:$MLX_PORT >/dev/null 2>&1 && echo "❌ Still running on port $MLX_PORT" || echo "✓ Stopped")
+    Ollama:    $(lsof -ti:$OLLAMA_PORT >/dev/null 2>&1 && echo "❌ Still running on port $OLLAMA_PORT" || echo "✓ Stopped")
 
 Logs available at:
   $PROJECT_ROOT/logs/

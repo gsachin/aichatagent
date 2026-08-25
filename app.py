@@ -15,6 +15,7 @@ import threading
 import requests
 import streamlit as st
 import numpy as np
+import concurrent.futures
 
 warnings.filterwarnings("ignore")
 os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
@@ -230,6 +231,23 @@ def load_rag_chain():
     return create_retrieval_chain(retriever, qa_chain)
 
 
+def _invoke_rag_with_timeout(rag_chain, payload: dict, timeout: int = 30):
+    """Invoke the cached RAG chain in a background thread and enforce a timeout.
+
+    Returns the chain response dict on success or raises a TimeoutError/Exception.
+    """
+    def _call():
+        return rag_chain.invoke(payload)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_call)
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            fut.cancel()
+            raise TimeoutError(f"RAG request timed out after {timeout}s")
+
+
 # ── Load STT model (cached) ────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_stt_model():
@@ -433,10 +451,12 @@ if audio_value is not None:
         with st.chat_message("assistant"):
             with st.spinner("🤔 Thinking..."):
                 try:
-                    response = st.session_state.rag_chain.invoke({"input": transcript})
-                    answer = response["answer"]
+                    response = _invoke_rag_with_timeout(st.session_state.rag_chain, {"input": transcript}, timeout=30)
+                    answer = response.get("answer", "")
+                except TimeoutError as e:
+                    answer = "⚠️ The assistant is taking too long to respond. Try again shortly."
                 except Exception as e:
-                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
+                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure the LLM backend is running."
 
             st.markdown(answer)
 
@@ -771,10 +791,12 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         if answer is None:
             with st.spinner("Thinking..."):
                 try:
-                    response = st.session_state.rag_chain.invoke({"input": prompt})
-                    answer = response["answer"]
+                    response = _invoke_rag_with_timeout(st.session_state.rag_chain, {"input": prompt}, timeout=30)
+                    answer = response.get("answer", "")
+                except TimeoutError:
+                    answer = "⚠️ The assistant is taking too long to respond. Try again shortly."
                 except Exception as e:
-                    answer = f"Something went wrong: {e}\n\nMake sure Ollama is still running."
+                    answer = f"Something went wrong: {e}\n\nMake sure the LLM backend is running."
 
         st.markdown(answer)
 

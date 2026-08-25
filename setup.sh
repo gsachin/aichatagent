@@ -72,6 +72,113 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+resolve_python_bin() {
+    for candidate in \
+        "$(command -v python3.11 2>/dev/null)" \
+        "/opt/homebrew/bin/python3.11" \
+        "$(command -v python3 2>/dev/null)" \
+        "/usr/local/bin/python3.11"; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            if "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)
+PY
+            then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+ensure_brew() {
+    if [[ "$OSTYPE" == "darwin"* ]] && ! command_exists brew; then
+        log_error "Homebrew is not installed. Please install it: https://brew.sh"
+        exit 1
+    fi
+}
+
+ensure_python311() {
+    local selected_python
+    selected_python=$(resolve_python_bin || true)
+
+    if [ -z "$selected_python" ]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            log_info "Installing Python 3.11 via Homebrew..."
+            brew install python@3.11
+            selected_python="$(command -v python3.11 || echo /opt/homebrew/bin/python3.11)"
+        else
+            log_error "Python 3.11 is required but was not found. Please install Python 3.11 and rerun this script."
+            exit 1
+        fi
+    fi
+
+    if ! "$selected_python" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)
+PY
+    then
+        log_error "Python 3.11+ is required. Install it and rerun the script."
+        exit 1
+    fi
+
+    PYTHON_BIN="$selected_python"
+    log_success "Using Python: $PYTHON_BIN"
+}
+
+ensure_system_tools() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        for tool in ffmpeg cloudflared ollama; do
+            if ! command_exists "$tool"; then
+                log_warn "$tool is missing. Installing with Homebrew..."
+                brew install "$tool"
+            fi
+        done
+    fi
+
+    if ! command_exists docker; then
+        log_error "Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop"
+        exit 1
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        log_error "Docker Desktop is installed but not running. Start Docker Desktop and rerun this script."
+        exit 1
+    fi
+}
+
+ensure_project_venv() {
+    if [ ! -d "$VENV_PATH" ]; then
+        log_info "Creating project virtual environment with $PYTHON_BIN..."
+        "$PYTHON_BIN" -m venv "$VENV_PATH"
+    fi
+
+    if [ ! -x "$VENV_PATH/bin/python" ]; then
+        log_error "Virtual environment is incomplete. Recreating it..."
+        rm -rf "$VENV_PATH"
+        "$PYTHON_BIN" -m venv "$VENV_PATH"
+    fi
+
+    VENV_PYTHON="$VENV_PATH/bin/python"
+    source "$VENV_PATH/bin/activate"
+    log_success "Virtual environment ready: $VENV_PATH"
+}
+
+ensure_python_dependencies() {
+    if [ ! -f "$PROJECT_ROOT/requirements.txt" ]; then
+        log_error "requirements.txt not found in $PROJECT_ROOT"
+        exit 1
+    fi
+
+    log_info "Upgrading packaging tools..."
+    "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel >/dev/null
+
+    log_info "Installing project dependencies from requirements.txt..."
+    "$VENV_PYTHON" -m pip install -r "$PROJECT_ROOT/requirements.txt"
+    log_success "Python dependencies installed successfully"
+}
+
 # Kill process on port
 kill_port() {
     local port=$1
@@ -471,11 +578,14 @@ main() {
     echo ""
     
     # Execute setup steps
+    ensure_brew
+    ensure_python311
+    ensure_system_tools
     check_docker
     check_system
     setup_env
-    setup_python_venv
-    install_dependencies
+    ensure_project_venv
+    ensure_python_dependencies
     verify_ollama
     manage_ports
     setup_directories

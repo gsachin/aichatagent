@@ -64,18 +64,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_api")
 
 
-def _resolve_tunnel_host():
-    import os as _os
-    from pathlib import Path as _Path
-    host = _os.environ.get("TUNNEL_HOST", "")
-    if host:
-        return host
-    tf = _Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-    if tf.is_file():
-        return tf.read_text().strip()
-    return _os.environ.get("NGROK_HOST", "localhost:8000")
-
-
 # ── Startup / shutdown ───────────────────────────────────────────────
 
 _db_available = False
@@ -90,6 +78,8 @@ MUTE_STT_DURING_TTS = os.environ.get("MUTE_STT_DURING_TTS", "1") == "1"
 
 
 from contextlib import asynccontextmanager
+
+from app.tunnel import resolve_tunnel_host
 
 
 async def _ws_send(websocket, text: str) -> bool:
@@ -268,25 +258,6 @@ if _static_dir.is_dir():
 
 
 # ── Shared helpers ────────────────────────────────────────────────────
-
-
-def _resolve_tunnel_host() -> str:
-    """
-    Resolve the public tunnel hostname for Twilio callbacks.
-
-    Checks, in order: TUNNEL_HOST env var, .whatsapp_tunnel file,
-    NGROK_HOST env var (legacy), then falls back to localhost:8000.
-    Returns just the hostname (no scheme), e.g. "foo.trycloudflare.com".
-    """
-    tunnel_host = os.environ.get("TUNNEL_HOST", "")
-    if tunnel_host:
-        return tunnel_host
-
-    tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-    if tunnel_file.is_file():
-        return tunnel_file.read_text().strip()
-
-    return os.environ.get("NGROK_HOST", "localhost:8000")
 
 
 # ── TwiML template ───────────────────────────────────────────────────
@@ -825,7 +796,7 @@ async def twilio_outbound_voice_webhook():
     Accepts both GET and POST because Twilio may use either method
     depending on how the outbound call is initiated.
     """
-    host = _resolve_tunnel_host()
+    host = resolve_tunnel_host()
 
     from app.outbound.twiml import outbound_connect_twiml
 
@@ -937,7 +908,7 @@ async def twilio_voice_webhook():
     Twilio voice webhook — serves IVR menu first.
     After the caller presses a digit (or timeout), connects to /ws/twilio.
     """
-    host = _resolve_tunnel_host()
+    host = resolve_tunnel_host()
     twiml = TWIML_IVR_TEMPLATE.format(host=host)
     logger.info(f"/twilio/voice: serving IVR menu with host={host}")
     return Response(content=twiml, media_type="application/xml")
@@ -949,7 +920,7 @@ async def twilio_voice_connect(Digits: str = ""):
     Called by Twilio after IVR <Gather> completes.
     Connects the caller to the AI WebSocket stream.
     """
-    host = _resolve_tunnel_host()
+    host = resolve_tunnel_host()
     logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}")
     twiml = TWIML_TEMPLATE.format(host=host)
     return Response(content=twiml, media_type="application/xml")
@@ -1692,7 +1663,7 @@ async def api_quick_call(req: Request):
     return {
         "lead": lead,
         "call_queue": queue_entry,
-        "tunnel_host": _resolve_tunnel_host(),
+        "tunnel_host": resolve_tunnel_host(),
     }
 
 
