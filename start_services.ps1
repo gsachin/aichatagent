@@ -5,9 +5,11 @@
     Kills stale services, releases ports, starts everything fresh,
     and updates the Cloudflare tunnel URL everywhere it is needed.
     Includes GPU health check, Ollama model pre-warming, optional named
-    Cloudflare tunnel for a permanent URL, and (Step 4b) clone/sync of the
-    enterprise-rag-core repo (https://github.com/gsachin/enterprise-rag-core)
-    with its Redis Stack infra. Override its location with ERC_ROOT.
+    Cloudflare tunnel for a permanent URL, and the enterprise-rag-core MCP
+    retrieval service (https://github.com/gsachin/enterprise-rag-core):
+    Step 4b clone/syncs the repo + Redis Stack, Step 6b launches its MCP
+    server on :8010 (MCP-first retrieval with automatic fallback to local
+    Chroma). Override its location with ERC_ROOT.
 .PARAMETER WithStreamlit
     Also launch Streamlit dashboard (port 8502) and main app (port 8501),
     each behind its own public Cloudflare quick tunnel.
@@ -531,6 +533,28 @@ if ($ollamaUp) {
     }
 }
 
+# ==== Step 6b: Enterprise RAG Core MCP service =============================
+Write-Step "Step 6b: Enterprise RAG Core MCP service"
+
+# Start the standalone RAG service AFTER Ollama pre-warm (first-ever-run
+# prepopulate embeds via Ollama). The ERC launcher self-heals its venv,
+# prepopulates the KB idempotently, and serves the MCP endpoint on :8010.
+# Failures are warn-only: the app falls back to local Chroma (auto mode).
+$ERCLauncher = Join-Path $ERCRoot "start_services.ps1"
+$ERCKb = Join-Path $ProjectRoot "content\meridian\meridian_knowledge_base.md"
+if ((Test-Path $ERCRoot) -and (Test-Path $ERCLauncher)) {
+    Write-OK ("Starting ERC MCP service via {0} ..." -f $ERCLauncher)
+    $ercOut = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ERCLauncher -Port 8010 -KbPath $ERCKb 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK "ERC MCP service up: http://127.0.0.1:8010/mcp (retrieval: MCP-first, automatic fallback)"
+    } else {
+        Write-Warn "ERC launcher failed -- RAG falls back to local Chroma (auto mode)"
+        ($ercOut | Select-Object -Last 5) | ForEach-Object { Write-Warn $_ }
+    }
+} else {
+    Write-Warn "enterprise-rag-core repo not found at $ERCRoot -- RAG falls back to local Chroma (auto mode)"
+}
+
 # ==== Step 7: Start Cloudflare tunnel ======================================
 Write-Step "Step 7: Starting Cloudflare tunnel"
 
@@ -766,7 +790,7 @@ if ($ChatTunnelHost -or $DashTunnelHost) {
 Write-Host ("{0}Local Services:{1}" -f $BOLD, $RESET)
 Write-Host ("   FastAPI backend:  {0}http://localhost:{1}{2}" -f $CYAN, $FastAPIPort, $RESET)
 Write-Host ("   Enterprise RAG Core: {0}{1}{2}  (repo: {0}https://github.com/gsachin/enterprise-rag-core{2})" -f $CYAN, $ERCRoot, $RESET)
-Write-Host ("     MCP server (optional): cd {0}; .venv\Scripts\enterprise-rag-core serve --port 8010" -f $ERCRoot)
+Write-Host ("     MCP service:       {0}http://127.0.0.1:8010/mcp{1}  (retrieval: MCP-first, automatic fallback)" -f $CYAN, $RESET)
 
 if ($WithStreamlit) {
     Write-Host ("   Dashboard:         {0}http://localhost:{1}{2}" -f $CYAN, $StreamlitDashboardPort, $RESET)

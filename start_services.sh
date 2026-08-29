@@ -644,6 +644,10 @@ if [ "$LLM_PROVIDER" = "mlx" ]; then
 else
     printf '     Embeddings: Ollama (auto-detected on CUDA/Linux/Windows, http://localhost:11434)\n'
 fi
+# macOS parity note: the ERC MCP service (:8010) is launched by the ERC
+# repo's own launcher (RAG_CORE_EMBED_BACKEND=mlx on Apple Silicon); the .sh
+# does not manage it yet — see doc/enterprizesolutions/
+# TRD_ERC_DECOUPLING_INTEGRATION.md (follow-up).
 printf '   LLM backend:      %s (%s)%s\n' "$CYAN" "$LLM_PROVIDER" "$RESET"
 if [ "$LLM_PROVIDER" = "mlx" ]; then
     printf '   MLX server:       %shttp://127.0.0.1:%s/v1%s\n' "$CYAN" "$MLX_PORT" "$RESET"
