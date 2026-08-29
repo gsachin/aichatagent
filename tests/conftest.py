@@ -27,6 +27,10 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Keep the existing suite hermetic: the RAG dispatcher must not touch the MCP
+# service in tests (test_rag_dispatcher.py sets the mode per test).
+os.environ.setdefault("USE_MCP_RAG", "off")
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 def _find_free_port() -> int:

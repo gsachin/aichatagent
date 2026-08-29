@@ -36,7 +36,9 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("rag_rebuild")
 
-from app.rag import (  # noqa: E402
+# Import from the LEGACY module directly: this script's smoke tests must
+# always validate the local store it just built, never the MCP dispatcher.
+from app.rag_legacy import (  # noqa: E402
     BLOCKED_MARKERS,
     SOURCES,
     build_vector_store,
