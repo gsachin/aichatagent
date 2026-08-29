@@ -4,8 +4,10 @@
 .DESCRIPTION
     Kills stale services, releases ports, starts everything fresh,
     and updates the Cloudflare tunnel URL everywhere it is needed.
-    Includes GPU health check, Ollama model pre-warming, and
-    optional named Cloudflare tunnel for a permanent URL.
+    Includes GPU health check, Ollama model pre-warming, optional named
+    Cloudflare tunnel for a permanent URL, and (Step 4b) clone/sync of the
+    enterprise-rag-core repo (https://github.com/gsachin/enterprise-rag-core)
+    with its Redis Stack infra. Override its location with ERC_ROOT.
 .PARAMETER WithStreamlit
     Also launch Streamlit dashboard (port 8502) and main app (port 8501),
     each behind its own public Cloudflare quick tunnel.
@@ -416,6 +418,53 @@ if (-not $dbReady) {
     Write-OK "Database pre-flight: PASSED"
 }
 
+# ==== Step 4b: Enterprise RAG Core =========================================
+Write-Step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-rag-core)"
+
+# The extracted Enterprise RAG/MCP Core Engine lives in its own repo, next to
+# this project. Ensure it is present (clone or pull) and that its only
+# required local infra -- Redis Stack -- is running. Failures here never block
+# the admissions app (warn-only).
+$ERCRepo = "https://github.com/gsachin/enterprise-rag-core"
+$ERCRoot = if ($env:ERC_ROOT) { $env:ERC_ROOT } else { Join-Path (Split-Path $ProjectRoot -Parent) "enterprise-rag-core" }
+$ERCGit  = Join-Path $ERCRoot ".git"
+
+if (Test-Path $ERCGit) {
+    Write-OK ("enterprise-rag-core present at {0} - syncing (git pull --ff-only)" -f $ERCRoot)
+    $ercPull = git -C $ERCRoot pull --ff-only 2>&1
+    if ($LASTEXITCODE -eq 0) { Write-OK "enterprise-rag-core up to date" }
+    else { Write-Warn ("git pull failed: {0}" -f ($ercPull -join " ")) }
+} else {
+    Write-Warn ("enterprise-rag-core not found - cloning {0} -> {1}" -f $ERCRepo, $ERCRoot)
+    $ercClone = git clone --depth 1 $ERCRepo $ERCRoot 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK "enterprise-rag-core cloned (first-time setup: see $ERCRoot\README.md)"
+    } else {
+        Write-Warn ("clone failed: {0}" -f ($ercClone -join " "))
+        Write-Warn "Skip: the RAG/MCP core is unavailable (admissions app unaffected)"
+    }
+}
+
+# Redis Stack (RediSearch + RedisJSON) is the only infra the RAG core needs
+# beyond Ollama (already handled in Step 6). Reuse the repo's compose file so
+# the stack matches its pinned setup; fall back to a bare container.
+if ((Test-Path $ERCGit) -and $DockerCli -and $dockerRunning) {
+    $ercCompose = Join-Path $ERCRoot "docker-compose.yml"
+    $redisNames = & $DockerCli ps --filter "publish=6379" --format "{{.Names}}" 2>$null
+    if ($redisNames) {
+        Write-OK ("Redis Stack already running ({0} on :6379)" -f ($redisNames -join ", "))
+    } elseif (Test-Path $ercCompose) {
+        Write-OK ("Starting Redis Stack via {0} (redis-stack service only)..." -f $ercCompose)
+        & $DockerCli compose -f $ercCompose up -d redis-stack 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-OK "Redis Stack started on :6379" }
+        else { Write-Warn "redis-stack failed to start - the RAG core will run without its semantic cache" }
+    } else {
+        & $DockerCli run -d --name rag-redis-stack -p 6379:6379 redis/redis-stack-server:latest 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-OK "Redis Stack started on :6379" }
+        else { Write-Warn "redis-stack failed to start - the RAG core will run without its semantic cache" }
+    }
+}
+
 # ==== Step 5: Start FastAPI backend ========================================
 Write-Step "Step 5: Starting FastAPI backend (port $FastAPIPort)"
 
@@ -716,6 +765,8 @@ if ($ChatTunnelHost -or $DashTunnelHost) {
 }
 Write-Host ("{0}Local Services:{1}" -f $BOLD, $RESET)
 Write-Host ("   FastAPI backend:  {0}http://localhost:{1}{2}" -f $CYAN, $FastAPIPort, $RESET)
+Write-Host ("   Enterprise RAG Core: {0}{1}{2}  (repo: {0}https://github.com/gsachin/enterprise-rag-core{2})" -f $CYAN, $ERCRoot, $RESET)
+Write-Host ("     MCP server (optional): cd {0}; .venv\Scripts\enterprise-rag-core serve --port 8010" -f $ERCRoot)
 
 if ($WithStreamlit) {
     Write-Host ("   Dashboard:         {0}http://localhost:{1}{2}" -f $CYAN, $StreamlitDashboardPort, $RESET)

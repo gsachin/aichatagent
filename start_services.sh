@@ -4,10 +4,12 @@
 # -----------------------------------------------------------------------------
 # Bash port of start_services.ps1 with full parity:
 #   kills stale services, frees ports, checks the compute platform, pre-flights
-#   Docker/PostgreSQL, starts FastAPI, pre-warms the LLM (Apple MLX on macOS
-#   Apple Silicon, Ollama elsewhere), starts a Cloudflare tunnel, writes the
-#   tunnel hostname everywhere it is needed, updates Twilio webhooks, and
-#   optionally starts the Streamlit apps.
+#   Docker/PostgreSQL, clone/syncs the enterprise-rag-core repo with its Redis
+#   Stack infra (Step 4b, https://github.com/gsachin/enterprise-rag-core,
+#   override location with ERC_ROOT), starts FastAPI, pre-warms the LLM (Apple
+#   MLX on macOS Apple Silicon, Ollama elsewhere), starts a Cloudflare tunnel,
+#   writes the tunnel hostname everywhere it is needed, updates Twilio
+#   webhooks, and optionally starts the Streamlit apps.
 #
 # Usage:
 #   bash start_services.sh              # everything, including Streamlit UIs
@@ -246,6 +248,56 @@ if [ "$DB_READY" = "false" ]; then
     write_warn "Fix: ensure Docker is running with the elearning-postgres container"
 else
     write_ok "Database pre-flight: PASSED"
+fi
+
+# ==== Step 4b: Enterprise RAG Core =========================================
+write_step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-rag-core)"
+
+# The extracted Enterprise RAG/MCP Core Engine lives in its own repo, next to
+# this project. Ensure it is present (clone or pull) and that its only
+# required local infra -- Redis Stack -- is running. Failures here never block
+# the admissions app (warn-only). Override the location with ERC_ROOT.
+ERC_REPO="https://github.com/gsachin/enterprise-rag-core"
+ERC_ROOT="${ERC_ROOT:-$PROJECT_ROOT/../enterprise-rag-core}"
+
+if [ -d "$ERC_ROOT/.git" ]; then
+    write_ok "enterprise-rag-core present at $ERC_ROOT - syncing (git pull --ff-only)"
+    if (cd "$ERC_ROOT" && git pull --ff-only) >/dev/null 2>&1; then
+        write_ok "enterprise-rag-core up to date"
+    else
+        write_warn "git pull failed in $ERC_ROOT"
+    fi
+else
+    write_warn "enterprise-rag-core not found - cloning $ERC_REPO -> $ERC_ROOT"
+    if git clone --depth 1 "$ERC_REPO" "$ERC_ROOT" >/dev/null 2>&1; then
+        write_ok "enterprise-rag-core cloned (first-time setup: see $ERC_ROOT/README.md)"
+    else
+        write_warn "clone failed - the RAG/MCP core is unavailable (admissions app unaffected)"
+    fi
+fi
+
+# Redis Stack (RediSearch + RedisJSON) is the only infra the RAG core needs
+# beyond its embedding endpoint (Step 6's LLM provider: MLX on macOS Apple
+# Silicon, Ollama elsewhere). Reuse the repo's compose file so the stack
+# matches its pinned setup; fall back to a bare container.
+if [ -d "$ERC_ROOT/.git" ] && docker info >/dev/null 2>&1; then
+    _redis_names="$(docker ps --filter "publish=6379" --format "{{.Names}}" 2>/dev/null)"
+    if [ -n "$_redis_names" ]; then
+        write_ok "Redis Stack already running ($(echo "$_redis_names" | tr '\n' ' ')on :6379)"
+    elif [ -f "$ERC_ROOT/docker-compose.yml" ]; then
+        write_ok "Starting Redis Stack via $ERC_ROOT/docker-compose.yml (redis-stack service only)..."
+        if docker compose -f "$ERC_ROOT/docker-compose.yml" up -d redis-stack >/dev/null 2>&1; then
+            write_ok "Redis Stack started on :6379"
+        else
+            write_warn "redis-stack failed to start - the RAG core will run without its semantic cache"
+        fi
+    else
+        if docker run -d --name rag-redis-stack -p 6379:6379 redis/redis-stack-server:latest >/dev/null 2>&1; then
+            write_ok "Redis Stack started on :6379"
+        else
+            write_warn "redis-stack failed to start - the RAG core will run without its semantic cache"
+        fi
+    fi
 fi
 
 # ==== Step 5: Start FastAPI backend ========================================
@@ -583,6 +635,15 @@ if [ -n "$CHAT_TUNNEL_HOST" ]; then
 fi
 printf '\n%sLocal Services:%s\n' "$BOLD" "$RESET"
 printf '   FastAPI backend:  %shttp://localhost:%s%s\n' "$CYAN" "$FASTAPI_PORT" "$RESET"
+printf '   Enterprise RAG Core: %s%s%s  (repo: %shttps://github.com/gsachin/enterprise-rag-core%s)\n' "$CYAN" "$ERC_ROOT" "$RESET" "$CYAN" "$RESET"
+printf '     MCP server (optional): cd %s && .venv/bin/enterprise-rag-core serve --port 8010\n' "$ERC_ROOT"
+if [ "$LLM_PROVIDER" = "mlx" ]; then
+    printf '     Embeddings: MLX (auto-detected on Apple Silicon)\n'
+    printf '       - run an MLX embedding server (vllm-mlx / mlx-serve / mlx-omni-server)\n'
+    printf '       - export EMBED_MODEL=<served-embedding-model> [RAG_CORE_MLX_BASE_URL=<base/v1>]\n'
+else
+    printf '     Embeddings: Ollama (auto-detected on CUDA/Linux/Windows, http://localhost:11434)\n'
+fi
 printf '   LLM backend:      %s (%s)%s\n' "$CYAN" "$LLM_PROVIDER" "$RESET"
 if [ "$LLM_PROVIDER" = "mlx" ]; then
     printf '   MLX server:       %shttp://127.0.0.1:%s/v1%s\n' "$CYAN" "$MLX_PORT" "$RESET"
