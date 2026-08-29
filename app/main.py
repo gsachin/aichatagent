@@ -201,12 +201,12 @@ async def lifespan(app_instance):
         import asyncio as _asyncio
 
         def _warmup():
-            # Pre-load ChromaDB vector store
-            from app.rag import get_vector_store
+            # Pre-load the RAG backend (MCP session in MCP modes, ChromaDB
+            # in legacy mode) — see app.rag.warmup(); never raises.
+            from app.rag import warmup as rag_warmup
 
-            vs = get_vector_store()
-            if vs:
-                logger.info("ChromaDB vector store pre-warmed")
+            rag_warmup()
+            logger.info("RAG backend pre-warmed")
             # Pre-load the embedding model so the first RAG query doesn't
             # pay the cold-start cost (HF config checks + model load)
             from app.llm_backend import get_embedding_function, provider_name
