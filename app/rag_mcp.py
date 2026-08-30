@@ -21,6 +21,7 @@ Env (read lazily per call so tests can monkeypatch):
 import json
 import os
 import time
+from typing import Any
 
 import httpx
 
@@ -187,41 +188,83 @@ def mcp_retrieve_context(query: str, top_k: int = 5) -> str:
 
 # ── LangChain-compatible retriever shim (for the LCEL chain sites) ─────────
 
+# langchain_core is only required by the LCEL chain sites (app.py,
+# admissions_bot.py). app/main.py imports this module at FastAPI startup, and
+# this machine blocks the langchain->langsmith->xxhash DLL chain (see
+# app/main.py), so the import is guarded: without langchain_core the class
+# degrades to a plain duck-typed shim, which is all the string-based path
+# (retrieve_context) needs.
+try:
+    from langchain_core.documents import Document
+    from langchain_core.retrievers import BaseRetriever
+    from pydantic import PrivateAttr
+    _HAS_LANGCHAIN_CORE = True
+except Exception:                                   # pragma: no cover
+    Document = None
+    BaseRetriever = object
+    _HAS_LANGCHAIN_CORE = False
+
+
 class MCPDocument:
     """Duck-typed like langchain_core Document (page_content + metadata) —
-    same pattern as the legacy _FakeDoc shim."""
+    same pattern as the legacy _FakeDoc shim; used only when langchain_core
+    is unavailable (degraded, non-LCEL path)."""
 
     def __init__(self, page_content: str, metadata: dict):
         self.page_content = page_content
         self.metadata = metadata
 
 
-class MCPRetriever:
-    """Retriever whose .invoke() hits the MCP service, falling back to a lazy
-    legacy retriever factory on failure (auto mode only)."""
+class MCPRetriever(BaseRetriever):
+    """Retriever for the LCEL chain sites: retrieval hits the MCP service,
+    falling back to a lazy legacy retriever factory on failure (auto mode).
+
+    MUST subclass langchain_core's BaseRetriever: create_retrieval_chain calls
+    retriever.with_config() and, for non-BaseRetriever inputs, treats the
+    retriever as a Runnable[dict, ...] — passing the whole input dict instead
+    of the query string. The legacy path always satisfied this (Chroma's
+    as_retriever returns a real BaseRetriever); the original duck-typed shim
+    crashed with AttributeError: no attribute 'with_config'.
+    """
+
+    top_k: int = 5
+
+    if _HAS_LANGCHAIN_CORE:
+        # Pydantic v2 model: undeclared attrs must be PrivateAttr.
+        _fallback_factory: Any = PrivateAttr(default=None)
+        _allow_fallback: bool = PrivateAttr(default=True)
 
     def __init__(self, top_k: int = 5, fallback_retriever_factory=None,
                  allow_fallback: bool = True):
-        self._top_k = top_k
+        if _HAS_LANGCHAIN_CORE:
+            super().__init__(top_k=top_k)
+        else:                                        # pragma: no cover
+            self.top_k = top_k
         self._fallback_factory = fallback_retriever_factory
         self._allow_fallback = allow_fallback
 
-    def invoke(self, query: str) -> list[MCPDocument]:
-        chunks = mcp_retrieve(query, self._top_k)
+    def _get_relevant_documents(self, query: str, *, run_manager=None) -> list:
+        chunks = mcp_retrieve(query, self.top_k)
         if chunks is None:
             if self._allow_fallback and self._fallback_factory is not None:
                 retriever = self._fallback_factory()
                 if retriever is not None:
                     return list(retriever.invoke(query))
             return []
+        doc_cls = Document if Document is not None else MCPDocument
         return [
-            MCPDocument(
+            doc_cls(
                 page_content=f"[§ {c.get('section_title', '')}]\n{c.get('content', '')}"
                 if c.get("section_title") else c.get("content", ""),
                 metadata={"section": c.get("section_title", "")},
             )
             for c in chunks
         ]
+
+    if not _HAS_LANGCHAIN_CORE:                      # pragma: no cover
+        def invoke(self, query: str) -> list:
+            """Plain shim used when langchain_core is unavailable."""
+            return self._get_relevant_documents(query)
 
 
 # ── Circuit breaker ────────────────────────────────────────────────────────

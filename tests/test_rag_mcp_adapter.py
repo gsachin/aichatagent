@@ -196,3 +196,42 @@ def test_retriever_fallback_paths(monkeypatch):
     # on mode: no fallback — degrades to empty
     strict = rag_mcp.MCPRetriever(fallback_retriever_factory=factory, allow_fallback=False)
     assert strict.invoke("q") == []
+
+
+def test_retriever_works_in_create_retrieval_chain(monkeypatch):
+    """LCEL chain sites (app.py, admissions_bot.py) wrap the retriever in
+    create_retrieval_chain, which calls .with_config() on it and passes the
+    query STRING (BaseRetriever branch). A plain duck-typed class crashed
+    with AttributeError: 'MCPRetriever' object has no attribute 'with_config';
+    a non-BaseRetriever Runnable would receive the whole input dict instead.
+    """
+    queries = []
+
+    def fake_post(payload, session_id=None):
+        if payload.get("method") == "initialize":
+            return httpx.Response(200, headers={"mcp-session-id": "s1"},
+                                  json={"jsonrpc": "2.0", "id": 1, "result": {}})
+        if payload.get("method") == "notifications/initialized":
+            return httpx.Response(202)
+        if payload.get("method") == "tools/call":
+            queries.append(payload["params"]["arguments"]["query"])
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 2, "result": {
+                "content": [{"type": "text", "text": json.dumps({"chunks": [
+                    {"section_title": "Overview", "content": "Meridian text."}]})}]}})
+        raise AssertionError(payload)
+
+    monkeypatch.setattr(rag_mcp, "_post", fake_post)
+
+    from langchain_classic.chains import create_retrieval_chain
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.runnables import RunnableLambda
+
+    retriever = rag_mcp.MCPRetriever()
+    assert isinstance(retriever, BaseRetriever)     # contract for the chain
+    chain = create_retrieval_chain(
+        retriever,
+        RunnableLambda(lambda inputs: inputs["context"]),
+    )
+    out = chain.invoke({"input": "tell me about fees"})
+    assert out["answer"][0].page_content == "[§ Overview]\nMeridian text."
+    assert queries == ["tell me about fees"]        # got the STRING, not the dict

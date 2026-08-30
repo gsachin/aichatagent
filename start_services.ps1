@@ -544,12 +544,20 @@ $ERCLauncher = Join-Path $ERCRoot "start_services.ps1"
 $ERCKb = Join-Path $ProjectRoot "content\meridian\meridian_knowledge_base.md"
 if ((Test-Path $ERCRoot) -and (Test-Path $ERCLauncher)) {
     Write-OK ("Starting ERC MCP service via {0} ..." -f $ERCLauncher)
-    $ercOut = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ERCLauncher -Port 8010 -KbPath $ERCKb 2>&1
+    # Route the ERC launcher through cmd.exe with FILE redirection -- never a
+    # PowerShell output capture. A $out = powershell.exe ... 2>&1 capture
+    # pumps anonymous pipes; the launcher's MCP server (a long-lived
+    # grandchild) inherits those pipe write-handles, so the pipes never reach
+    # EOF and the capture hangs forever even after the launcher exits.
+    $ercLauncherLog = Join-Path $env:TEMP "erc_launcher.log"
+    if (Test-Path $ercLauncherLog) { Remove-Item $ercLauncherLog -Force -ErrorAction SilentlyContinue }
+    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port 8010 -KbPath `"$ERCKb`" > `"$ercLauncherLog`" 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-OK "ERC MCP service up: http://127.0.0.1:8010/mcp (retrieval: MCP-first, automatic fallback)"
     } else {
         Write-Warn "ERC launcher failed -- RAG falls back to local Chroma (auto mode)"
-        ($ercOut | Select-Object -Last 5) | ForEach-Object { Write-Warn $_ }
+        Write-Warn ("Full launcher log: {0}" -f $ercLauncherLog)
+        Get-Content $ercLauncherLog -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { Write-Warn $_ }
     }
 } else {
     Write-Warn "enterprise-rag-core repo not found at $ERCRoot -- RAG falls back to local Chroma (auto mode)"
