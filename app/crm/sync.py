@@ -33,6 +33,7 @@ import logging
 from app.config import settings
 from app.crm import identity as identity_mod
 from app.crm import outbox
+from app.crm import session as session_mod
 from app.crm.client import (
     CrmCircuitOpen,
     CrmError,
@@ -65,14 +66,13 @@ async def lookup_or_create(identity: ChannelIdentity) -> str | None:
         return None
 
     if not identity.is_sendable:
-        # R2: a lookup with no identifier can match an unrelated record, and one
-        # with no conversation id would create a record with no linkage.
-        reason = (
-            "no usable email or phone"
-            if not identity.has_identifier
-            else "no conversation id"
+        # Not an error — this is the normal state early in a conversation. The
+        # defence is what stops R2 (blank identifier), R17 (blank name) and
+        # orphaned records (blank conversation id) from ever reaching the API.
+        logger.info(
+            f"crm.sync: {identity.channel} not ready for the CRM yet — "
+            f"missing {', '.join(identity.missing_for_send)}"
         )
-        logger.warning(f"crm.sync: refusing lookup for {identity.channel} — {reason}")
         return None
 
     payload = identity.lookup_payload()
@@ -121,6 +121,95 @@ async def lookup_or_create(identity: ChannelIdentity) -> str | None:
 
     if user_id:
         logger.info(f"crm.sync: {identity.describe()} -> userId {user_id}")
+    return user_id
+
+
+# ── channel entry point ──────────────────────────────────────────────────────
+
+async def link_conversation(
+    *,
+    channel: str,
+    conversation_id: str = "",
+    lead: dict | None = None,
+    phone_number: object = "",
+    email: object = "",
+    name: object = "",
+    course: object = "",
+) -> str | None:
+    """
+    Make sure the person in this conversation exists in the CRM. Returns the
+    ``userId``, or None if they are not (yet) linkable.
+
+    Every channel calls this once per turn. It is cheap when it has nothing to
+    do — a lead that is already linked returns its cached id without touching
+    the network, which is what keeps a chatty WhatsApp thread from re-asking the
+    API on every message.
+
+    It will decline to link until the identity is complete enough to be safe
+    (see :attr:`ChannelIdentity.is_sendable`), and try again on the next turn.
+    That is the intended behaviour, not a failure: a WhatsApp student is asked
+    for their name before anything else, so the first message usually cannot
+    link and the second usually can.
+
+    Never raises.
+    """
+    if not enabled():
+        return None
+
+    lead = lead or {}
+    lead_id = str(lead.get("id") or "")
+
+    # Already linked — the common case from turn two onward. The lead dict does
+    # not carry crm_user_id (see get_lead_crm_user_id for why), but a caller that
+    # already knows it can pass it through the dict to save the lookup.
+    existing = str(lead.get("crm_user_id") or "")
+    if not existing and lead_id:
+        try:
+            from app.leads.models import get_lead_crm_user_id
+
+            existing = await get_lead_crm_user_id(lead_id)
+        except Exception:
+            logger.exception("crm.sync: could not read the existing CRM link")
+    if existing:
+        return existing
+
+    try:
+        ident = identity_mod.from_channel(
+            channel,
+            conversation_id=conversation_id or str(lead.get("conversation_id") or ""),
+            phone_number=phone_number or lead.get("phone_number") or "",
+            email=email or lead.get("email") or "",
+            name=name or lead.get("name") or "",
+            course=course or lead.get("program_interest") or "",
+            lead_id=lead_id,
+        )
+    except Exception:
+        logger.exception("crm.sync: could not build an identity from the lead")
+        return None
+
+    user_id = await lookup_or_create(ident)
+    if not user_id:
+        return None
+
+    # Persist so the next turn short-circuits, and so the status pushes in
+    # Phase 7 have a userId to address.
+    if lead_id:
+        try:
+            from app.leads.models import set_lead_crm_user_id
+
+            await set_lead_crm_user_id(lead_id, user_id)
+        except Exception:
+            logger.exception("crm.sync: could not persist crm_user_id on the lead")
+
+    # Keep the live session in step so the rest of this conversation can read
+    # the id without another database round trip. WhatsApp sessions are keyed by
+    # phone number; the voice channels key by stream_sid, which the caller sets
+    # directly because only it knows the sid.
+    if channel == "whatsapp" and ident.phone_number:
+        live = session_mod.get("whatsapp", ident.phone_number)
+        if live is not None:
+            live.crm_user_id = user_id
+
     return user_id
 
 

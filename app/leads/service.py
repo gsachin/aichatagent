@@ -49,6 +49,7 @@ async def log_interaction(
     outcome: str = "",
     call_duration_seconds: int = 0,
     conversation_id: str = "",
+    crm_user_id: str = "",
 ) -> dict | None:
     """
     High-level helper:
@@ -57,8 +58,10 @@ async def log_interaction(
     3. If extracted_lead has data, fill in blank lead fields
     4. If follow-up is needed, create a follow_up entry
 
-    ``conversation_id`` is the id minted at session start by ``app.crm.session``.
-    Omitting it falls back to a fresh row id, so existing callers are unaffected.
+    ``conversation_id`` is the id minted at session start by ``app.crm.session``,
+    and ``crm_user_id`` the Salesforce user this conversation belongs to. Both are
+    optional; omitting them leaves the log exactly as it was before the CRM
+    integration, so existing callers are unaffected.
 
     Returns the conversation dict.
     """
@@ -94,6 +97,7 @@ async def log_interaction(
         follow_up_reason=follow_up_reason,
         extracted_lead=extracted_lead,
         conversation_id=conversation_id or None,
+        crm_user_id=crm_user_id or None,
     )
 
     # 3. If we have extracted data and the lead is missing info, patch it

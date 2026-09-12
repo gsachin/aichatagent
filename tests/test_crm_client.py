@@ -412,29 +412,6 @@ async def test_single_flight_releases_the_key_after_completion():
 # ── sync: the two entry points ───────────────────────────────────────────────
 
 @pytest.fixture
-def override_settings():
-    """
-    Temporarily change a Settings field.
-
-    Settings is a frozen dataclass, so monkeypatch.setattr cannot touch it — the
-    values are set through object.__setattr__ and restored by hand.
-    """
-    from app.config import settings
-
-    saved: dict[str, object] = {}
-
-    def override(**kwargs):
-        for key, value in kwargs.items():
-            saved.setdefault(key, getattr(settings, key))
-            object.__setattr__(settings, key, value)
-
-    yield override
-
-    for key, value in saved.items():
-        object.__setattr__(settings, key, value)
-
-
-@pytest.fixture
 def crm_enabled(override_settings):
     override_settings(CRM_ENABLED=True)
     return override_settings
@@ -467,8 +444,28 @@ async def test_lookup_or_create_returns_the_user_id(crm_enabled, patched_client)
     install, _ = patched_client
     install(lambda r: ok({"userId": "a0X1"}))
 
-    ident = from_channel("whatsapp", conversation_id="c1", phone_number="+14155550100")
+    ident = from_channel(
+        "whatsapp", conversation_id="c1", phone_number="+14155550100", name="Ana"
+    )
     assert await sync.lookup_or_create(ident) == "a0X1"
+
+
+@pytest.mark.anyio
+async def test_lookup_refuses_an_identity_with_no_name(crm_enabled, patched_client):
+    """
+    R17: the API's split_name("") raises IndexError and returns a 500. A name is
+    a required field, so it cannot be omitted — the only safe move is to wait
+    until the student gives one.
+    """
+    from app.crm import sync
+
+    install, _ = patched_client
+    handler, state = scripted([ok({"userId": "a0X1"})])
+    install(handler)
+
+    ident = from_channel("whatsapp", conversation_id="c1", phone_number="+14155550100")
+    assert await sync.lookup_or_create(ident) is None
+    assert state["calls"] == 0, "an empty name must never reach the API"
 
 
 @pytest.mark.anyio
@@ -500,7 +497,9 @@ async def test_lookup_reissues_once_on_unknown_state(crm_enabled, patched_client
     ])
     install(handler)
 
-    ident = from_channel("whatsapp", conversation_id="c1", phone_number="+14155550100")
+    ident = from_channel(
+        "whatsapp", conversation_id="c1", phone_number="+14155550100", name="Ana"
+    )
     assert await sync.lookup_or_create(ident) == "a0X1"
     assert state["calls"] == 2
 
@@ -512,7 +511,9 @@ async def test_lookup_returns_none_on_failure_and_never_raises(crm_enabled, patc
     install, _ = patched_client
     install(lambda r: httpx.Response(422, json={"detail": "bad"}))
 
-    ident = from_channel("whatsapp", conversation_id="c1", phone_number="+14155550100")
+    ident = from_channel(
+        "whatsapp", conversation_id="c1", phone_number="+14155550100", name="Ana"
+    )
     assert await sync.lookup_or_create(ident) is None
 
 
@@ -631,7 +632,9 @@ async def test_disabled_crm_makes_no_network_call(monkeypatch, override_settings
 
     monkeypatch.setattr("app.crm.outbox.enqueue", explode_enqueue)
 
-    ident = from_channel("whatsapp", conversation_id="c1", phone_number="+14155550100")
+    ident = from_channel(
+        "whatsapp", conversation_id="c1", phone_number="+14155550100", name="Ana"
+    )
     assert await sync.lookup_or_create(ident) is None
     assert await sync.push_status("a0X1", sentiment="HOT") is False
 

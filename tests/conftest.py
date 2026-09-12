@@ -63,6 +63,31 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture
+def override_settings():
+    """
+    Temporarily change a ``Settings`` field, restoring it afterwards.
+
+    ``app.config.Settings`` is a frozen dataclass, so ``monkeypatch.setattr``
+    raises FrozenInstanceError on it; the values are written through
+    ``object.__setattr__`` and put back by hand. Shared by the CRM tests, which
+    need to flip ``CRM_ENABLED`` on for most cases and off for the gate checks.
+    """
+    from app.config import settings
+
+    saved: dict[str, object] = {}
+
+    def override(**kwargs):
+        for key, value in kwargs.items():
+            saved.setdefault(key, getattr(settings, key))
+            object.__setattr__(settings, key, value)
+
+    yield override
+
+    for key, value in saved.items():
+        object.__setattr__(settings, key, value)
+
+
 @pytest.fixture(scope="session")
 def test_wav_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Session-scoped: create a 16kHz-mono-16bit sine WAV once per test run."""

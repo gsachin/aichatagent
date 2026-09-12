@@ -25,6 +25,13 @@ value fails as a **500**, indistinguishable by status code from a transient
 fault. The mappings below are the only sanctioned way to produce those values,
 and they return ``None`` for anything unrecognised so the caller can decline to
 send rather than fire a doomed request.
+
+**R17 — an empty name crashes the API.** ``split_name("")`` does
+``name.strip().split()``, gets ``[]``, and indexes ``parts[0]`` — an IndexError
+the route converts to a 500. It runs *before* ``create_user``, so nothing is
+created and the failure is clean, but the request is wasted and the person never
+reaches the CRM. ``name`` is a required field, so it cannot simply be omitted;
+:attr:`ChannelIdentity.is_sendable` therefore refuses to send without one.
 """
 
 from __future__ import annotations
@@ -235,15 +242,38 @@ class ChannelIdentity:
         return bool(self.email or self.phone_number)
 
     @property
+    def has_name(self) -> bool:
+        """A name the API can split without crashing (R17)."""
+        return bool(self.name)
+
+    @property
     def is_sendable(self) -> bool:
         """
         Safe to call lookup-or-create.
 
-        Both conditions are load-bearing: no identifier means the lookup can
-        match an unrelated record (R2), and no conversation id means the record
-        would be created without the linkage that is the point of the call.
+        All three conditions are load-bearing:
+
+        * no identifier — the lookup can match an unrelated record (R2);
+        * no name — the API raises IndexError inside ``split_name`` and returns
+          a 500 (R17). ``name`` is required, so it cannot be omitted, and a
+          placeholder is worse than postponing: there is no endpoint that can
+          ever correct it (the status PATCH writes three unrelated fields);
+        * no conversation id — the record would be created without the linkage
+          that is the entire point of the call.
         """
-        return self.has_identifier and bool(self.conversation_id)
+        return self.has_identifier and self.has_name and bool(self.conversation_id)
+
+    @property
+    def missing_for_send(self) -> list[str]:
+        """Which conditions are unsatisfied — for an actionable log line."""
+        missing = []
+        if not self.has_identifier:
+            missing.append("email-or-phone")
+        if not self.has_name:
+            missing.append("name")
+        if not self.conversation_id:
+            missing.append("conversation-id")
+        return missing
 
     def lookup_payload(self) -> dict[str, object]:
         """

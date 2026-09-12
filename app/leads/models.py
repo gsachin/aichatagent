@@ -384,6 +384,7 @@ async def create_conversation(
     follow_up_reason: str = "",
     extracted_lead: dict | None = None,
     conversation_id: str | None = None,
+    crm_user_id: str | None = None,
 ) -> dict | None:
     """
     Log a conversation against a lead.
@@ -408,14 +409,14 @@ async def create_conversation(
                     "INSERT INTO conversations (id, lead_id, phone_number, channel, "
                     "transcript, summary, call_duration_seconds, outcome, "
                     "follow_up_needed, follow_up_reason, extracted_lead, "
-                    "conversation_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "conversation_id, crm_user_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING id, lead_id, phone_number, channel, transcript, "
                     "summary, call_duration_seconds, outcome, follow_up_needed, "
                     "follow_up_reason, extracted_lead, created_at, conversation_id",
                     (conv_id, lead_id, phone_number, channel, transcript, summary,
                      call_duration_seconds, outcome, follow_up_needed,
-                     follow_up_reason, lead_json, session_id),
+                     follow_up_reason, lead_json, session_id, crm_user_id or None),
                 )
                 row = cur.fetchone()
             logger.info(
@@ -465,6 +466,61 @@ async def get_conversations(
         except Exception:
             logger.exception("Failed to get conversations")
             return []
+
+
+async def get_lead_crm_user_id(lead_id: str) -> str:
+    """
+    Read just the CRM link for a lead, or "" if there is none.
+
+    Deliberately not folded into ``_row_to_lead_dict``: that mapper is
+    positional, its sentiment columns already occupy 13-16, and five separate
+    lead queries feed it. Adding a column there would mean touching all five and
+    getting the offsets right in each. A primary-key lookup is cheaper than that
+    risk, and ``crm_user_id`` is only needed on the one path that syncs to the
+    CRM.
+    """
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT crm_user_id FROM leads WHERE id = %s", (lead_id,))
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_user_id from lead")
+            return ""
+
+
+async def set_lead_crm_user_id(lead_id: str, crm_user_id: str) -> bool:
+    """
+    Record the Salesforce userId on a lead.
+
+    Written once per conversation and cached thereafter: ``link_conversation``
+    checks it before calling the CRM, so this column is what keeps a chatty
+    WhatsApp thread from re-asking the API on every message.
+    """
+    if not lead_id or not crm_user_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_user_id = %s, crm_synced_at = NOW(), "
+                    "updated_at = NOW() WHERE id = %s",
+                    (crm_user_id, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to set crm_user_id on lead")
+            return False
 
 
 async def get_recent_conversation_for_phone(

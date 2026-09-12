@@ -1007,12 +1007,14 @@ async def _log_whatsapp_conversation(
     phone_number: str,
     transcript: str,
     conversation_id: str = "",
+    crm_user_id: str = "",
 ):
     """
     Log a WhatsApp interaction to the new leads + conversations tables.
 
     ``conversation_id`` groups the many rows a WhatsApp session writes (one per
-    message) under a single logical conversation.
+    message) under a single logical conversation, and ``crm_user_id`` records
+    which Salesforce user it belongs to.
 
     Safe to call as a background task — failures are logged but never
     propagated, so they won't affect the Twilio response.
@@ -1025,6 +1027,7 @@ async def _log_whatsapp_conversation(
             channel="whatsapp",
             transcript=transcript,
             conversation_id=conversation_id,
+            crm_user_id=crm_user_id,
         )
     except Exception:
         logger.exception("Failed to log WhatsApp conversation (non-fatal)")
@@ -1610,12 +1613,37 @@ async def twilio_whatsapp_webhook(
     # WhatsApp renders plain text — strip LLM Markdown before sending.
     answer = _strip_markdown(answer)
 
+    # ── CRM: make sure this student exists in Salesforce ─────────
+    # Runs once per turn and is cheap when it has nothing to do — a lead that is
+    # already linked returns without touching the network. It declines until the
+    # identity is complete enough to be safe (a name is required: the API raises
+    # IndexError on an empty one, R17) and tries again on the next message.
+    #
+    # Note the local name/email/program are passed explicitly rather than read
+    # from `lead`, which was fetched before the state machine updated the row.
+    crm_user_id = ""
+    try:
+        from app.crm import sync as crm_sync
+
+        crm_user_id = await crm_sync.link_conversation(
+            channel="whatsapp",
+            conversation_id=conversation_id,
+            lead=lead,
+            phone_number=From,
+            email=lead_email,
+            name=lead_name,
+            course=lead_program,
+        ) or ""
+    except Exception:
+        logger.exception("CRM link failed (non-fatal)")
+
     # Log conversation
     background_tasks.add_task(
         _log_whatsapp_conversation,
         phone_number=From,
         transcript=f"User: {Body}\nAssistant: {answer}",
         conversation_id=conversation_id,
+        crm_user_id=crm_user_id,
     )
 
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
