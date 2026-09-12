@@ -13,7 +13,7 @@
 | **0** — Verify & stage the upstream API | ✅ **Done** | **Gate 0 passed** — 18 probes, 0 FAIL |
 | **1** — Conversation identity | ✅ **Done** | **Gate 1 passed** — 101 tests, zero behaviour change |
 | **2** — CRM client | ✅ **Done** | **Gate 2 passed** — nothing leaves the process when disabled |
-| **3** — WhatsApp channel | 🟡 **Code complete, gate NOT verified live** | Gate 3 needs a real create — see §5 |
+| **3** — WhatsApp channel | 🟡 **Code complete; Gate 3 run live and FAILED on R18** | See §1a |
 | **4** — Outbound voice | ⬜ Not started | |
 | **5** — Inbound voice | ⬜ Not started | ⚠️ Gate 5 is mis-worded — see §4 |
 | **6** — Web chat | ⬜ Not started | |
@@ -35,6 +35,54 @@ e3bb18d  feat: Salesforce user-API integration plan + Phase 0 verification harne
 
 **Crucially: `CRM_ENABLED` is `false` by default.** Nothing in production behaves
 differently today. Every phase so far is inert until someone flips that switch.
+
+---
+
+## 1a. Gate 3 — run live 2026-09-11, and it found a blocker
+
+`scripts/verify_gate3_whatsapp.py` drives the real `/twilio/whatsapp` route against a real
+uvicorn server and reads the result back through `GET /admissions`. Last run: 9 clauses,
+**3 FAIL**, 1 WARN, cleanup verified (CRM left at its 202-row baseline).
+
+| Clause | Result |
+|---|---|
+| **C0 — the link actually returned a userId** | ❌ **FAIL** — this is the one that matters |
+| C1 — exactly one row created | ✅ PASS (the row exists *anyway* — that is the trap) |
+| C2 — phone normalised, no `whatsapp:` prefix | ✅ PASS |
+| C3 — `Conversation_ID__c` linked to the session | ✅ PASS |
+| C4 — `Course__c` captured | ❌ FAIL — create-time only, see §4 |
+| C5 — second thread does not duplicate | ✅ PASS |
+| C6 — conversation updated on the hit path | ⚠️ WARN — R6, expected |
+| C7 — course works when known at create | ❌ FAIL — same root cause as C0 |
+| cleanup | ✅ PASS — 1/1 deleted |
+
+**C1 passes while C0 fails.** The Salesforce record is created correctly — right phone,
+right conversation — but the API cannot serialise its own response and returns a bare 500,
+so no `userId` ever reaches us. A row count alone would have declared this a success.
+
+### R18 — a record without an email is unreachable forever
+
+`UserResponse` declares `email: str` as **required**, but Salesforce stores an empty string
+as null, so `Email__c` reads back as `None`. The route's `try/except` cannot catch it —
+response serialisation happens *after* the handler returns — so it surfaces as a plain
+`500 Internal Server Error`. Reproduced directly:
+
+| Call on a record created with `email: ""` | Result |
+|---|---|
+| `POST /users/lookup-or-create` (the create) | 500 — **and the row is created** |
+| `POST /users/lookup-or-create` (subsequent) | 500 |
+| `PATCH /users/{id}/status` | 500 |
+| `DELETE /users/{id}` | 200 — no response model, so it works |
+
+**This fires on the normal WhatsApp path**: the first linkable turn has a name and a phone
+but no email yet, so we send `email: ""`. Consequences: `crm_user_id` is never persisted,
+nothing caches, every turn re-attempts, and Phase 7's status pushes would have no user to
+address.
+
+**Decision D9 in the plan** lays out the four options. Recommendation: ask the API owner to
+make `UserResponse.email` optional (one line, fixes R4 and R18 at the root), and in the
+interim require an email before linking — which costs voice leads who never give one, but
+is recoverable, unlike fabricating addresses into a CRM humans read.
 
 ---
 

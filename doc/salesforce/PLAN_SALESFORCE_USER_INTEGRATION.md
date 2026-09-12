@@ -287,6 +287,7 @@ Rows marked **✅ resolved** were closed by the Phase 0 verification run (§9).
 
 | # | Severity | Risk | Evidence |
 |---|---|---|---|
+| **R18** | 🔴 **Critical — blocks the integration** | **A record created without an email can never be read or updated again.** `UserResponse` declares `email: str` as *required*, but Salesforce stores an empty string as null, so `Email__c` reads back as `None` and the response fails validation. The route's `try/except` cannot catch it — response serialisation happens *after* the handler returns — so it surfaces as a bare uvicorn `500 Internal Server Error`. **Reproduced live:** a `lookup-or-create` with `email: ""` created the row and returned 500; two further lookups for the same number returned 500; `PATCH /users/{id}/status` returned 500. `DELETE` still works (no response model). The record is unreachable except to delete it. **This fires on the normal WhatsApp path** — the first linkable turn has a name and a phone but no email. | Reproduced 2026-09-11, `scripts/verify_gate3_whatsapp.py` |
 | **R16** | 🔴 **Critical** | **`Sentiment__c` is a restricted picklist, and the app's obvious source field doesn't fit it.** `primary_emotion` (`excited`/`interested`/`neutral`/…) shares **zero** values with the picklist (`HOT`/`WARM`/`NURTURE`/`AT-RISK`/`DISQUALIFIED`). Writing it will 500 on every call — and as a 500, not a 400, so it reads as transient. **Reproduced live:** `'excited'` → rejected. The fix is to send the **categorizer** output upper-cased. | Verified live 2026-09-11; `app/sentiment/categorizer.py:31-35` vs `scorer.py:95` |
 | **R1** | 🔴 Critical | **`/users` and `/admissions` write the same `Customer` object.** `create_user` sets `Name = Application_No__c = APP-…`; `create_admission` sets `Name = Application_No__c` from its own payload. So one person can hold *two* `Customer` rows, and `GET /admissions` returns **user** rows too (no filter). A lookup can therefore return an admission row as if it were the user. | `salesforce_user_repository.py:create_user` vs `salesforce_admission_repository.py:create_admission`, `get_all_admissions` |
 | **R2** | 🔴 Critical | **`find_user` matches `Email__c = X OR Phone__c = Y` with `LIMIT 1` and no `ORDER BY`.** Two failures compound: (a) a missing/empty value makes the clause `Email__c = ''`, which matches unrelated records; (b) when several rows match, which one is returned is **undefined**. Combined with **G4** (voice has no email), naive integration will mis-link or fabricate users. | `salesforce_user_repository.py:find_user` |
@@ -631,7 +632,24 @@ consent/retention changes? Ties to R12 and `OPEN_QUESTIONS.md` Q18.
 out of scope. Note **R1** — Phase 0 confirmed users and admissions already share the
 listing — makes it urgent to decide the row convention *before* both are in use.
 
-**D8** *(new — needs a call)* — **Should the destructive R2/R4 probe be run?**
+**D9** *(new — blocking Phase 3)* — **How do we handle R18: a person with no email?**
+
+The API cannot represent someone without an email. Options, with their real costs:
+
+| Option | Effect | Cost |
+|---|---|---|
+| **(a) Require an email before linking** | WhatsApp links one message later (the state machine already asks for it). Voice students who never give one **never reach the CRM at all**. | Fails the product intent for the voice channels — most callers never volunteer an email. |
+| **(b) Synthesise a placeholder email** | Every student reaches the CRM; records stay usable. | Fabricated addresses in a CRM that humans read and may email. Needs a format that is obviously not real (`.invalid` is RFC 2606 reserved). |
+| **(c) Recover the userId from `GET /admissions`** | No fabricated data; the record is correct. | Leans on an internal listing endpoint, is O(all rows) per recovery, and leaves every intended call path failing 500. |
+| **(d) Ask the API owner to make `UserResponse.email` optional** | Fixes it properly for everyone. | One line upstream — but D1 says the contract is frozen. Reporting a bug is not the same as modifying it, though. |
+
+**Recommendation: (d) first, then (a) as the interim.** (d) is genuinely one line
+(`email: Optional[str] = None`), it fixes R4's root cause rather than working around it, and
+it also unblocks `PATCH`, which fails identically. Failing that, (a) is honest and loses
+only voice leads who gave no email — recoverable later, whereas fabricated addresses in a
+CRM are not. (b) should only be chosen deliberately, with the admissions team knowing.
+
+**D8** *(needs a call)* — **Should the destructive R2/R4 probe be run?**
 Phase 0 deliberately skipped `--include-destructive`. It is the only way to confirm
 whether a blank-identifier lookup matches an unrelated record (R2) or creates-then-500s
 (R4) — but if R4 fires, the record exists and **this API cannot delete it** (no
