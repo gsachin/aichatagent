@@ -48,6 +48,7 @@ async def log_interaction(
     follow_up_reason: str = "",
     outcome: str = "",
     call_duration_seconds: int = 0,
+    conversation_id: str = "",
 ) -> dict | None:
     """
     High-level helper:
@@ -55,6 +56,9 @@ async def log_interaction(
     2. Log the conversation under that lead
     3. If extracted_lead has data, fill in blank lead fields
     4. If follow-up is needed, create a follow_up entry
+
+    ``conversation_id`` is the id minted at session start by ``app.crm.session``.
+    Omitting it falls back to a fresh row id, so existing callers are unaffected.
 
     Returns the conversation dict.
     """
@@ -89,6 +93,7 @@ async def log_interaction(
         follow_up_needed=follow_up_needed,
         follow_up_reason=follow_up_reason,
         extracted_lead=extracted_lead,
+        conversation_id=conversation_id or None,
     )
 
     # 3. If we have extracted data and the lead is missing info, patch it
@@ -190,6 +195,7 @@ async def handle_post_interaction(
     transcript: str,
     channel: str = "whatsapp",
     call_duration_seconds: int = 0,
+    conversation_id: str = "",
 ) -> bool:
     """
     Unified handler called after ANY interaction completes.
@@ -235,6 +241,7 @@ async def handle_post_interaction(
         follow_up_needed=follow_up_needed,
         follow_up_reason=follow_up_reason,
         call_duration_seconds=call_duration_seconds,
+        conversation_id=conversation_id,
     )
 
     # 4. Check for admission intent → send WhatsApp document request

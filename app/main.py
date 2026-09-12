@@ -500,8 +500,18 @@ async def websocket_twilio(websocket: WebSocket):
                     "transcript": [],
                 }
                 session.call_id = stream_sid
+                # Mint the conversation id now, while the call is starting. The CRM
+                # needs it here — lookup-or-create is the only endpoint that returns
+                # a userId, so this is the one chance to name the conversation.
+                # Inbound caller number is not available yet; that is Phase 5 (G1).
+                from app.crm import session as crm_session
+
+                conversation_id = crm_session.start(
+                    "inbound_call", stream_sid
+                ).conversation_id
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "inbound",
+                    "conversation_id": conversation_id,
                 })
 
                 # Send an initial AI greeting via TTS
@@ -621,7 +631,15 @@ async def websocket_twilio(websocket: WebSocket):
             entry = _active_call_sids.pop(stream_sid, None)
             if entry and "ended_at" not in entry:
                 _push_transcript_event("call_ended", stream_sid)
-        await _handle_disconnect(transcript_parts)
+        # Close the session and recover its id before the registry drops it —
+        # the post-call handler needs it to write the conversation.
+        from app.crm import session as crm_session
+
+        ended = crm_session.end("inbound_call", stream_sid) if stream_sid else None
+        await _handle_disconnect(
+            transcript_parts,
+            ended.conversation_id if ended else "",
+        )
         try:
             await websocket.close()
         except Exception:
@@ -682,8 +700,17 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     "transcript": [],
                 }
                 session.call_id = stream_sid
+                # Mint the conversation id while the call is starting — see the
+                # inbound handler. The lead's phone number is known before dialling
+                # but is not threaded across the WebSocket yet; that is Phase 4 (G2).
+                from app.crm import session as crm_session
+
+                conversation_id = crm_session.start(
+                    "outbound_call", stream_sid
+                ).conversation_id
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "outbound",
+                    "conversation_id": conversation_id,
                 })
 
                 # Send an initial AI greeting via TTS — identify caller + reason
@@ -811,7 +838,13 @@ async def websocket_twilio_outbound(websocket: WebSocket):
             entry = _active_call_sids.pop(stream_sid, None)
             if entry and "ended_at" not in entry:
                 _push_transcript_event("call_ended", stream_sid)
-        await _handle_disconnect(transcript_parts)
+        from app.crm import session as crm_session
+
+        ended = crm_session.end("outbound_call", stream_sid) if stream_sid else None
+        await _handle_disconnect(
+            transcript_parts,
+            ended.conversation_id if ended else "",
+        )
 
 
 # ── HTTP: Outbound call voice TwiML (fetched by Twilio) ──────────────
@@ -968,9 +1001,16 @@ def _get_stt_model():
 
 # ── WhatsApp conversation logger ──────────────────────────────────────
 
-async def _log_whatsapp_conversation(phone_number: str, transcript: str):
+async def _log_whatsapp_conversation(
+    phone_number: str,
+    transcript: str,
+    conversation_id: str = "",
+):
     """
     Log a WhatsApp interaction to the new leads + conversations tables.
+
+    ``conversation_id`` groups the many rows a WhatsApp session writes (one per
+    message) under a single logical conversation.
 
     Safe to call as a background task — failures are logged but never
     propagated, so they won't affect the Twilio response.
@@ -982,6 +1022,7 @@ async def _log_whatsapp_conversation(phone_number: str, transcript: str):
             phone_number=phone_number,
             channel="whatsapp",
             transcript=transcript,
+            conversation_id=conversation_id,
         )
     except Exception:
         logger.exception("Failed to log WhatsApp conversation (non-fatal)")
@@ -1373,6 +1414,25 @@ async def twilio_whatsapp_webhook(
         https://<your-tunnel>/twilio/whatsapp
     """
 
+    # ── Resolve the conversation this message belongs to ─────────
+    # WhatsApp has no session object and no end event — every message is an
+    # independent webhook — so "the same conversation" is defined as messages
+    # from this number inside the idle window (CRM_IDLE_WINDOW_HOURS; plan
+    # decision D4). Resolved before the media branches so a document message
+    # keeps the same session alive too. Failure is never fatal: the webhook
+    # must answer Twilio within 15s regardless.
+    conversation_id = ""
+    try:
+        from app.config import settings
+        from app.crm import session as crm_session
+
+        wa_session = await crm_session.resolve_whatsapp_session(
+            From, idle_window_hours=settings.CRM_IDLE_WINDOW_HOURS
+        )
+        conversation_id = wa_session.conversation_id
+    except Exception:
+        logger.exception("WhatsApp conversation session resolution failed (non-fatal)")
+
     # ── Handle media messages ────────────────────────────────────
     num_media = int(NumMedia or "0")
     if num_media > 0 and MediaUrl0.strip():
@@ -1553,6 +1613,7 @@ async def twilio_whatsapp_webhook(
         _log_whatsapp_conversation,
         phone_number=From,
         transcript=f"User: {Body}\nAssistant: {answer}",
+        conversation_id=conversation_id,
     )
 
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
@@ -2707,8 +2768,17 @@ async def dashboard_page():
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-async def _handle_disconnect(transcript_parts: list[str]) -> None:
-    """Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring."""
+async def _handle_disconnect(
+    transcript_parts: list[str],
+    conversation_id: str = "",
+) -> None:
+    """
+    Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring.
+
+    ``conversation_id`` is handed down from the WebSocket handler, which takes it
+    from ``app.crm.session`` when the stream starts. It is the only moment the id
+    is available — the session is removed from the registry as the call ends.
+    """
     transcript = " ".join(transcript_parts)
 
     if not transcript.strip():
@@ -2769,6 +2839,7 @@ async def _handle_disconnect(transcript_parts: list[str]) -> None:
             phone_number=resolved_phone,
             transcript=transcript,
             channel="inbound_call",
+            conversation_id=conversation_id,
         )
     except Exception:
         logger.exception("New leads-system logging failed (non-fatal)")

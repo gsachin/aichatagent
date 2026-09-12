@@ -100,6 +100,23 @@ class Settings:
     SMTP_USER: str = field(default_factory=lambda: _env("SMTP_USER", ""))
     SMTP_PASS: str = field(default_factory=lambda: _env("SMTP_PASS", ""))
 
+    # ── Salesforce user API ────────────────────────────────────────
+    # Master switch. OFF by default: with it off, nothing in the app calls
+    # Salesforce and behaviour is identical to today. Phases 3-7 are only
+    # reachable when this is true.
+    CRM_ENABLED: bool = field(
+        default_factory=lambda: _env("CRM_ENABLED", "false").lower() == "true"
+    )
+    # Loopback dev deployment; see the plan's decision D2.
+    CRM_BASE_URL: str = field(
+        default_factory=lambda: _env("CRM_BASE_URL", "http://127.0.0.1:8098")
+    )
+    # WhatsApp has no session and no end event, so "one conversation" is defined
+    # by an idle window. Decision D4 in the plan; this is the proposed default.
+    CRM_IDLE_WINDOW_HOURS: float = field(
+        default_factory=lambda: float(_env("CRM_IDLE_WINDOW_HOURS", "6"))
+    )
+
 
 # Module-level singleton
 settings = Settings()

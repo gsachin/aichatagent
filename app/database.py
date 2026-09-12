@@ -104,6 +104,11 @@ async def init_db() -> bool:
             # Also initialise sentiment-analysis subsystem tables
             from app.sentiment.schema import ALL_SENTIMENT_SQL
             cur.execute(ALL_SENTIMENT_SQL)
+
+            # CRM integration migration (additive columns + outbox).
+            # Must run AFTER the leads schema — it ALTERs leads/conversations.
+            from app.crm.schema import ALL_CRM_SQL
+            cur.execute(ALL_CRM_SQL)
         conn.close()
         logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True

@@ -383,13 +383,23 @@ async def create_conversation(
     follow_up_needed: bool = False,
     follow_up_reason: str = "",
     extracted_lead: dict | None = None,
+    conversation_id: str | None = None,
 ) -> dict | None:
-    """Log a conversation against a lead."""
+    """
+    Log a conversation against a lead.
+
+    ``conversation_id`` is the logical conversation this row belongs to, minted
+    at session start by ``app.crm.session`` and shared across every row of a
+    multi-turn conversation (WhatsApp writes one row per message). When it is
+    not supplied — the pre-existing call sites — the row falls back to its own
+    id, which is correct for a one-row-per-call voice conversation.
+    """
     with _get_db() as conn:
         if conn is None:
             return None
         try:
             conv_id = str(uuid.uuid4())
+            session_id = conversation_id or conv_id
             lead_json = json.dumps(extracted_lead or {})
 
             conn.autocommit = True
@@ -397,18 +407,20 @@ async def create_conversation(
                 cur.execute(
                     "INSERT INTO conversations (id, lead_id, phone_number, channel, "
                     "transcript, summary, call_duration_seconds, outcome, "
-                    "follow_up_needed, follow_up_reason, extracted_lead) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "follow_up_needed, follow_up_reason, extracted_lead, "
+                    "conversation_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING id, lead_id, phone_number, channel, transcript, "
                     "summary, call_duration_seconds, outcome, follow_up_needed, "
-                    "follow_up_reason, extracted_lead, created_at",
+                    "follow_up_reason, extracted_lead, created_at, conversation_id",
                     (conv_id, lead_id, phone_number, channel, transcript, summary,
                      call_duration_seconds, outcome, follow_up_needed,
-                     follow_up_reason, lead_json),
+                     follow_up_reason, lead_json, session_id),
                 )
                 row = cur.fetchone()
             logger.info(
-                f"Conversation saved: id={conv_id}, lead={lead_id}, channel={channel}"
+                f"Conversation saved: id={conv_id}, conversation={session_id}, "
+                f"lead={lead_id}, channel={channel}"
             )
             return _row_to_conversation_dict(row)
         except Exception:
@@ -430,7 +442,7 @@ async def get_conversations(
             query = (
                 "SELECT id, lead_id, phone_number, channel, transcript, summary, "
                 "call_duration_seconds, outcome, follow_up_needed, follow_up_reason, "
-                "extracted_lead, created_at FROM conversations"
+                "extracted_lead, created_at, conversation_id FROM conversations"
             )
             conditions = []
             params: list = []
@@ -453,6 +465,52 @@ async def get_conversations(
         except Exception:
             logger.exception("Failed to get conversations")
             return []
+
+
+async def get_recent_conversation_for_phone(
+    phone_number: str,
+    within_seconds: float,
+    channel: str = "whatsapp",
+) -> dict | None:
+    """
+    The most recent conversation for a phone number inside the time window.
+
+    Used by the WhatsApp session resolver. WhatsApp has no session object and no
+    end event — every message is an independent webhook — so "is this still the
+    same conversation?" can only be answered by how long ago the last message
+    arrived. Reading it from the database rather than the in-process registry
+    means a restart mid-conversation does not split one conversation in two.
+
+    ``channel`` matters: without it, a voice call from the same number an hour
+    ago would make the next WhatsApp message resume the *call's* conversation.
+    """
+    if not phone_number:
+        return None
+
+    with _get_db() as conn:
+        if conn is None:
+            return None
+        try:
+            query = (
+                "SELECT id, lead_id, phone_number, channel, transcript, summary, "
+                "call_duration_seconds, outcome, follow_up_needed, follow_up_reason, "
+                "extracted_lead, created_at, conversation_id FROM conversations "
+                "WHERE phone_number = %s "
+                "  AND created_at >= NOW() - (INTERVAL '1 second' * %s) "
+            )
+            params: list = [phone_number, within_seconds]
+            if channel:
+                query += "  AND channel = %s "
+                params.append(channel)
+            query += "ORDER BY created_at DESC LIMIT 1"
+
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                row = cur.fetchone()
+            return _row_to_conversation_dict(row) if row else None
+        except Exception:
+            logger.exception("Failed to get recent conversation for phone")
+            return None
 
 
 # ── Follow-ups CRUD ──────────────────────────────────────────────────
@@ -681,7 +739,7 @@ def _row_to_lead_dict(row) -> dict:
 
 
 def _row_to_conversation_dict(row) -> dict:
-    return {
+    result = {
         "id": str(row[0]),
         "lead_id": str(row[1]) if row[1] else "",
         "phone_number": row[2] or "",
@@ -695,6 +753,11 @@ def _row_to_conversation_dict(row) -> dict:
         "extracted_lead": _safe_json(row[10]),
         "created_at": _ts_to_str(row[11]),
     }
+    # conversation_id was added by the CRM migration. Tolerate the shorter row
+    # shape so a query that predates it degrades to the row id rather than
+    # raising IndexError.
+    result["conversation_id"] = (row[12] if len(row) > 12 and row[12] else result["id"])
+    return result
 
 
 def _row_to_follow_up_dict(row) -> dict:

@@ -9,6 +9,7 @@ Run:    streamlit run app.py
 import os
 import sys
 import io
+import uuid
 import warnings
 import tempfile
 import threading
@@ -362,6 +363,12 @@ if "messages" not in st.session_state:
     st.session_state.setdefault("lead_id", "")
     st.session_state.setdefault("show_apply_prompt", False)
     st.session_state.setdefault("awaiting_field", None)  # 'name','email','phone','program','qualification','awaiting_docs'
+    # Conversation id for this chat session, stable for the life of the browser
+    # tab. Salesforce needs it at conversation *start* — lookup-or-create is the
+    # only call that returns a userId, so it is the one chance to name this chat
+    # (plan §8.2). Streamlit keeps its own session, so it is not registered in
+    # app.crm.session, which serves the server-side channels.
+    st.session_state.setdefault("conversation_id", str(uuid.uuid4()))
     if not st.session_state.lead_collected:
         greeting += " Before we start, could you tell me your name?"
         st.session_state.awaiting_field = "name"
