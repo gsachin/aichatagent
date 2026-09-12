@@ -116,6 +116,33 @@ class Settings:
     CRM_IDLE_WINDOW_HOURS: float = field(
         default_factory=lambda: float(_env("CRM_IDLE_WINDOW_HOURS", "6"))
     )
+    # The API has no authentication today (plan risk R8); if a shared secret is
+    # ever added in front of it, this is sent as X-API-Key. Unset = no header.
+    CRM_API_KEY: str = field(default_factory=lambda: _env("CRM_API_KEY", ""))
+    # Deliberately short: this sits behind a live phone call. A slow CRM must
+    # give up quickly rather than delay the caller.
+    CRM_TIMEOUT_CONNECT_S: float = field(
+        default_factory=lambda: float(_env("CRM_TIMEOUT_CONNECT_S", "2"))
+    )
+    CRM_TIMEOUT_READ_S: float = field(
+        default_factory=lambda: float(_env("CRM_TIMEOUT_READ_S", "5"))
+    )
+    CRM_MAX_RETRIES: int = field(
+        default_factory=lambda: int(_env("CRM_MAX_RETRIES", "3"))
+    )
+    # Consecutive failures before the breaker opens and we stop calling out.
+    CRM_BREAKER_THRESHOLD: int = field(
+        default_factory=lambda: int(_env("CRM_BREAKER_THRESHOLD", "5"))
+    )
+    # How long the breaker stays open before allowing a probe request.
+    CRM_BREAKER_RESET_S: float = field(
+        default_factory=lambda: float(_env("CRM_BREAKER_RESET_S", "60"))
+    )
+    # A queued write is abandoned after this many attempts. Rare — the outbox
+    # only ever holds *transient* failures, since permanent ones are dropped.
+    CRM_OUTBOX_MAX_ATTEMPTS: int = field(
+        default_factory=lambda: int(_env("CRM_OUTBOX_MAX_ATTEMPTS", "10"))
+    )
 
 
 # Module-level singleton
