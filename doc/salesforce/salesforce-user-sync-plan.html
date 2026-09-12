@@ -1,0 +1,1235 @@
+<title>Salesforce User Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  :root {
+    --paper:      #F4F6F8;
+    --surface:    #FFFFFF;
+    --surface-2:  #EAEEF2;
+    --ink:        #0F1419;
+    --ink-2:      #4C5765;
+    --ink-3:      #6E7A88;
+    --line:       #D5DBE2;
+    --line-2:     #E7EBEF;
+    --accent:     #0B5F6B;
+    --accent-ink: #084A53;
+    --accent-soft:#DFEDEF;
+
+    --crit:      #A81E14;  --crit-soft: #FAE7E5;
+    --high:      #A05408;  --high-soft: #FBEDDD;
+    --med:       #75600A;  --med-soft:  #F6F0D6;
+    --low:       #3C5E85;  --low-soft:  #E6EDF5;
+
+    --measure: 68ch;
+    --pad: clamp(1rem, 4vw, 2rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0D1116;
+      --surface:    #141A21;
+      --surface-2:  #1B222A;
+      --ink:        #E7ECF1;
+      --ink-2:      #A4B0BD;
+      --ink-3:      #7D8A98;
+      --line:       #29333D;
+      --line-2:     #1F2831;
+      --accent:     #4FB8C4;
+      --accent-ink: #86D6DF;
+      --accent-soft:#12313A;
+
+      --crit:      #F09189;  --crit-soft: #2E1614;
+      --high:      #E9A860;  --high-soft: #2B1F10;
+      --med:       #D8BF6E;  --med-soft:  #272110;
+      --low:       #8FB6DC;  --low-soft:  #17212C;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0D1116;
+    --surface:    #141A21;
+    --surface-2:  #1B222A;
+    --ink:        #E7ECF1;
+    --ink-2:      #A4B0BD;
+    --ink-3:      #7D8A98;
+    --line:       #29333D;
+    --line-2:     #1F2831;
+    --accent:     #4FB8C4;
+    --accent-ink: #86D6DF;
+    --accent-soft:#12313A;
+
+    --crit:      #F09189;  --crit-soft: #2E1614;
+    --high:      #E9A860;  --high-soft: #2B1F10;
+    --med:       #D8BF6E;  --med-soft:  #272110;
+    --low:       #8FB6DC;  --low-soft:  #17212C;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 1.0625rem;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 78rem;
+    margin: 0 auto;
+    padding-block: 0 clamp(3rem, 8vw, 6rem);
+    padding-inline: var(--pad);
+  }
+
+  /* ── masthead ─────────────────────────────────────────── */
+
+  .masthead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 1.25rem;
+    padding-block: 1.5rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .mark {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .masthead .branch {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    color: var(--ink-3);
+    margin-left: auto;
+  }
+
+  /* ── hero ─────────────────────────────────────────────── */
+
+  header.doc { padding-block: clamp(2.5rem, 6vw, 4rem) clamp(1.5rem, 4vw, 2.5rem); }
+
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5.2vw, 3.35rem);
+    line-height: 1.06;
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+    max-width: 22ch;
+  }
+
+  .standfirst {
+    font-size: clamp(1.06rem, 2vw, 1.2rem);
+    line-height: 1.55;
+    color: var(--ink-2);
+    max-width: 60ch;
+    text-wrap: pretty;
+    margin: 0 0 2rem;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .stat { background: var(--surface); padding: 0.9rem 1rem 1rem; }
+  .stat b {
+    display: block;
+    font-family: Archivo, sans-serif;
+    font-weight: 700;
+    font-size: 1.65rem;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .stat span {
+    display: block;
+    margin-top: 0.3rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    line-height: 1.35;
+  }
+
+  /* ── section spine ────────────────────────────────────── */
+
+  main { display: flex; flex-direction: column; gap: clamp(2.75rem, 6vw, 4.5rem); padding-top: clamp(2.5rem, 6vw, 4rem); }
+
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  .shead { display: flex; flex-direction: column; gap: 0.45rem; }
+
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h2 {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: clamp(1.4rem, 3vw, 1.85rem);
+    line-height: 1.16;
+    letter-spacing: -0.016em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h3 {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    letter-spacing: -0.006em;
+    margin: 0.5rem 0 0;
+  }
+
+  p { margin: 0; max-width: var(--measure); text-wrap: pretty; }
+  p + p { margin-top: 0.85rem; }
+
+  a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code, .mono {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.855em;
+  }
+  p code, li code, td code, dd code {
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    padding: 0.06em 0.34em;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  strong { font-weight: 600; }
+
+  ul { margin: 0; padding-left: 1.15rem; max-width: var(--measure); display: flex; flex-direction: column; gap: 0.4rem; }
+  li::marker { color: var(--ink-3); }
+
+  /* ── callout ──────────────────────────────────────────── */
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--crit);
+    border-radius: 3px;
+    padding: 1.25rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .callout.accent { border-left-color: var(--accent); }
+  .callout h3 { margin: 0; }
+  .callout p, .callout ul { max-width: var(--measure); }
+
+  /* ── tables ───────────────────────────────────────────── */
+
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--line-2);
+    vertical-align: top;
+    line-height: 1.45;
+  }
+  thead th {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.66rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .nowrap { white-space: nowrap; }
+
+  /* ── severity chips ───────────────────────────────────── */
+
+  .sev {
+    display: inline-block;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.63rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.42rem;
+    border-radius: 2px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .sev.crit { color: var(--crit); background: var(--crit-soft); }
+  .sev.high { color: var(--high); background: var(--high-soft); }
+  .sev.med  { color: var(--med);  background: var(--med-soft); }
+  .sev.low  { color: var(--low);  background: var(--low-soft); }
+  .sev.done { color: var(--ink-3); background: var(--surface-2); border-color: var(--line); }
+  .risk.done { border-left-color: var(--line); }
+  .risk.done .rtitle { color: var(--ink-2); }
+
+  /* ── risk register ────────────────────────────────────── */
+
+  .risks { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .risk {
+    background: var(--surface);
+    border-left: 3px solid var(--ink-3);
+    padding: 0.95rem 1.1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .risk.crit { border-left-color: var(--crit); }
+  .risk.high { border-left-color: var(--high); }
+  .risk.med  { border-left-color: var(--med); }
+  .risk.low  { border-left-color: var(--low); }
+
+  .risk .rhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.55rem; }
+  .risk .rid {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+  .risk .rtitle { font-family: Archivo, sans-serif; font-weight: 600; font-size: 0.98rem; flex: 1 1 18rem; letter-spacing: -0.005em; }
+  .risk p { font-size: 0.92rem; color: var(--ink-2); max-width: 84ch; }
+  .risk .ev {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+  }
+
+  /* ── phases ───────────────────────────────────────────── */
+
+  .phases { display: flex; flex-direction: column; gap: 0; position: relative; }
+  .phase {
+    display: grid;
+    grid-template-columns: 3.35rem 1fr;
+    gap: 0.35rem 1.15rem;
+    padding-block: 1.15rem;
+    border-top: 1px solid var(--line-2);
+  }
+  .phase:first-child { border-top: 0; }
+  .pnum {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    padding-top: 0.15rem;
+  }
+  .pbody { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
+  .pbody h3 { margin: 0; font-size: 1.04rem; }
+  .pbody > p { font-size: 0.94rem; color: var(--ink-2); }
+  .pbody ul { font-size: 0.92rem; gap: 0.3rem; }
+
+  .gate {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    align-self: flex-start;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    max-width: 100%;
+  }
+  .gate .glabel {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.63rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    white-space: nowrap;
+    flex: none;
+  }
+  .gate span:last-child { color: var(--ink); text-wrap: pretty; }
+
+  /* ── endpoint list ────────────────────────────────────── */
+
+  .verb {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.66rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    padding: 0.1rem 0.36rem;
+    border-radius: 2px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .verb.post   { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
+  .verb.patch  { color: var(--high); border-color: var(--high); background: var(--high-soft); }
+
+  /* ── decision list ────────────────────────────────────── */
+
+  .decisions { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .dec { background: var(--surface); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.45rem; }
+  .dec .dhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6rem; }
+  .dec .did { font-family: "JetBrains Mono", monospace; font-size: 0.74rem; font-weight: 500; color: var(--accent); }
+  .dec .dtitle { font-family: Archivo, sans-serif; font-weight: 600; font-size: 0.99rem; flex: 1 1 16rem; }
+  .dec p { font-size: 0.93rem; color: var(--ink-2); max-width: 84ch; }
+  .blocking {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--crit);
+    border: 1px solid var(--crit);
+    background: var(--crit-soft);
+    border-radius: 2px;
+    padding: 0.12rem 0.36rem;
+  }
+  .later {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: 0.12rem 0.36rem;
+  }
+
+  /* ── next step ────────────────────────────────────────── */
+
+  .nextstep {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 1.5rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+  .nextstep h2 { font-size: clamp(1.25rem, 2.6vw, 1.5rem); }
+  .nextstep p { color: var(--ink-2); }
+
+  .pathlist { display: flex; flex-direction: column; gap: 0.35rem; }
+  .pathlist div {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.79rem;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+  }
+  .pathlist b { color: var(--ink); font-weight: 500; }
+
+  footer.doc {
+    margin-top: clamp(2.5rem, 6vw, 4rem);
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    color: var(--ink-3);
+  }
+
+  @media (max-width: 34rem) {
+    .phase { grid-template-columns: 1fr; gap: 0.4rem; }
+    .pnum { padding-top: 0; }
+    .masthead .branch { margin-left: 0; flex-basis: 100%; }
+    body { font-size: 1rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <div class="masthead">
+    <span class="mark">Project Plan · Phase 0 Complete</span>
+    <span class="branch">universityDemo → salesforce-admission-api @ 127.0.0.1:8098</span>
+  </div>
+
+  <header class="doc">
+    <h1>Salesforce User Sync</h1>
+    <p class="standfirst">
+      Wire <code>POST /users/lookup-or-create</code> into every conversation start — inbound
+      voice, outbound voice, WhatsApp and web chat — carry course interest and contact
+      details into the CRM, and drive <code>PATCH /users/{user_id}/status</code> from the
+      lifecycle events this app already produces.
+    </p>
+
+    <div class="stats">
+      <div class="stat"><b>18</b><span>Probes run · 0 failed</span></div>
+      <div class="stat"><b>4</b><span>Channels to wire</span></div>
+      <div class="stat"><b>16</b><span>Risks logged</span></div>
+      <div class="stat"><b>6</b><span>Reproduced live</span></div>
+      <div class="stat"><b>9</b><span>Phases, gated</span></div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- ══ the finding ══════════════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Research result</span>
+        <h2>Status updates hinge on a userId you can only get by creating one</h2>
+      </div>
+
+      <p>
+        <code>PATCH /users/{user_id}/status</code> needs a Salesforce <code>Customer.Id</code>,
+        and the only endpoint that returns one is <code>POST /users/lookup-or-create</code>.
+        There is no <code>GET /users/{user_id}</code> anywhere in the API.
+      </p>
+
+      <p>Three things follow, and they shape the entire design:</p>
+
+      <ul>
+        <li><strong>The userId must be captured at conversation start and persisted.</strong> It cannot be fetched later — so a CRM identity is a per-session prerequisite, not a lookup you do when you need it.</li>
+        <li><strong>There is no read-back path.</strong> To re-read a user's current CRM state you must call <code>lookup-or-create</code> again — a POST that can create a record if the lookup misses. Any "refresh status" feature inherits the duplicate-creation risk.</li>
+        <li><strong>Only three fields are writable:</strong> <code>sentiment</code>, <code>offerLetterReleased</code>, <code>offerLetterAccepted</code>. Everything else is write-once at create, or not exposed. There is no generic status field.</li>
+      </ul>
+
+      <p>
+        The good news: this app already computes all three signals. No new inference work is
+        needed — the integration is a wiring exercise.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>CRM field</th><th>Existing trigger</th><th>Location</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="nowrap"><code>sentiment</code></td>
+              <td><strong>The categorizer output</strong> — upper-cased. Not the emotion field.</td>
+              <td class="mono">app/sentiment/categorizer.py:31–35</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>sentiment</code></td>
+              <td>Emitted at the end of every call and chat interaction</td>
+              <td class="mono">app/main.py:2776–2791 · app/leads/service.py:188</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>offerLetterReleased</code></td>
+              <td>Offer-letter PDF generated and released</td>
+              <td class="mono">app/offers/</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>offerLetterAccepted</code></td>
+              <td>Student types <em>accept</em> / <em>decline</em></td>
+              <td class="mono">app/main.py:1493–1504</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>course</code> <span class="mono">(create-time)</span></td>
+              <td><code>leads.program_interest</code>, captured per channel</td>
+              <td class="mono">app/leads/schema.py:14–30</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ picklist trap ══════════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Found by the Phase 0 run</span>
+        <h2>The field you would reach for is the wrong one</h2>
+      </div>
+
+      <div class="callout">
+        <h3>Two of the three status fields are restricted picklists</h3>
+        <p>
+          Verified live against the dev org — 202 existing rows, then round-tripped by the
+          verification script:
+        </p>
+        <div class="scroll" style="align-self:stretch">
+          <table>
+            <thead>
+              <tr><th>Field</th><th>Accepted values</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap"><code>Sentiment__c</code></td>
+                <td class="mono">NURTURE · HOT · WARM · AT-RISK · DISQUALIFIED</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>Offer_Letter_Accepted__c</code></td>
+                <td class="mono">UNKNOWN · ACCEPTED · NOT_ACCEPTED</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>Offer_Letter_Released__c</code></td>
+                <td class="mono">boolean</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>Course__c</code></td>
+                <td>free text — a value of <code>"Verify Program"</code> was accepted</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p>
+        The obvious source field for <code>sentiment</code> is
+        <code>primary_emotion</code> from <code>app/sentiment/scorer.py:95</code> —
+        <em>excited, interested, neutral, skeptical, frustrated, angry, confused</em>. That
+        set shares <strong>zero</strong> values with the picklist.
+      </p>
+
+      <p>
+        The correct source is the <strong>categorizer</strong>
+        (<code>app/sentiment/categorizer.py:31–35</code>), whose five outputs map cleanly by
+        upper-casing — and whose <code>At-Risk</code> already hyphenates to match. The
+        script proved both halves: a mapped value round-trips, and a raw
+        <code>'excited'</code> is rejected.
+      </p>
+
+      <div class="callout">
+        <h3>Why this is dangerous rather than merely annoying</h3>
+        <p>
+          An out-of-vocabulary value fails as a <strong>500</strong>, not a 400. R4 already
+          warned that a 500 can mean "created but response failed". R16 shows the same code
+          also means <em>permanent validation error</em>. The outbox has to parse
+          <code>detail</code> and refuse to retry a <code>RESTRICTED_PICKLIST</code>
+          failure — because retrying forever is exactly what it will do by default.
+        </p>
+        <p>
+          <strong>Near-miss to watch:</strong> <code>Sentiment__c</code> uses
+          <code>AT-RISK</code> with a hyphen; the separate <code>Lead_Category__c</code>
+          field uses <code>AT RISK</code> with a space. Any copy-paste between them fails.
+        </p>
+      </div>
+    </section>
+
+    <!-- ══ channel readiness ═══════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Current state</span>
+        <h2>What each channel actually knows when a conversation starts</h2>
+      </div>
+
+      <p>
+        None of the four channels can call <code>lookup-or-create</code> correctly today.
+        The API requires <code>name</code>, <code>email</code>, <code>phoneNumber</code> and
+        <code>conversationId</code> — and no channel has all four at the moment a session begins.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Conversation starts at</th>
+              <th>Phone at start</th>
+              <th>Email at start</th>
+              <th>conversationId</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Inbound voice</strong></td>
+              <td class="mono">app/main.py:453–628</td>
+              <td><span class="sev crit">Missing</span></td>
+              <td><span class="sev crit">Missing</span></td>
+              <td><span class="sev crit">Missing</span></td>
+            </tr>
+            <tr>
+              <td><strong>Outbound voice</strong></td>
+              <td class="mono">app/main.py:633–814</td>
+              <td><span class="sev med">Lost at WS</span></td>
+              <td><span class="sev med">Sometimes</span></td>
+              <td><span class="sev crit">Missing</span></td>
+            </tr>
+            <tr>
+              <td><strong>WhatsApp</strong></td>
+              <td class="mono">app/main.py:1353–1563</td>
+              <td><span class="sev low">Clean</span></td>
+              <td><span class="sev med">After prompt</span></td>
+              <td><span class="sev crit">Missing</span></td>
+            </tr>
+            <tr>
+              <td><strong>Web chat</strong></td>
+              <td class="mono">app.py:354–372</td>
+              <td><span class="sev med">After prompt</span></td>
+              <td><span class="sev med">After prompt</span></td>
+              <td><span class="sev crit">Missing</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Four gaps the plan must close</h3>
+      <ul>
+        <li>
+          <strong>G1 — Inbound voice has no caller number.</strong> The webhooks declare no
+          <code>From</code> parameter and the TwiML <code>&lt;Stream&gt;</code> carries no custom
+          parameters. Twilio Media Streams doesn't include the caller number in its
+          <code>start</code> event, so it must be captured at the webhook and threaded through
+          via <code>&lt;Parameter&gt;</code>. This is the same defect already logged as
+          <strong>B6</strong> in <code>doc/environmentsetup/OPEN_QUESTIONS.md</code> — fixing G1 clears B6.
+        </li>
+        <li>
+          <strong>G2 — Outbound voice loses the lead at the WebSocket boundary.</strong> The lead
+          is resolved before dialling (<code>app/outbound/caller.py:153–161</code>) but the
+          handler reads only <code>callSid</code>/<code>streamSid</code>.
+        </li>
+        <li>
+          <strong>G3 — No conversation ID exists at conversation start.</strong> The UUID is
+          minted at <em>write</em> time, after the call ends —
+          <code>app/leads/models.py:392</code>, reached from <code>_handle_disconnect</code>.
+          Since <code>conversationId</code> is required by the API, a stable ID must be minted
+          at session start instead.
+        </li>
+        <li>
+          <strong>G4 — Voice has no email.</strong> A call gives a phone; email arrives later or
+          never. Sending <code>""</code> is actively dangerous — see R2.
+        </li>
+      </ul>
+    </section>
+
+    <!-- ══ risk register ═══════════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Risk register</span>
+        <h2>Six of these are upstream defects, not integration mistakes</h2>
+      </div>
+
+      <p>
+        R1–R5 came out of the API's own source. D1 settled the question they pose — the
+        contract is <strong>frozen</strong>, so all of them are defended client-side, and
+        R2, R6 and R16 become permanent constraints rather than things we can fix.
+        R16, R1, R6 and R13 were then reproduced against the live org.
+      </p>
+
+      <div class="risks">
+
+        <div class="risk crit">
+          <div class="rhead">
+            <span class="rid">R16</span>
+            <span class="sev crit">Critical</span>
+            <span class="rtitle">The sentiment field is a picklist the app can't fill</span>
+          </div>
+          <p>
+            Reproduced live: a raw <code>primary_emotion</code> value is rejected, because it
+            shares no values with <code>Sentiment__c</code>. Send the categorizer output
+            upper-cased instead — see the section above.
+          </p>
+          <span class="ev">Verified 2026-09-11 · categorizer.py:31–35 vs scorer.py:95</span>
+        </div>
+
+        <div class="risk crit">
+          <div class="rhead">
+            <span class="rid">R1</span>
+            <span class="sev crit">Critical</span>
+            <span class="rtitle">Users and admissions are the same object</span>
+          </div>
+          <p>
+            <code>/users</code> and <code>/admissions</code> both write the Salesforce
+            <code>Customer</code> object. One person can hold two rows, and
+            <code>GET /admissions</code> returns user rows too — unfiltered. A lookup can
+            therefore hand back an admission application as if it were the user.
+          </p>
+          <span class="ev">salesforce_user_repository.py · salesforce_admission_repository.py</span>
+        </div>
+
+        <div class="risk crit">
+          <div class="rhead">
+            <span class="rid">R2</span>
+            <span class="sev crit">Critical</span>
+            <span class="rtitle">Lookup matches on OR, with LIMIT 1 and no ordering</span>
+          </div>
+          <p>
+            <code>find_user</code> queries <code>WHERE Email__c = X OR Phone__c = Y LIMIT 1</code>.
+            Two failures compound: an empty value makes the clause
+            <code>Email__c = ''</code>, matching unrelated records; and when several rows match,
+            which one comes back is undefined. Combined with G4 — voice calls have no email —
+            a naive integration will mis-link or fabricate users.
+          </p>
+          <span class="ev">salesforce_user_repository.py: find_user</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R3</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">SOQL injection through the f-string</span>
+          </div>
+          <p>
+            <code>email</code> and <code>phone_number</code> are interpolated straight into the
+            query. An apostrophe breaks it; a crafted value alters it.
+          </p>
+          <span class="ev">salesforce_user_repository.py: find_user</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R4</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">Partial success returns 500</span>
+          </div>
+          <p>
+            The response formatter returns fields that may be <code>None</code>, while the
+            response model requires them as <code>str</code>. A record created without an email
+            fails response validation — <em>after</em> the Salesforce row was written. The caller
+            cannot tell "created" from "failed", so any retry duplicates it.
+          </p>
+          <span class="ev">user_service.py: format_user_response · user_schema.py: UserResponse</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R5</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">Find-then-create has no lock</span>
+          </div>
+          <p>
+            Two concurrent inbound calls from the same number can both miss the lookup and both
+            create. Nothing upstream prevents it. This app must single-flight instead.
+          </p>
+          <span class="ev">user_service.py: lookup_or_create_user</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R6</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">Conversation_ID__c is never updated for a returning user</span>
+          </div>
+          <p>
+            It is set at create time only — the existing-user branch returns early. Every new
+            conversation leaves the CRM pointing at the <em>first</em> one, which defeats the
+            stated purpose of the integration. This cannot be fully fixed from the client.
+          </p>
+          <span class="ev">user_service.py: lookup_or_create_user</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R7</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">Latency, on the call-answer path</span>
+          </div>
+          <p>
+            Every repository call re-runs the OAuth token fetch. One
+            <code>lookup-or-create</code> can cost three token fetches and three Salesforce
+            round trips — while the voice turn already runs 12–35s. CRM work must stay off the
+            critical path.
+          </p>
+          <span class="ev">app/core/salesforce.py: get_salesforce</span>
+        </div>
+
+        <div class="risk high">
+          <div class="rhead">
+            <span class="rid">R8</span>
+            <span class="sev high">High</span>
+            <span class="rtitle">The API has no authentication at all</span>
+          </div>
+          <p>
+            No API key, no signature check, no CORS configuration. Anyone who reaches
+            <code>baseUrl</code> can read, mutate and delete the entire CRM.
+          </p>
+          <span class="ev">main.py — no middleware, no auth dependency on any route</span>
+        </div>
+
+        <div class="risk done">
+          <div class="rhead">
+            <span class="rid">R9</span>
+            <span class="sev done">Resolved</span>
+            <span class="rtitle">Port collision on 8000</span>
+          </div>
+          <p>
+            Closed by D2 — the API runs on <code>127.0.0.1:8098</code>, clear of this repo's
+            <code>:8000</code> and enterprise-rag-core's <code>:8010</code>. Loopback-only,
+            which also contains R8 for now.
+          </p>
+          <span class="ev">Live probe 2026-09-11</span>
+        </div>
+
+        <div class="risk med">
+          <div class="rhead">
+            <span class="rid">R10</span>
+            <span class="sev med">Medium</span>
+            <span class="rtitle">No GET /users/{id}</span>
+          </div>
+          <p>
+            There is no way to re-read user state without a creating POST. Locks the design into
+            a local cache as the only cheap source of truth.
+          </p>
+          <span class="ev">user_routes.py — POST, PATCH, DELETE only</span>
+        </div>
+
+        <div class="risk done">
+          <div class="rhead">
+            <span class="rid">R11</span>
+            <span class="sev done">Resolved</span>
+            <span class="rtitle">offerLetterAccepted has an unconfirmed vocabulary</span>
+          </div>
+          <p>
+            It is a restricted picklist: <code>UNKNOWN</code> · <code>ACCEPTED</code> ·
+            <code>NOT_ACCEPTED</code>. The app's <code>"rejected"</code> must be sent as
+            <code>NOT_ACCEPTED</code> — not <code>REJECTED</code>, not
+            <code>DECLINED</code>. Round-tripped live.
+          </p>
+          <span class="ev">Verified 2026-09-11 · app/main.py:1494, 1500</span>
+        </div>
+
+        <div class="risk med">
+          <div class="rhead">
+            <span class="rid">R12</span>
+            <span class="sev med">Medium</span>
+            <span class="rtitle">PII egress and compliance</span>
+          </div>
+          <p>
+            Student names, phones, emails, course interest and sentiment now leave the premises.
+            The retention and consent questions in <code>OPEN_QUESTIONS.md</code> Q18 are
+            currently unanswered and become live the moment this ships.
+          </p>
+          <span class="ev">doc/environmentsetup/OPEN_QUESTIONS.md §5</span>
+        </div>
+
+        <div class="risk med">
+          <div class="rhead">
+            <span class="rid">R13</span>
+            <span class="sev med">Medium</span>
+            <span class="rtitle">Testing_Record__c is never filtered</span>
+          </div>
+          <p>
+            The field exists, but the admission listing does not exclude test rows — so they
+            contaminate any downstream read.
+          </p>
+          <span class="ev">salesforce_admission_repository.py: get_all_admissions</span>
+        </div>
+
+        <div class="risk low">
+          <div class="rhead">
+            <span class="rid">R14</span>
+            <span class="sev low">Low</span>
+            <span class="rtitle">TwiML built by str.format</span>
+          </div>
+          <p>
+            Adding a phone parameter interpolates unsanitised values into XML. Low risk for a
+            phone number, not for any name field — escape on the way in.
+          </p>
+          <span class="ev">app/main.py:294–320</span>
+        </div>
+
+        <div class="risk low">
+          <div class="rhead">
+            <span class="rid">R15</span>
+            <span class="sev low">Low</span>
+            <span class="rtitle">WhatsApp has no session boundary</span>
+          </div>
+          <p>
+            Every message is an independent webhook, so "conversation start" is undefined there
+            and needs an explicit idle-window rule.
+          </p>
+          <span class="ev">app/main.py:1353 — stateless per request</span>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══ phase plan ══════════════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Delivery</span>
+        <h2>Nine phases, each ending at a gate that must pass</h2>
+      </div>
+
+      <p>
+        No phase starts before the previous gate passes. Phases 3–6 are independent of each
+        other and may be reordered. Everything ships behind <code>CRM_ENABLED=false</code>, so
+        the demo keeps working untouched.
+      </p>
+
+      <div class="phases">
+
+        <div class="phase">
+          <div class="pnum">00</div>
+          <div class="pbody">
+            <h3>Verify and stage the upstream API <span style="color:var(--accent-ink);font-family:'JetBrains Mono',monospace;font-size:0.68rem;letter-spacing:0.08em">✓ DONE</span></h3>
+            <p>
+              The handover note asked whether these APIs actually work. They do — create,
+              hit, status-update and 404 paths all verified end to end. The run also found
+              R16 and answered D3.
+            </p>
+            <ul>
+              <li><code>scripts/verify_salesforce_api.py</code> — read-only by default; <code>--write</code> for the create/hit/status probes</li>
+              <li>Endpoint resolved: <code>127.0.0.1:8098</code>, source at the same commit the plan was written against, no contract drift</li>
+              <li>R1, R6, R13 and R16 reproduced live; R5 confirmed <em>sequential-safe</em> (it is a concurrency race only)</li>
+              <li>Still open: the destructive R2/R4 probe, and auth (D5)</li>
+            </ul>
+            <span class="gate"><span class="glabel">Gate 0 ✓ Passed</span><span>18 probes, 0 failed, test records created and cleaned up. Run 2026-09-11.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">01</div>
+          <div class="pbody">
+            <h3>Local session identity — no CRM calls yet</h3>
+            <ul>
+              <li><code>conversation_id</code> minted at session start on all four channels</li>
+              <li><code>app/leads/models.py:392</code> accepts an externally supplied conversation id</li>
+              <li>Additive migration: <code>crm_user_id</code> on leads and conversations, plus a <code>crm_sync_outbox</code> table</li>
+            </ul>
+            <span class="gate"><span class="glabel">Gate 1</span><span>A session exposes a stable conversation id from its first moment, with zero behaviour change to the demo.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">02</div>
+          <div class="pbody">
+            <h3>The <code>app/crm/</code> client</h3>
+            <ul>
+              <li><code>identity</code>, <code>client</code>, <code>session</code>, <code>sync</code>, <code>outbox</code></li>
+              <li>Explicit timeouts, retry with jittered backoff, circuit breaker, and single-flight per phone (mitigates R5)</li>
+              <li>Sanitisation and E.164 normalisation (R3)</li>
+              <li>Treat 500 from lookup-or-create as <em>unknown state</em> — re-look-up before any retry (R4)</li>
+            </ul>
+            <span class="gate"><span class="glabel">Gate 2</span><span>With the flag off, the entire existing test suite passes unchanged.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">03</div>
+          <div class="pbody">
+            <h3>WhatsApp — first live channel</h3>
+            <p>
+              Chosen first: a clean carrier-supplied phone number, the lowest blast radius, and
+              a state machine that already collects exactly the name, email and program that
+              lookup-or-create wants.
+            </p>
+            <span class="gate"><span class="glabel">Gate 3</span><span>A WhatsApp thread creates exactly one Customer row with the right course and conversation id; a second thread from the same number reuses it and does not duplicate.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">04</div>
+          <div class="pbody">
+            <h3>Outbound voice</h3>
+            <p>
+              The lead is known before dialling, so thread <code>lead_id</code> and phone into
+              the outbound stream via custom parameters.
+            </p>
+            <span class="gate"><span class="glabel">Gate 4</span><span>A call links to the correct CRM user, with no added dial latency.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">05</div>
+          <div class="pbody">
+            <h3>Inbound voice — the largest change</h3>
+            <ul>
+              <li>Both voice webhooks accept <code>From</code>; both Stream templates carry an escaped <code>&lt;Parameter&gt;</code> (R14)</li>
+              <li>The WebSocket start handler reads <code>start.customParameters</code></li>
+              <li><code>_handle_disconnect</code> prefers the carrier number over the LLM-extracted one</li>
+            </ul>
+            <span class="gate"><span class="glabel">Gate 5</span><span>The CRM user is created against the real caller number before the first AI turn completes — which also clears blocker B6.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">06</div>
+          <div class="pbody">
+            <h3>Web chat</h3>
+            <p>Hook the Streamlit identity state machine when the lead sync runs.</p>
+            <span class="gate"><span class="glabel">Gate 6</span><span>A first-time chatter appears in Salesforce once name and contact details are supplied.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">07</div>
+          <div class="pbody">
+            <h3>Status push</h3>
+            <ul>
+              <li>Sentiment from both scoring paths; offer-letter release; offer acceptance</li>
+              <li>Outbox replay worker so a Salesforce outage cannot silently drop a write</li>
+              <li>Confirm the accepted vocabulary with the API owner (R11)</li>
+            </ul>
+            <span class="gate"><span class="glabel">Gate 7</span><span>All three fields round-trip, and survive a simulated outage via outbox replay.</span></span>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="pnum">08</div>
+          <div class="pbody">
+            <h3>Hardening and rollout</h3>
+            <p>
+              Counters for lookups, creates, duplicates, breaker state and outbox depth; a
+              runbook; a rollout ladder from off to one channel to all; and a duplicate-detection
+              query against Salesforce after the first week.
+            </p>
+            <span class="gate"><span class="glabel">Gate 8</span><span>One week of traffic with zero unexplained duplicate rows and outbox depth returning to zero.</span></span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══ decisions ═══════════════════════════════════ -->
+    <section>
+      <div class="shead">
+        <span class="eyebrow">Decisions</span>
+        <h2>Three are settled, and one of them was the big one</h2>
+      </div>
+
+      <div class="decisions">
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D1</span>
+            <span class="sev done">Answered</span>
+            <span class="dtitle">Frozen external contract — we call it, we do not change it</span>
+          </div>
+          <p>
+            Every upstream defect is therefore defended client-side, and three become
+            permanent: <strong>R2</strong> (never send a blank identifier — client discipline
+            is the only control), <strong>R16</strong> (the mapping table), and
+            <strong>R6</strong>.
+          </p>
+          <p>
+            R6 cannot be solved from the client at all. The CRM will keep showing the
+            <em>first</em> conversation for a repeat caller, so the authoritative linkage stays
+            local and the CRM's conversation field is treated as stale-but-harmless. Worth
+            telling whoever consumes the CRM: <strong>any report keyed off that field will be
+            wrong for repeat callers.</strong>
+          </p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D2</span>
+            <span class="sev done">Answered</span>
+            <span class="dtitle">http://127.0.0.1:8098, running locally</span>
+          </div>
+          <p>
+            Source at <code>D:\project\salesforce\salesforce-admission-api</code>. No port
+            collision, so R9 is dead. Loopback-only — which contains R8 for now, but that
+            containment ends the moment it moves anywhere reachable, so D5 still matters.
+          </p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D3</span>
+            <span class="sev done">Answered</span>
+            <span class="dtitle">offerLetterAccepted vocabulary confirmed</span>
+          </div>
+          <p>
+            <code>UNKNOWN</code> · <code>ACCEPTED</code> · <code>NOT_ACCEPTED</code> — so the
+            app's <code>"rejected"</code> maps to <code>NOT_ACCEPTED</code>.
+          </p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D8</span>
+            <span class="blocking">New</span>
+            <span class="dtitle">Should the destructive R2/R4 probe be run?</span>
+          </div>
+          <p>
+            Phase 0 deliberately skipped it. It is the only way to confirm whether a
+            blank-identifier lookup matches an unrelated record (R2) or creates-then-500s
+            (R4) — but if R4 fires, the record exists and <strong>this API cannot delete
+            it</strong>, because there is no <code>GET /users/{id}</code> to find it with.
+          </p>
+          <p>
+            Recommendation: run it against a <strong>sandbox org</strong>, not the one under
+            test. Until then R2 and R4 stay source-read rather than reproduced.
+          </p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D4</span>
+            <span class="later">Phase 3</span>
+            <span class="dtitle">WhatsApp session idle window</span>
+          </div>
+          <p>Proposed default: six hours. What makes two threads one conversation?</p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D5</span>
+            <span class="later">Before prod</span>
+            <span class="dtitle">Is a shared-secret header acceptable, or network isolation alone?</span>
+          </div>
+          <p>
+            Worth stating plainly: the whole CRM is readable <em>and deletable</em> by anyone
+            who reaches the port. Loopback-only is the sole control today.
+          </p>
+        </div>
+
+        <div class="dec">
+          <div class="dhead">
+            <span class="did">D6</span>
+            <span class="later">Phase 8</span>
+            <span class="dtitle">Compliance sign-off for student PII</span>
+          </div>
+          <p>Ties to R12 and the unanswered retention and consent questions.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══ next step ═══════════════════════════════════ -->
+    <section>
+      <div class="nextstep">
+        <h2>Next step</h2>
+        <p>
+          Phase 0 is done and Gate 0 passed. Next is <strong>Phase 1</strong> — local session
+          identity: mint a conversation id at session start on all four channels, let
+          <code>app/leads/models.py:392</code> accept it, and apply the additive migration.
+          No CRM access and no further decisions needed, and with the flag off it changes
+          nothing about how the demo behaves.
+        </p>
+        <p>
+          Before Phase 7, re-read the picklist section. The sentiment mapping is the one
+          thing most likely to be built wrong — the obvious field is the wrong one, and the
+          failure looks like a transient 500.
+        </p>
+        <div class="pathlist">
+          <div><b>Plan</b>    doc/salesforce/PLAN_SALESFORCE_USER_INTEGRATION.md</div>
+          <div><b>Harness</b> scripts/verify_salesforce_api.py --base-url http://127.0.0.1:8098 --write</div>
+          <div><b>Blocked</b>  D4 before Phase 3 · D5 before this leaves a dev machine</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="doc">
+    <span>Phase 0 complete · 2026-09-11</span>
+    <span>API surface read from salesforce-admission-api @ 272434d</span>
+    <span>salesforceAPISchema was empty (0 bytes)</span>
+  </footer>
+
+</div>
