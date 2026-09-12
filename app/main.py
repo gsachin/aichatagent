@@ -639,6 +639,7 @@ async def websocket_twilio(websocket: WebSocket):
         await _handle_disconnect(
             transcript_parts,
             ended.conversation_id if ended else "",
+            channel=ended.channel if ended else "inbound_call",
         )
         try:
             await websocket.close()
@@ -844,6 +845,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
         await _handle_disconnect(
             transcript_parts,
             ended.conversation_id if ended else "",
+            channel=ended.channel if ended else "outbound_call",
         )
 
 
@@ -2771,6 +2773,7 @@ async def dashboard_page():
 async def _handle_disconnect(
     transcript_parts: list[str],
     conversation_id: str = "",
+    channel: str = "inbound_call",
 ) -> None:
     """
     Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring.
@@ -2778,6 +2781,11 @@ async def _handle_disconnect(
     ``conversation_id`` is handed down from the WebSocket handler, which takes it
     from ``app.crm.session`` when the stream starts. It is the only moment the id
     is available — the session is removed from the registry as the call ends.
+
+    ``channel`` must be passed by callers that handle outbound calls. This
+    function used to hardcode "inbound_call", so every outbound call was logged
+    as inbound — which is why the dashboard's outbound filter and icon existed
+    but never matched anything.
     """
     transcript = " ".join(transcript_parts)
 
@@ -2807,7 +2815,7 @@ async def _handle_disconnect(
                     name=extracted_lead.get("name", ""),
                     email=extracted_lead.get("email", ""),
                     program_interest=extracted_lead.get("program", ""),
-                    source="inbound_call",
+                    source=channel,
                 )
             if lead:
                 resolved_lead_id = lead["id"]
@@ -2838,7 +2846,7 @@ async def _handle_disconnect(
         await handle_post_interaction(
             phone_number=resolved_phone,
             transcript=transcript,
-            channel="inbound_call",
+            channel=channel,
             conversation_id=conversation_id,
         )
     except Exception:
