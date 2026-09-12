@@ -202,21 +202,52 @@ async def test_explicit_arguments_win_over_a_stale_lead_row(crm_on, lead_store, 
 
 @pytest.mark.anyio
 async def test_live_whatsapp_session_is_updated_in_step(crm_on, lead_store, crm_transport):
-    """So the rest of the conversation can read the id without another query."""
+    """
+    So the rest of the conversation can read the id without another query.
+
+    The session is registered under Twilio's raw `From` — prefix and all — so
+    the link must address it by that key. Using the normalised number here would
+    silently miss, which is a bug this test exists to catch.
+    """
     from app.crm import session as crm_session
 
+    raw_from = "whatsapp:+14155550100"
     crm_session.reset()
-    crm_session.start("whatsapp", "+14155550100", phone_number="+14155550100")
+    crm_session.start("whatsapp", raw_from, phone_number=raw_from)
 
     install, _ = crm_transport
     install([found("a0X1")])
 
     await sync.link_conversation(
         channel="whatsapp", conversation_id="conv-1", lead={"id": "lead-1"},
-        phone_number="+14155550100", name="Ana",
+        phone_number=raw_from, name="Ana", session_key=raw_from,
     )
 
-    assert crm_session.get("whatsapp", "+14155550100").crm_user_id == "a0X1"
+    live = crm_session.get("whatsapp", raw_from)
+    assert live is not None, "the session must still be under the raw From key"
+    assert live.crm_user_id == "a0X1"
+    crm_session.reset()
+
+
+@pytest.mark.anyio
+async def test_a_session_registered_under_a_prefixed_number_is_not_missed(
+    crm_on, lead_store, crm_transport
+):
+    """Regression: normalising the lookup key silently missed the session."""
+    from app.crm import session as crm_session
+
+    raw_from = "whatsapp:+14155550100"
+    crm_session.reset()
+    crm_session.start("whatsapp", raw_from, phone_number=raw_from)
+    install, _ = crm_transport
+    install([found("a0X1")])
+
+    await sync.link_conversation(
+        channel="whatsapp", conversation_id="conv-1", lead={"id": "lead-1"},
+        phone_number=raw_from, name="Ana", session_key=raw_from,
+    )
+    # The bare number must NOT be a key — if it were, two students could collide.
+    assert crm_session.get("whatsapp", "+14155550100") is None
     crm_session.reset()
 
 

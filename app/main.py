@@ -1633,6 +1633,9 @@ async def twilio_whatsapp_webhook(
             email=lead_email,
             name=lead_name,
             course=lead_program,
+            # The registry key, verbatim — the WhatsApp session is registered
+            # under the raw `From` ("whatsapp:+1415..."), not the bare number.
+            session_key=From,
         ) or ""
     except Exception:
         logger.exception("CRM link failed (non-fatal)")

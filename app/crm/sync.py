@@ -135,6 +135,7 @@ async def link_conversation(
     email: object = "",
     name: object = "",
     course: object = "",
+    session_key: str = "",
 ) -> str | None:
     """
     Make sure the person in this conversation exists in the CRM. Returns the
@@ -202,11 +203,15 @@ async def link_conversation(
             logger.exception("crm.sync: could not persist crm_user_id on the lead")
 
     # Keep the live session in step so the rest of this conversation can read
-    # the id without another database round trip. WhatsApp sessions are keyed by
-    # phone number; the voice channels key by stream_sid, which the caller sets
-    # directly because only it knows the sid.
-    if channel == "whatsapp" and ident.phone_number:
-        live = session_mod.get("whatsapp", ident.phone_number)
+    # the id without another database round trip.
+    #
+    # The key must be the one the session was registered under, which is NOT
+    # always the normalised phone: Twilio WhatsApp sends `whatsapp:+1415...` and
+    # the registry stores that verbatim, so normalising here would silently miss.
+    # Callers pass their own key; the normalised number is only a fallback.
+    key = session_key or ident.phone_number
+    if key:
+        live = session_mod.get(channel, key)
         if live is not None:
             live.crm_user_id = user_id
 
