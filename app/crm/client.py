@@ -359,28 +359,61 @@ class CrmClient:
 # ── Shared instance ──────────────────────────────────────────────────────────
 
 _client: CrmClient | None = None
+_client_loop: object | None = None
 _client_lock = threading.Lock()
 
 
+def _new_client() -> CrmClient:
+    return CrmClient(
+        settings.CRM_BASE_URL,
+        api_key=settings.CRM_API_KEY,
+        connect_timeout=settings.CRM_TIMEOUT_CONNECT_S,
+        read_timeout=settings.CRM_TIMEOUT_READ_S,
+        max_retries=settings.CRM_MAX_RETRIES,
+    )
+
+
 def get_client() -> CrmClient:
-    """Return the shared client, creating it on first use."""
-    global _client
+    """
+    Return the shared client **for the current event loop**.
+
+    An ``httpx.AsyncClient`` is bound to the loop that created its connection
+    pool. Reused from a different loop it fails on the first pooled connection
+    with ``RuntimeError: Event loop is closed`` — which surfaces as an opaque
+    500-ish failure and, worse, records failures against the circuit breaker
+    until everything is refused for no visible reason.
+
+    This app genuinely has more than one loop: each uvicorn worker runs one, and
+    ``app/leads/mcp_tools.py`` creates further ones via ``asyncio.run()``. So the
+    client is keyed to the running loop and quietly rebuilt when that changes.
+
+    The abandoned client is dropped rather than closed — its loop is gone, so
+    ``aclose()`` could not complete there anyway. Socket cleanup falls to the
+    garbage collector; the alternative is a leak of one pool per loop switch,
+    which is the lesser problem.
+    """
+    global _client, _client_loop
+
+    try:
+        loop: object | None = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
     with _client_lock:
-        if _client is None:
-            _client = CrmClient(
-                settings.CRM_BASE_URL,
-                api_key=settings.CRM_API_KEY,
-                connect_timeout=settings.CRM_TIMEOUT_CONNECT_S,
-                read_timeout=settings.CRM_TIMEOUT_READ_S,
-                max_retries=settings.CRM_MAX_RETRIES,
-            )
+        if _client is not None and _client_loop is loop:
+            return _client
+        if _client is not None:
+            logger.debug("crm.client: event loop changed — rebuilding the shared client")
+        _client = _new_client()
+        _client_loop = loop
         return _client
 
 
 async def aclose_client() -> None:
     """Close the shared client. Called on shutdown, and between tests."""
-    global _client
+    global _client, _client_loop
     with _client_lock:
         client, _client = _client, None
+        _client_loop = None
     if client is not None:
         await client.aclose()

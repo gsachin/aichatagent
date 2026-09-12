@@ -610,6 +610,70 @@ async def test_push_status_with_no_user_id_is_a_no_op(crm_enabled, patched_clien
     assert not holder.get("queued")
 
 
+# ── the shared client belongs to one event loop ──────────────────────────────
+
+def test_shared_client_is_stable_within_one_loop():
+    import asyncio
+
+    from app.crm.client import get_client
+
+    async def twice():
+        return get_client(), get_client()
+
+    first, second = asyncio.run(twice())
+    assert first is second, "the pool must not be rebuilt on every call"
+
+
+def test_shared_client_is_rebuilt_when_the_loop_changes():
+    """
+    Regression for a failure that is opaque in the wild: an httpx.AsyncClient
+    reused across event loops raises "Event loop is closed" on its first pooled
+    connection, and the run of failures then opens the circuit breaker — so
+    everything starts being refused with no visible cause.
+
+    app/leads/mcp_tools.py creates extra loops via asyncio.run(), so this is
+    reachable in this app, not just in tests.
+    """
+    import asyncio
+
+    from app.crm.client import get_client
+
+    from_loop_a = asyncio.run(_grab())
+    from_loop_b = asyncio.run(_grab())
+
+    assert from_loop_a is not from_loop_b, "a new loop needs its own client"
+
+
+async def _grab():
+    from app.crm.client import get_client
+
+    return get_client()
+
+
+def test_rebuilt_client_is_not_called_outside_the_crm_gate(override_settings, monkeypatch):
+    """
+    Rebuilding must not smuggle in any behaviour when the CRM is disabled —
+    get_client is never reached at all, which the Phase 3 gate already asserts.
+    """
+    from app.crm.client import get_client
+    from app.crm import sync
+
+    override_settings(CRM_ENABLED=False)
+    monkeypatch.setattr(sync, "get_client", lambda: pytest.fail("must not be reached"))
+
+    import asyncio
+
+    assert asyncio.run(_noop()) is None
+    # And building one directly still respects the configured base URL.
+    assert get_client().base_url
+
+
+async def _noop():
+    from app.crm import sync
+
+    return await sync.lookup_or_create(from_channel("whatsapp"))
+
+
 # ── Gate 2: inert with the feature off ───────────────────────────────────────
 
 @pytest.mark.anyio
