@@ -45,6 +45,11 @@ _PERMANENT_MARKERS = (
     "INVALID_FIELD",
     "REQUIRED_FIELD_MISSING",
     "MALFORMED_QUERY",
+    # A record that is gone. The API answers 500 for this, not 404 (verified live
+    # 2026-09-12: `Resource Customer Not Found. Response content: [{'errorCode':
+    # 'NOT_FOUND', ...}]`), so without this marker a write to a deleted record
+    # would retry three times, queue, and keep failing on every replay.
+    "NOT_FOUND",
 )
 
 
@@ -285,17 +290,60 @@ class CrmClient:
         path: str,
         *,
         json: dict | None = None,
+        data: dict | None = None,
+        files: dict | None = None,
         is_create: bool = False,
+        retries: int | None = None,
+        timeout: float | None = None,
     ) -> Any:
         """
         Send one request, retrying only what is safe to retry.
 
+        Three body shapes, mutually exclusive: ``json=`` for the JSON API,
+        ``data=`` for multipart form fields, ``data=`` + ``files=`` for a
+        multipart upload. The retry loop, backoff, breaker and classification
+        are shared by all three.
+
+        ``retries`` and ``timeout`` override the client defaults for this call
+        only. Both exist for the document upload: the resolver needs ``retries=0``
+        (a bad id answers 500, and four attempts would trip the breaker shared by
+        every other caller), and ``/complete`` needs a longer read timeout than a
+        phone call can afford.
+
         Raises the matching :class:`CrmError` subclass on failure; never returns
         a partially-handled state.
         """
+        if json is not None and (data is not None or files is not None):
+            # httpx silently prefers files/data over json, so a caller passing
+            # both would send a body with no JSON in it and no error to show for
+            # it. Refuse instead.
+            raise ValueError("json= cannot be combined with data=/files=")
+
+        body: dict[str, Any] = {}
+        if files is not None:
+            # Values must be ``(filename, bytes)``, never an open handle: the
+            # body is rebuilt from scratch on every retry (httpx constructs a
+            # fresh MultipartStream per attempt), and a consumed or non-seekable
+            # handle would upload empty bytes on the second try.
+            body["files"] = files
+            body["data"] = data or {}
+        elif data is not None:
+            body["data"] = data
+        elif json is not None:
+            body["json"] = json
+
+        if timeout is not None:
+            # Omitted entirely when unset: `timeout=None` in httpx means *no*
+            # timeout, not "use the client default" — passing it would silently
+            # disable the ceiling for every other call site.
+            body["timeout"] = httpx.Timeout(
+                timeout, connect=settings.CRM_TIMEOUT_CONNECT_S
+            )
+
+        limit = self.max_retries if retries is None else max(0, retries)
         last_error: CrmError | None = None
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(limit + 1):
             if not self.breaker.allow():
                 raise CrmCircuitOpen(
                     f"circuit breaker open — refusing {method} {path}"
@@ -303,7 +351,7 @@ class CrmClient:
 
             try:
                 response = await self._client.request(
-                    method, path, json=json, headers=self._headers()
+                    method, path, headers=self._headers(), **body
                 )
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
                     httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:
@@ -335,11 +383,11 @@ class CrmClient:
                     # Retrying could duplicate the record. Hand it to the caller.
                     raise error
 
-            if attempt < self.max_retries:
+            if attempt < limit:
                 delay = _backoff_delay(attempt)
                 logger.warning(
                     f"crm.client: {method} {path} attempt {attempt + 1}/"
-                    f"{self.max_retries + 1} failed ({last_error}); retrying in {delay:.2f}s"
+                    f"{limit + 1} failed ({last_error}); retrying in {delay:.2f}s"
                 )
                 await asyncio.sleep(delay)
 
@@ -348,6 +396,31 @@ class CrmClient:
 
     async def post(self, path: str, json: dict, *, is_create: bool = True) -> Any:
         return await self.request("POST", path, json=json, is_create=is_create)
+
+    async def post_multipart(
+        self,
+        path: str,
+        *,
+        data: dict,
+        files: dict,
+        is_create: bool = False,
+        retries: int | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        """
+        POST ``multipart/form-data`` — form fields in ``data``, upload parts in
+        ``files`` as ``{field: (filename, bytes)}``.
+
+        ``is_create`` is the caller's judgement about whether re-sending could
+        duplicate a record, and it is the only thing that decides whether a 500
+        is retried (see :func:`classify_response`). For the document upload the
+        three calls differ: re-sending a chunk overwrites it, so retry is safe;
+        ``/complete`` creates a ContentVersion, so it is not.
+        """
+        return await self.request(
+            "POST", path, data=data, files=files,
+            is_create=is_create, retries=retries, timeout=timeout,
+        )
 
     async def patch(self, path: str, json: dict) -> Any:
         return await self.request("PATCH", path, json=json, is_create=False)

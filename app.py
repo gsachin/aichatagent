@@ -65,12 +65,16 @@ def _resolve_public_backend() -> str:
 # ── Background helper: log interaction + trigger sentiment ──────────
 
 def _log_and_score_async(phone: str, transcript: str, channel: str,
-                         lead_id: str = ""):
+                         lead_id: str = "", conversation_id: str = ""):
     """
     Fire-and-forget: POST the exchange to the backend so it gets
     logged to the conversations table and sentiment-scored.
 
     Runs in a daemon thread — never blocks the UI.
+
+    *conversation_id* is this chat's own id. Without it every logged exchange
+    becomes its own conversation row, which is both wrong and — since Salesforce
+    names the conversation by that id — impossible to reconcile with the CRM.
     """
     def _post():
         try:
@@ -81,6 +85,8 @@ def _log_and_score_async(phone: str, transcript: str, channel: str,
             }
             if lead_id:
                 payload["lead_id"] = lead_id
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
             requests.post(
                 "http://localhost:8000/api/interactions/log",
                 json=payload,
@@ -135,6 +141,7 @@ with st.sidebar:
                 email=st.session_state.get("lead_email", ""),
                 phone=phone,
                 program=st.session_state.get("lead_program", ""),
+                conversation_id=st.session_state.get("conversation_id", ""),
             )
             if lid:
                 st.session_state["lead_id"] = lid
@@ -477,6 +484,7 @@ if audio_value is not None:
                 transcript=exchange,
                 channel="streamlit",
                 lead_id=st.session_state.get("lead_id", ""),
+                conversation_id=st.session_state.get("conversation_id", ""),
             )
 
         st.session_state.voice_key += 1  # Reset widget to break rerun loop
@@ -569,6 +577,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 phone=st.session_state.get("lead_phone", ""),
                 program=st.session_state.get("lead_program", ""),
                 lead_id=st.session_state.get("lead_id", ""),
+                conversation_id=st.session_state.get("conversation_id", ""),
             )
             if lid:
                 st.session_state["lead_id"] = lid
@@ -601,6 +610,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     email=st.session_state.get("lead_email", ""),
                     phone=st.session_state.get("lead_phone", ""),
                     lead_id=st.session_state.get("lead_id", ""),
+                    conversation_id=st.session_state.get("conversation_id", ""),
                 )
                 if lid:
                     st.session_state["lead_id"] = lid
@@ -641,6 +651,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         email=st.session_state.get("lead_email", ""),
                         phone=st.session_state.get("lead_phone", ""),
                         lead_id=st.session_state.get("lead_id", ""),
+                        conversation_id=st.session_state.get("conversation_id", ""),
                     )
                     if lid:
                         st.session_state["lead_id"] = lid
@@ -676,6 +687,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         email=st.session_state.get("lead_email", ""),
                         phone=st.session_state.get("lead_phone", ""),
                         lead_id=st.session_state.get("lead_id", ""),
+                        conversation_id=st.session_state.get("conversation_id", ""),
                     )
                     answer = (
                         f"Your profile is confirmed! You're interested in *{lead_prog}*.\n\n"
@@ -718,6 +730,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     email=st.session_state.get("lead_email", ""),
                     phone=st.session_state.get("lead_phone", ""),
                     lead_id=st.session_state.get("lead_id", ""),
+                    conversation_id=st.session_state.get("conversation_id", ""),
                 )
                 if lid:
                     st.session_state["lead_id"] = lid
@@ -757,6 +770,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     email=st.session_state.get("lead_email", ""),
                     phone=st.session_state.get("lead_phone", ""),
                     lead_id=st.session_state.get("lead_id", ""),
+                    conversation_id=st.session_state.get("conversation_id", ""),
                 )
                 if lid:
                     st.session_state["lead_id"] = lid
@@ -815,6 +829,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             transcript=exchange,
             channel="streamlit",
             lead_id=st.session_state.get("lead_id", ""),
+            conversation_id=st.session_state.get("conversation_id", ""),
         )
 
 # ── In-chat document upload (below chat, appears when ready for docs) ─
@@ -844,6 +859,7 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                 email=st.session_state.get("lead_email", ""),
                 phone=phone,
                 program=st.session_state.get("lead_program", ""),
+                conversation_id=st.session_state.get("conversation_id", ""),
             )
             if lid:
                 st.session_state["lead_id"] = lid
@@ -856,6 +872,11 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                 boundary = f"----chat-{_uuid.uuid4().hex}"
                 parts = [
                     f"--{boundary}\r\nContent-Disposition: form-data; name=\"doc_type\"\r\n\r\n{chat_doc_type}\r\n",
+                    # The chat's conversation id, so the offer this upload
+                    # triggers is logged against this conversation — the same
+                    # one Salesforce was given — instead of a second, unrelated
+                    # row.
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"conversation_id\"\r\n\r\n{st.session_state.get('conversation_id', '')}\r\n",
                     f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{chat_upload.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
                 ]
                 body = "".join(parts).encode("utf-8") + chat_upload.getvalue() + f"\r\n--{boundary}--\r\n".encode("utf-8")

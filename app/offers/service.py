@@ -107,12 +107,28 @@ async def evaluate_offer_readiness(lead_id: str) -> dict:
 # ── Core offer generation ────────────────────────────────────────────────
 
 
-async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | None:
+async def generate_and_send_offer(
+    lead_id: str,
+    force: bool = False,
+    *,
+    channel: str = "whatsapp",
+    conversation_id: str = "",
+) -> dict | None:
     """
     Generate a PDF offer letter, send via WhatsApp + email, and return the offer dict.
 
     Idempotency: skips if an offer was already sent to this lead within 24h,
     unless ``force=True``.
+
+    ``channel`` is the channel the *request* came from, recorded on the logged
+    conversation. It used to be hardcoded to "whatsapp", so an offer generated
+    from the web chat was logged as a WhatsApp conversation — which is wrong in
+    the one place anyone would look to answer "how did this student reach us?".
+
+    ``conversation_id`` is the conversation this offer belongs to, when the
+    caller knows it. Without it the log mints a fresh id, so one web chat ended
+    up as two unrelated conversation rows — one of which the CRM has never heard
+    of, since Salesforce names the conversation by the chat's own id.
 
     Returns the offer-letter dict on success, None if skipped or failed.
     """
@@ -276,18 +292,57 @@ async def generate_and_send_offer(lead_id: str, force: bool = False) -> dict | N
         except Exception:
             logger.exception(f"Offer {offer['id']}: email send exception")
 
-    # ── Log conversation ─────────────────────────────────────────────
+    # ── Hand the PDF to the CRM (best-effort, off this path) ─────────
+    # Scheduled rather than awaited: this function is reached inline inside the
+    # Twilio WhatsApp webhook (app/main.py:1587), so three upload calls here
+    # would sit in the webhook window. Nothing about the offer — delivery, the
+    # returned row, the conversation log — depends on the outcome.
     try:
-        from app.leads.models import create_conversation
+        from app.crm.documents import schedule_offer_upload
+
+        schedule_offer_upload(
+            lead_id=lead_id, offer_id=offer["id"], pdf_path=str(pdf_path)
+        )
+    except Exception:
+        logger.exception(f"Offer {offer['id']}: could not schedule the CRM upload")
+
+    # ── Log conversation ─────────────────────────────────────────────
+    # Bound before the try so the CRM push below cannot hit an unbound name if
+    # the import inside fails.
+    crm_user_id = ""
+    try:
+        from app.leads.models import create_conversation, get_lead_crm_user_id
+
+        # Attach the Salesforce user when the lead has one, so the local record
+        # of this conversation points at the same person the CRM knows.
+        try:
+            crm_user_id = await get_lead_crm_user_id(lead_id)
+        except Exception:
+            logger.exception("Offer: could not read the CRM link for the log")
+
         await create_conversation(
             lead_id=lead_id,
             phone_number=lead_phone,
-            channel="whatsapp",
+            channel=channel,
             transcript=f"Offer letter ({offer['program']}) generated and sent to {lead_name}",
             summary=f"Offer letter sent for {offer['program']}",
             outcome="offer_sent",
+            conversation_id=conversation_id or None,
+            crm_user_id=crm_user_id or None,
         )
     except Exception:
         logger.exception("Failed to log offer conversation")
+
+    # ── Tell the CRM the offer is out ────────────────────────────────
+    # Without this the CRM holds the offer letter while reporting that no offer
+    # was ever released. Best-effort and off the request path: the student's
+    # offer does not depend on it.
+    try:
+        if crm_user_id:
+            from app.crm.status import push_offer_released
+
+            await push_offer_released(crm_user_id, sent_at=offer.get("sent_at") or "")
+    except Exception:
+        logger.exception(f"Offer {offer['id']}: could not publish the release to the CRM")
 
     return offer

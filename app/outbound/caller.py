@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import urllib.parse
 
 from twilio.base.exceptions import TwilioRestException
 from pathlib import Path
@@ -135,7 +136,8 @@ class OutboundCallWorker:
             update_call_queue_status,
             update_lead,
         )
-        from app.outbound.twiml import outbound_connect_twiml
+        # (The TwiML is not built here — Twilio fetches it from
+        # /twilio/outbound-voice, which is where the lead context is passed.)
         from app.config import settings
 
         entry = await get_next_queued_call()
@@ -186,7 +188,14 @@ class OutboundCallWorker:
             from twilio.rest import Client
 
             host = _resolve_host()
-            twiml = outbound_connect_twiml(host)
+            # The lead id travels on the webhook URL so the TwiML route can put
+            # it on the <Stream> as a <Parameter> — the media stream carries no
+            # application data otherwise, and without it the call cannot be
+            # linked to the CRM (or to the lead it was placed for).
+            context = urllib.parse.urlencode({
+                "leadId": lead_id,
+                "phone": phone_number,
+            })
 
             client = Client(
                 settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN
@@ -197,7 +206,7 @@ class OutboundCallWorker:
             call = client.calls.create(
                 to=phone_number,
                 from_=settings.TWILIO_PHONE_NUMBER,
-                url=f"https://{host}/twilio/outbound-voice",
+                url=f"https://{host}/twilio/outbound-voice?{context}",
                 status_callback=(
                     f"https://{host}/twilio/outbound/status"
                 ),

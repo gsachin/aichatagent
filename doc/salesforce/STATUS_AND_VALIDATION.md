@@ -86,6 +86,211 @@ is recoverable, unlike fabricating addresses into a CRM humans read.
 
 ---
 
+## 1b. Gate 4 — offer-letter document upload, run live 2026-09-12
+
+`scripts/verify_offer_document_upload.py` drives the real chunked-upload chain through
+`app.crm.documents` against `:8098`. Last run: **13 PASS, 0 FAIL** (with `--include-schedule`),
+2 test users deleted. It is deliberately not part of `verify_salesforce_api.py`, whose contract
+is "read-only by default, deletes everything it creates" — this one must write, and what it
+leaves behind **cannot be deleted through this API**.
+
+`generate_and_send_offer()` now schedules the upload after the offer is sent, off the request
+path (the WhatsApp webhook awaits offer generation inline, so three HTTP calls there would sit
+in Twilio's window). It is best-effort: the offer is delivered whether or not the CRM takes the
+document.
+
+### The path segment is not the userId
+
+The upload routes resolve `{application_no}` with
+`SELECT Id, Application_No__c FROM Customer WHERE Application_No__c = X LIMIT 1` — they are
+**not** record-Id keyed, and the value we store is the record Id (`format_user_response` emits
+`userId: user["Id"]`). Reproduced on every gate run:
+
+| Call | Result |
+|---|---|
+| `GET /admissions/{userId}` | 200 — returns the record, including `Application_No__c` |
+| `GET /admissions/{userId}/documents` | **404** `Application <id> was not found` |
+| `GET /admissions/{application_no}/documents` | 200 |
+
+`lookup-or-create` mints the application number separately (`APP-<10 hex>`) and **never returns
+it**, so it is resolved once via the Id-keyed `GET /admissions/{userId}` and cached on the lead
+(`leads.crm_application_no`, cleared whenever the CRM link changes). Live data: 202 rows, 200
+carrying `TESTAPP2027xxx` and 2 carrying `APP-*`; none carries the record Id.
+
+### R19 — `Document_Type__c` is a restricted picklist with no offer-letter value
+
+Read from Salesforce field metadata (`--describe-only`), not inferred: `Document_Type__c` and
+`Source__c` are **both restricted picklists**. Their vocabulary is
+`{Academic Transcript, Resume, Financial Document, ID Document, Admission Call Recording,
+Chatbot Conversation Record, Test Score, Recommendation Letter, Other, 10th Marksheet,
+12th Marksheet, Diploma Marksheet, Bachelor's Last-Semester Result, IELTS Score,
+Diploma Last-Semester Result}` — there is **no offer-letter value**, and `Source__c` allows only
+`Internal Upload`, which is what we send.
+
+An out-of-vocabulary value fails as a 500 (`INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST`), i.e. an
+R16-class permanent failure that no retry can fix. `CRM_OFFER_DOCUMENT_TYPE` therefore ships as
+`Other` — the only honest fit today — and should be changed to `Offer Letter` once an admin adds
+it to the picklist (the org already has dedicated values for system artifacts, e.g.
+`Admission Call Recording`, so this fits the existing pattern).
+
+**Consequence for the duplicate check:** because the value we must use is a catch-all, matching
+existing documents on `document_type` would suppress the upload for any student who happens to
+have an unrelated `Other` document. The rule keys on our own file-name prefix
+(`Offer_Letter_<offer-id>.pdf`) instead — precise, and independent of a picklist we do not own.
+
+### Other live findings
+
+* **`/complete` is not idempotent.** It creates the `ContentVersion`, reads it back, then
+  deletes the session directory; a 500 after the create would duplicate the document on retry.
+  It is the one call sent with `is_create=True`, so the client refuses to retry it, and an
+  ambiguous outcome is recorded as `crm_upload_status='unknown'` — which tells an operator to go
+  and look, where `'failed'` would have told them not to bother.
+* **A fields-only init encodes as `application/x-www-form-urlencoded`,** not multipart — httpx
+  treats an empty `files` as absent (`httpx/_content.py:211` at the pinned 0.28.1). Verified
+  against the route, which parses both and answers 400 "Application ... was not found" for
+  either, i.e. all five `Form(...)` fields arrive. The chunk call is genuinely multipart.
+* **`GET /admissions/{id}` answers a bad id with 500, not 404,** so the resolver runs with
+  `retries=0`: at the default three retries one stale id would record four failures against a
+  breaker whose threshold is five, pausing every other CRM call in the app.
+* **Residue, stated rather than hidden:** each successful upload leaves one `ContentVersion`.
+  There is no delete route, and deleting the Customer may orphan it. The gate prints every id it
+  created and the exact REST call to remove it by hand.
+
+### Not yet done
+
+* `push_status` remains unwired — neither `offerLetterReleased` nor `offerLetterAccepted` is
+  pushed when an offer is sent or accepted.
+* The offer idempotency guard is still a no-op: `service.py:150` passes
+  `within_hours=minutes / 60.0` and `offers/models.py:599` interpolates `int(within_hours)`, so
+  `OFFER_GUARD_MINUTES=1` becomes `INTERVAL '0 hours'` and the guard never fires. A student who
+  types "done" twice gets two offers. Flagged, deliberately not changed (it alters sending
+  behaviour); the prefix rule above stops the *second* offer becoming a second CRM document.
+* Gate 4 proves the module and the real API; a full end-to-end run through the running app
+  (Postgres + `CRM_ENABLED=true` + restart) is still a manual step.
+
+---
+
+## 1c. Gates 4, 5 & 6 — every conversation channel, run live 2026-09-12
+
+Only WhatsApp (Phase 3) had ever been wired, so voice and web chat left no trace in Salesforce.
+That was observed, not theorised: a web-chat conversation (Pradeep, `pradeepdubey@test.com`, MBA)
+produced and delivered an offer letter while `leads.crm_user_id` stayed `NULL` and the CRM held no
+row for `+917757057985`.
+
+All three remaining channels are now wired through the same `link_conversation` entry point.
+
+| Gate | Harness | Result |
+|---|---|---|
+| 6 — web chat | `scripts/verify_gate6_webchat.py` | **6 PASS, 0 FAIL** |
+| 4 & 5 — voice | `scripts/verify_gate45_voice.py` | **5 PASS, 0 FAIL**, 2 clauses explicitly deferred |
+
+### The web chat now reaches the CRM
+
+The Streamlit chat mints a conversation id in the browser tab and never sent it anywhere; the lead
+endpoints were CRM-blind. The id now travels with the lead write, and the FastAPI handler links the
+person in the background — backgrounded because Streamlit's HTTP timeout is shorter than a cold CRM
+call with retries, and all the chat needs back is the lead id.
+
+Proof, per run: the person appears in Salesforce with `Conversation_ID__c` equal to the chat's id;
+a second write does not duplicate them; a lead with **no** conversation id creates nothing (the
+dashboard's add-lead form posts to the same endpoint, and inventing an id would be worse than
+declining); and — the seam that matters — `leads.crm_user_id` is populated, which is what makes
+`app/crm/documents.py` stop skipping the offer PDF.
+
+### Voice: the caller's number now crosses the boundary
+
+Twilio Media Streams does not put the caller's number in the `start` event, the webhooks discarded
+`From`, and the post-call extractor never even asks for a phone (`app/database.py:175-180`) — so
+`resolved_phone` was always `""` and every inbound call created a lead keyed on the empty string.
+That also meant inbound sentiment could not be keyed to a lead (blocker B6).
+
+The chain is now: webhook `?From=` → `<Parameter name="phone">` on `<Stream>` → the `start` event →
+the session registry → the CRM. Both directions, verified clause by clause. Outbound additionally
+carries the lead id it dialled, so it links at call start with a full identity from the lead row.
+
+**Not proven by the gate, and stated as such in its output:** the mid-call CRM link itself, which
+needs real audio through STT. It is covered by `tests/test_crm_voice.py` (15 tests) and needs one
+live call to confirm for real.
+
+### The R18 workaround: phone-only people can now be linked
+
+The API cannot return a record whose email is empty (`UserResponse.email` is required; the
+admissions model has it optional). A phone-only person therefore answered 500 on every read — the
+row is created, but unreachable.
+
+`sync.lookup_or_create` now falls back, **only after the normal lookup has failed and only when
+there is a phone**, to finding the person in `GET /admissions` by normalised number. Verified live:
+it returned `0o6T100000000UfIAI` for a phone-only identity, whose row showed `Email__c: None`,
+`Phone__c: +14155550188`, `Course__c: MBA`. No fabricated data; the real fix is still one line
+upstream (make `UserResponse.email` optional), after which this can be deleted.
+
+Cost: `GET /admissions` has no server-side filter, so a phone-only link is an O(all rows) fetch —
+204 today. Worth watching as the org grows.
+
+### Also fixed on the way
+
+* `_handle_disconnect` now prefers the carrier number over the extraction, so calls stop creating
+  leads with an empty phone, and the CRM id reaches the conversation row.
+* The offer path recorded every conversation as `channel="whatsapp"` — including offers generated
+  from the web chat. It now records the channel the request came from.
+* The web chat's interaction log dropped its `conversation_id`, so every exchange became its own
+  conversation row with a fresh uuid. It is carried through now.
+* Background CRM work goes through one helper (`app/crm/tasks.py::spawn`) instead of three copies of
+  the same "keep a strong reference so the task is not garbage-collected" idiom.
+
+---
+
+## 1d. Gate 7 — status sync, run live 2026-09-13
+
+The CRM used to contradict itself: it held a released offer letter while reporting
+`Offer_Letter_Released__c = False`, and a student who switched to MBA stayed on "Computer Science"
+— because program interest only ever reached Salesforce inside `lookup-or-create`, at create time
+and never again. Nothing pushed sentiment, and `flush_outbox` had a docstring claiming a scheduler
+called it when no scheduler had ever been written.
+
+`scripts/verify_gate7_status.py` drives `app/crm/status.py` against the live API and **re-reads the
+record** for every clause. Last run: **15 PASS, 0 FAIL**.
+
+| Clause | Result |
+|---|---|
+| C1 a changed program reaches `Course__c` | ✅ |
+| C2 an offer release moves `Offer_Status__c` / `Offer_Sent_At__c` / `Offer_Letter_Released__c` / `Admission_Status__c` together | ✅ |
+| C3 accepting → `ACCEPTED` / `Accepted` / `Approved` | ✅ |
+| C4 declining → `NOT_ACCEPTED` / `Declined` / `Rejected` | ✅ |
+| C5 a lapsed offer → `Expired` | ✅ |
+| C6 sentiment lands on both category fields, each with its own spelling | ✅ `AT-RISK` and `AT RISK` |
+| C7 **a CRM outage loses nothing** — queued, then replayed | ✅ 3 queued, 3 succeeded |
+| C8 a deleted record is dropped, not retried forever | ✅ |
+| intact — identity fields after seven status writes | ✅ untouched |
+
+**One write route, and one trap.** `PATCH /admissions/{id}` is the only route that can carry
+`Course__c` and the offer fields (`PATCH /users/{id}/status` writes three fields and no more). It
+is a true partial update — but `exclude_unset` is not `exclude_none`, so **an explicit `null`
+clears the field**, while on the *users* route a null means "leave alone". Two PATCH endpoints with
+opposite null semantics; the dry run reproduced both. The client therefore sends only the keys it
+means to change, enforced by an allowlist, and never a null.
+
+**End to end, through the running app** (the exact requests the web chat makes): a first save with
+"Computer Science" → `Course__c='Computer Science'`; the student switching to MBA →
+**`Course__c='MBA'`**. The offer chain is confirmed by the `:8098` watcher rather than by our own
+logs: `Offer_Letter_Released__c: False -> True` with the PDF attached.
+
+**Two bugs the live runs caught that unit tests did not:**
+
+1. `link_conversation` returns early for an already-linked lead — and that early return is the only
+   path a *returning* student takes, so a course sync placed after the lookup would never run for
+   the one case it exists to fix. Fixed, with a regression test.
+2. The field diff in the dry run initially flagged Salesforce's own audit fields
+   (`LastModifiedDate`, `SystemModstamp`, `LastViewedDate`) as collateral damage. They are not: only
+   the business fields moved.
+
+**The first thing the new worker ever did in production** was deliver a write that had been sitting
+in the queue — a `Course__c` update for a real record, queued by a code path that had given up on
+it, replayed on startup: `1 sent, 0 retrying, 0 dropped`.
+
+**Out of scope, unchanged:** the offer idempotency guard no-op, and any change to the API repo —
+the seven requests for its owner are in `doc/salesforce/API_OWNER_REQUESTS.md`.
+
 ## 2. Subtasks and what was actually done
 
 ### Phase 0 — Verify & stage the upstream API ✅

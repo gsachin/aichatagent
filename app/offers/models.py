@@ -515,6 +515,136 @@ async def list_offer_letters(lead_id: str = "") -> list:
         return []
 
 
+async def get_offer_crm_upload(offer_id: str) -> dict:
+    """
+    The CRM upload state for one offer, or empty fields if never attempted.
+
+    ``status`` is what an operator needs when the log line has scrolled away:
+    "" (never attempted, or the CRM is off), "uploaded", "failed", or "unknown"
+    — the last meaning a ``/complete`` returned 500 after the document may
+    already have been created, so someone must go and look in the CRM.
+    """
+    empty = {"document_id": "", "status": "", "uploaded_at": None}
+    if not offer_id:
+        return empty
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return empty
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT crm_document_id, crm_upload_status, crm_uploaded_at "
+                "FROM offer_letters WHERE id = %s",
+                (offer_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return empty
+        return {
+            "document_id": row[0] or "",
+            "status": row[1] or "",
+            "uploaded_at": row[2],
+        }
+    except Exception:
+        logger.exception("Failed to read CRM upload state for offer")
+        return empty
+
+
+async def set_offer_crm_upload(
+    offer_id: str, *, document_id: str = "", status: str = ""
+) -> bool:
+    """
+    Record the outcome of a CRM document upload against the offer row.
+
+    Called for failures too, not just successes: knowing that an upload was
+    attempted and failed is what stops an operator from assuming silence means
+    the document is missing.
+    """
+    if not offer_id:
+        return False
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return False
+        set_parts = ["updated_at = %s"]
+        values: list = [_now_iso()]
+        if document_id:
+            set_parts.append("crm_document_id = %s")
+            values.append(document_id)
+        if status:
+            set_parts.append("crm_upload_status = %s")
+            values.append(status)
+        if status == "uploaded":
+            set_parts.append("crm_uploaded_at = %s")
+            values.append(_now_iso())
+        values.append(offer_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE offer_letters SET {', '.join(set_parts)} WHERE id = %s",
+                values,
+            )
+        conn.close()
+        return True
+    except Exception:
+        logger.exception("Failed to record CRM upload state for offer")
+        return False
+
+
+async def list_expired_offers(limit: int = 20) -> list[dict]:
+    """
+    Offers that have lapsed unanswered and were never marked expired in the CRM.
+
+    Only ``status = 'sent'`` qualifies: an accepted or rejected offer has an
+    answer, and expiring it would overwrite that. ``crm_expired_at`` is what keeps
+    this idempotent — without it the sweep would re-push the same expiry forever.
+    """
+    try:
+        conn = _get_db()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, lead_id, program, valid_until FROM offer_letters "
+                "WHERE valid_until IS NOT NULL AND valid_until < CURRENT_DATE "
+                "  AND status = 'sent' AND crm_expired_at IS NULL "
+                "ORDER BY valid_until ASC LIMIT %s",
+                (max(1, int(limit)),),
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [
+            {"id": str(r[0]), "lead_id": str(r[1]) if r[1] else "",
+             "program": r[2] or "", "valid_until": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        logger.exception("Failed to list expired offers")
+        return []
+
+
+async def mark_offer_expired(offer_id: str) -> bool:
+    """Record that the CRM has been told this offer lapsed."""
+    if not offer_id:
+        return False
+    try:
+        conn = _get_db()
+        if not conn:
+            return False
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE offer_letters SET crm_expired_at = %s, updated_at = %s WHERE id = %s",
+                (_now_iso(), _now_iso(), offer_id),
+            )
+        conn.close()
+        return True
+    except Exception:
+        logger.exception("Failed to mark an offer expired")
+        return False
+
+
 async def update_offer_letter_status(
     offer_id: str,
     status: str,

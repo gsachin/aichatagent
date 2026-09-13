@@ -50,6 +50,18 @@ logger = logging.getLogger("crm.identity")
 CRM_SENTIMENT_VOCAB = frozenset({"NURTURE", "HOT", "WARM", "AT-RISK", "DISQUALIFIED"})
 CRM_OFFER_ACCEPTED_VOCAB = frozenset({"UNKNOWN", "ACCEPTED", "NOT_ACCEPTED"})
 
+# The offer lifecycle, from the org's own metadata (read 2026-09-12). Three
+# fields carry it and they are all restricted picklists — the API validates
+# none of them, so a wrong value fails as a 500 at write time.
+CRM_OFFER_STATUS_VOCAB = frozenset({"Not Sent", "Offered", "Accepted", "Declined", "Expired"})
+CRM_ADMISSION_STATUS_VOCAB = frozenset(
+    {"Approved", "Rejected", "Cancelled", "Documents Pending", "Under Review"}
+)
+# Same categories as Sentiment__c, spelled differently: this field uses a SPACE
+# in "AT RISK" where Sentiment__c uses a hyphen. Copying one to the other is the
+# mistake this constant exists to prevent.
+CRM_LEAD_CATEGORY_VOCAB = frozenset({"HOT", "WARM", "NURTURE", "AT RISK", "DISQUALIFIED"})
+
 # app/sentiment/categorizer.py:31-35 → Sentiment__c.  A clean .upper() for all
 # five, including At-Risk, which already carries the hyphen the CRM uses. (The
 # separate Lead_Category__c field spells it "AT RISK" — do not copy across.)
@@ -66,6 +78,35 @@ SENTIMENT_MAP: dict[str, str] = {
 OFFER_ACCEPTED_MAP: dict[str, str] = {
     "accepted": "ACCEPTED",
     "rejected": "NOT_ACCEPTED",
+}
+
+# Offer lifecycle. The app's own vocabulary is the offer row's status
+# ("sent"/"accepted"/"rejected") and the passing of valid_until; these are the
+# only places a lifecycle state comes from, so the keys here are deliberately
+# few rather than a general-purpose translator.
+OFFER_STATUS_MAP: dict[str, str] = {
+    "sent": "Offered",
+    "offered": "Offered",
+    "accepted": "Accepted",
+    "rejected": "Declined",
+    "declined": "Declined",
+    "expired": "Expired",
+}
+
+# What the admission itself is doing. Only the states this app can observe are
+# mapped: we know when documents are still owed, when an offer is out awaiting a
+# decision, and what the student answered. "Cancelled" and "Rejected-by-staff"
+# are the admissions team's calls, not ours to infer.
+ADMISSION_STATUS_MAP: dict[str, str] = {
+    "documents_pending": "Documents Pending",
+    "documents pending": "Documents Pending",
+    "awaiting_documents": "Documents Pending",
+    "under_review": "Under Review",
+    "awaiting_decision": "Under Review",
+    "accepted": "Approved",
+    "approved": "Approved",
+    "rejected": "Rejected",
+    "declined": "Rejected",
 }
 
 _MAX_NAME = 255
@@ -215,6 +256,81 @@ def map_offer_accepted(value: object) -> str | None:
 
     logger.warning(f"crm.identity: {text!r} is not a valid Offer_Letter_Accepted__c value")
     return None
+
+
+def map_offer_status(value: object) -> str | None:
+    """
+    Map an offer event onto ``Offer_Status__c``. Returns None if unrecognised.
+
+    Accepts the offer row's own status ("sent"/"accepted"/"rejected"), the
+    lifecycle words ("offered"/"declined"/"expired"), or an already-canonical
+    value. Never returns a value outside ``CRM_OFFER_STATUS_VOCAB``.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    mapped = OFFER_STATUS_MAP.get(text.lower())
+    if mapped:
+        return mapped
+
+    for candidate in CRM_OFFER_STATUS_VOCAB:
+        if candidate.lower() == text.lower():
+            return candidate
+
+    logger.warning(
+        f"crm.identity: {text!r} is not a valid Offer_Status__c value — not sending"
+    )
+    return None
+
+
+def map_admission_status(value: object) -> str | None:
+    """
+    Map an admission state onto ``Admission_Status__c``. Returns None otherwise.
+
+    An already-canonical value passes through; the app's own words come from
+    ``ADMISSION_STATUS_MAP``. Nothing here invents a state the app cannot
+    observe — the convenience wrappers in ``status.py`` ask only for
+    "Documents Pending", "Under Review", "Approved" and "Rejected", leaving
+    "Cancelled" to the admissions team.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    mapped = ADMISSION_STATUS_MAP.get(text.lower().replace("-", "_"))
+    if mapped:
+        return mapped
+
+    for candidate in CRM_ADMISSION_STATUS_VOCAB:
+        if candidate.lower() == text.lower():
+            return candidate
+
+    logger.warning(
+        f"crm.identity: {text!r} is not a valid Admission_Status__c value — not sending"
+    )
+    return None
+
+
+def map_lead_category(value: object) -> str | None:
+    """
+    Map a sentiment category onto ``Lead_Category__c``.
+
+    Same categories as ``Sentiment__c`` but spelled with a space: "AT RISK", not
+    "AT-RISK". The two fields are written from the same source, which is exactly
+    why the difference is worth an explicit function rather than a copy.
+    """
+    sentiment = map_sentiment(value)
+    if sentiment is None:
+        return None
+    if sentiment == "AT-RISK":
+        return "AT RISK"
+    # Everything else happens to share the spelling; assert it rather than assume.
+    return sentiment if sentiment in CRM_LEAD_CATEGORY_VOCAB else None
 
 
 # ── The identity object ──────────────────────────────────────────────────────

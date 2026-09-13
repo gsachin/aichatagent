@@ -143,6 +143,54 @@ class Settings:
     CRM_OUTBOX_MAX_ATTEMPTS: int = field(
         default_factory=lambda: int(_env("CRM_OUTBOX_MAX_ATTEMPTS", "10"))
     )
+    # How often the worker drains the outbox and sweeps lapsed offers. Slower
+    # than the other loops on purpose: nothing here is time-critical, and each
+    # tick is a database query plus, when there is work, a CRM call.
+    CRM_OUTBOX_POLL_INTERVAL: int = field(
+        default_factory=lambda: int(_env("CRM_OUTBOX_POLL_INTERVAL", "60"))
+    )
+
+    # ── Offer-letter document upload ───────────────────────────────
+    # Separate switch from CRM_ENABLED. The document upload is the one CRM
+    # write that leaves residue we cannot remove — the API has no delete route
+    # for a ContentVersion — so an operator needs to be able to stop it alone
+    # while status sync keeps running.
+    CRM_OFFER_UPLOAD_ENABLED: bool = field(
+        default_factory=lambda: _env("CRM_OFFER_UPLOAD_ENABLED", "true").lower() == "true"
+    )
+    # These land in the ContentVersion fields Document_Type__c / Source__c. The
+    # API validates neither (both are free strings), but both are restricted
+    # picklists in the dev org, so an out-of-vocabulary value fails as a 500
+    # (R16) rather than a 400 — which is why they are settings, not constants.
+    #
+    # "Other" is deliberate, and not the intent: the org's Document_Type__c has
+    # no offer-letter value (verified against Salesforce field metadata, see
+    # scripts/verify_offer_document_upload.py --describe-only). "Offer Letter"
+    # becomes correct — and should replace this default — once an admin adds it
+    # to the picklist. Until then "Other" is the only honest fit among
+    # {Academic Transcript, Resume, Financial Document, ID Document, Admission
+    # Call Recording, Chatbot Conversation Record, Test Score, Recommendation
+    # Letter, Other, 10th/12th/Diploma Marksheet, Bachelor's Last-Semester
+    # Result, IELTS Score, Diploma Last-Semester Result}.
+    CRM_OFFER_DOCUMENT_TYPE: str = field(
+        default_factory=lambda: _env("CRM_OFFER_DOCUMENT_TYPE", "Other")
+    )
+    # The only Source__c value the dev org uses today, and it is allowed.
+    CRM_OFFER_DOCUMENT_SOURCE: str = field(
+        default_factory=lambda: _env("CRM_OFFER_DOCUMENT_SOURCE", "Internal Upload")
+    )
+    # Offer PDFs are ~2.4 KB, so this is one chunk in practice. The cap exists so
+    # a future large document still uploads rather than failing the size check.
+    CRM_UPLOAD_CHUNK_BYTES: int = field(
+        default_factory=lambda: int(_env("CRM_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+    )
+    # Per-request override for the three upload calls. The shared read timeout
+    # above is sized for a phone call; /complete performs a synchronous
+    # ContentVersion create (base64-encoding the file and re-fetching an OAuth
+    # token first), which does not fit in 5s.
+    CRM_UPLOAD_TIMEOUT_S: float = field(
+        default_factory=lambda: float(_env("CRM_UPLOAD_TIMEOUT_S", "30"))
+    )
 
 
 # Module-level singleton

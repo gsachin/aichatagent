@@ -71,6 +71,39 @@ CREATE INDEX IF NOT EXISTS idx_crm_outbox_due
     WHERE last_error IS NULL OR attempts < 10;
 """
 
+# ── Offer-letter document upload (plan §D7) ──────────────────────────────────
+#
+# The application number the document routes address is NOT the userId we store:
+# they resolve the path segment with `WHERE Application_No__c = X`, while
+# `crm_user_id` holds the Salesforce record Id. So the id is resolved once via
+# `GET /admissions/{userId}` and cached here — a hint that saves a round trip,
+# never a source of truth (it is cleared whenever the CRM link changes).
+ALTER_LEADS_CRM_APPLICATION_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_application_no VARCHAR(64);
+"""
+
+# The last program we told the CRM about. ``Course__c`` is free text and the CRM
+# is only updated when this differs, so the per-turn link does not become a
+# per-turn write.
+ALTER_LEADS_CRM_COURSE_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_course VARCHAR(255);
+"""
+
+# offer_letters is created by app/offers/schema.py, but the CRM integration owns
+# the columns CRM writes — the same precedent as the conversations ALTER above.
+# This is why ALL_CRM_SQL must stay last in init_db(): it ALTERs tables that the
+# offers schema creates.
+#
+# crm_upload_status separates "never attempted" ('') from 'uploaded', 'failed'
+# and 'unknown' — the last being a /complete that returned 500 after the
+# ContentVersion may already exist, where the operator must go and look.
+ALTER_OFFER_LETTERS_CRM_SQL = """
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_document_id   VARCHAR(32);
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_upload_status VARCHAR(16);
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_uploaded_at   TIMESTAMP WITH TIME ZONE;
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_expired_at    TIMESTAMP WITH TIME ZONE;
+"""
+
 ALL_CRM_SQL = "\n".join(
     [
         ALTER_LEADS_SQL,
@@ -78,5 +111,8 @@ ALL_CRM_SQL = "\n".join(
         BACKFILL_CONVERSATIONS_SQL,
         CREATE_OUTBOX_TABLE,
         CREATE_CRM_INDEXES_SQL,
+        ALTER_LEADS_CRM_APPLICATION_SQL,
+        ALTER_LEADS_CRM_COURSE_SQL,
+        ALTER_OFFER_LETTERS_CRM_SQL,
     ]
 )

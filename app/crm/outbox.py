@@ -33,7 +33,14 @@ from typing import Any, Callable, Awaitable
 logger = logging.getLogger("crm.outbox")
 
 # Replay is only ever attempted for ops this module understands.
-SUPPORTED_OPS = frozenset({"status"})
+#
+# "status"  — the three-field update on /users/{id}/status.
+# "profile" — the wider record update on /admissions/{id} (program, offer
+#             lifecycle, admission status). Kept separate because the two routes
+#             have OPPOSITE null semantics: an explicit null means "leave alone"
+#             on the users route and "clear the field" on the admissions one, so
+#             a replay must know which route it is replaying to.
+SUPPORTED_OPS = frozenset({"status", "profile"})
 
 # Backoff between replay attempts, indexed by attempt count.
 _REPLAY_BACKOFF_S = (30, 120, 600, 1800, 3600, 7200)

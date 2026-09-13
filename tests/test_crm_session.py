@@ -421,12 +421,22 @@ def test_registry_never_touches_the_network():
     )
 
 
-def test_crm_is_disabled_by_default():
-    """Everything after Phase 1 is gated on this switch being explicitly enabled."""
-    from app.config import settings
+def test_crm_is_disabled_by_default(monkeypatch):
+    """
+    Everything after Phase 1 is gated on this switch being explicitly enabled.
 
-    assert settings.CRM_ENABLED is False
-    assert settings.CRM_IDLE_WINDOW_HOURS == 6.0
+    The code default is what matters here, so this builds a Settings with the
+    environment variable removed rather than reading the running singleton: a
+    deployment that opts in via .env has not changed the default, and these
+    tests must not have to be edited every time one does.
+    """
+    monkeypatch.delenv("CRM_ENABLED", raising=False)
+    monkeypatch.delenv("CRM_IDLE_WINDOW_HOURS", raising=False)
+    from app.config import Settings
+
+    fresh = Settings()
+    assert fresh.CRM_ENABLED is False
+    assert fresh.CRM_IDLE_WINDOW_HOURS == 6.0
 
 
 def test_migration_is_additive_and_idempotent():

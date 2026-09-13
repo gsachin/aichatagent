@@ -52,6 +52,50 @@ def enabled() -> bool:
     return bool(settings.CRM_ENABLED)
 
 
+# ── R18 recovery ─────────────────────────────────────────────────────────────
+
+async def _recover_user_id_by_phone(client, phone: str) -> str:
+    """
+    Find a person through the admissions listing, by phone. Returns "" if absent.
+
+    **Why this exists.** ``UserResponse`` declares ``email: str`` as required, but
+    Salesforce stores an empty string as null — so a record created without an
+    email answers 500 on *every* read and can never be retrieved through
+    ``/users``. The row is created anyway (serialisation fails after the handler
+    returns), so the person exists but is unreachable. That is R18.
+
+    The admissions endpoints use a different response model, where ``Email__c`` is
+    optional, so the same row reads back fine there. This is the workaround.
+
+    Deliberately narrow: reached only after the normal lookup has already failed,
+    and only when the identity has a phone to match on. The listing carries no
+    server-side filter, so this is an O(all rows) fetch — acceptable at the dev
+    org's size, and the real fix is one line upstream (make ``UserResponse.email``
+    optional), after which this can be deleted.
+    """
+    try:
+        records = await client.get("/admissions")
+    except CrmError as exc:
+        logger.warning(f"crm.sync: R18 recovery could not list admissions — {exc}")
+        return ""
+
+    if not isinstance(records, list):
+        logger.warning(
+            f"crm.sync: R18 recovery got an unexpected listing shape "
+            f"({type(records).__name__}) — giving up"
+        )
+        return ""
+
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        if identity_mod.normalize_phone(row.get("Phone__c")) == phone:
+            user_id = str(row.get("Id") or "")
+            if user_id:
+                return user_id
+    return ""
+
+
 # ── lookup-or-create ─────────────────────────────────────────────────────────
 
 async def lookup_or_create(identity: ChannelIdentity) -> str | None:
@@ -78,7 +122,7 @@ async def lookup_or_create(identity: ChannelIdentity) -> str | None:
     payload = identity.lookup_payload()
     client = get_client()
 
-    async def _do_lookup() -> str | None:
+    async def _attempt_lookup() -> str | None:
         try:
             data = await client.post("/users/lookup-or-create", payload, is_create=True)
         except CrmUnknownStateError as exc:
@@ -116,6 +160,24 @@ async def lookup_or_create(identity: ChannelIdentity) -> str | None:
             )
             return None
         return user_id
+
+    async def _do_lookup() -> str | None:
+        user_id = await _attempt_lookup()
+        if user_id:
+            return user_id
+
+        # R18: the person may exist in the CRM and still be unreadable through
+        # /users, because we had no email to give them. If we have a phone, the
+        # admissions listing can still find them.
+        if identity.phone_number:
+            recovered = await _recover_user_id_by_phone(client, identity.phone_number)
+            if recovered:
+                logger.info(
+                    f"crm.sync: {identity.describe()} recovered as {recovered} from the "
+                    f"admissions listing (R18 workaround — no email on the record)"
+                )
+                return recovered
+        return None
 
     user_id = await client.single_flight(identity.dedupe_key(), _do_lookup)
 
@@ -172,6 +234,13 @@ async def link_conversation(
         except Exception:
             logger.exception("crm.sync: could not read the existing CRM link")
     if existing:
+        # The link is settled, but the *program* may not be. lookup-or-create
+        # only ever writes Course__c when it creates a record, so a student who
+        # switches program after their first conversation would stay on their
+        # first answer forever — which is exactly what happened in production.
+        # This is the branch that catches it, because from the second turn
+        # onward it is the only branch that runs.
+        await sync_course(lead_id, existing, course or lead.get("program_interest") or "")
         return existing
 
     try:
@@ -202,6 +271,12 @@ async def link_conversation(
         except Exception:
             logger.exception("crm.sync: could not persist crm_user_id on the lead")
 
+    # The CRM took the link, so publish the program too. This runs once per link
+    # rather than once per turn: a program the CRM already holds is skipped, and
+    # a change is pushed.
+    if lead_id and ident.course:
+        await sync_course(lead_id, user_id, ident.course)
+
     # Keep the live session in step so the rest of this conversation can read
     # the id without another database round trip.
     #
@@ -216,6 +291,48 @@ async def link_conversation(
             live.crm_user_id = user_id
 
     return user_id
+
+
+# ── course ───────────────────────────────────────────────────────────────────
+
+async def sync_course(lead_id: str, crm_user_id: str, course: str) -> bool:
+    """
+    Publish a student's program interest, and skip the write if it is unchanged.
+
+    Program interest reaches the CRM only as part of ``lookup-or-create``, which
+    writes it **at create time and never again** — so a student who says "MBA"
+    after first asking about Computer Science stayed on Computer Science
+    forever. This is the write that fixes that.
+
+    The comparison is against the last value we pushed (``leads.crm_course``),
+    not against the CRM, so the common case costs a database read and no network
+    call. That matters: ``link_conversation`` runs on every turn of every channel.
+    """
+    wanted = str(course or "").strip()
+    if not lead_id or not crm_user_id or not wanted:
+        return False
+
+    try:
+        from app.leads.models import get_lead_crm_course, set_lead_crm_course
+
+        if await get_lead_crm_course(lead_id) == wanted:
+            return False  # already published
+    except Exception:
+        logger.exception("crm.sync: could not read the cached course — pushing anyway")
+        set_lead_crm_course = None  # type: ignore[assignment]
+
+    from app.crm.status import push_course
+
+    if not await push_course(crm_user_id, wanted):
+        return False
+
+    if set_lead_crm_course is not None:
+        try:
+            await set_lead_crm_course(lead_id, wanted)
+        except Exception:
+            logger.exception("crm.sync: could not cache the pushed course")
+    logger.info(f"crm.sync: course for {crm_user_id} published as {wanted!r}")
+    return True
 
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -324,7 +441,7 @@ async def replay(entry: dict) -> bool:
     retrying a write that can never succeed.
     """
     op = entry.get("op")
-    if op != "status":
+    if op not in ("status", "profile"):
         raise CrmPermanentError(f"unsupported outbox op {op!r}")
 
     user_id = entry.get("crm_user_id") or ""
@@ -334,6 +451,14 @@ async def replay(entry: dict) -> bool:
     body = entry.get("payload")
     if not isinstance(body, dict) or not body:
         raise CrmPermanentError(f"queued status entry has no usable payload: {body!r}")
+
+    if op == "profile":
+        # The wider record update. Its route treats an explicit null as "clear
+        # the field", so the payload must contain only real values — which is
+        # how it was built (see app/crm/status.py::_clean).
+        await get_client().patch(f"/admissions/{user_id}", body)
+        logger.info(f"crm.sync: replayed queued profile update for {user_id} — {sorted(body)}")
+        return True
 
     await get_client().patch(f"/users/{user_id}/status", body)
     logger.info(f"crm.sync: replayed queued status for {user_id} — {body}")

@@ -74,7 +74,10 @@ def test_offer_on_done_generates_and_confirms(monkeypatch):
 
     rec = _recorder()
 
-    async def generate(lead_id, force=False):
+    async def generate(lead_id, force=False, **kwargs):
+        # **kwargs so the stub does not pin the call signature: the real
+        # function also takes the channel and conversation id the offer is
+        # logged against.
         rec.calls.append(lead_id)
         return {"id": "o1", "program": "MBA"}
 

@@ -513,13 +513,139 @@ async def set_lead_crm_user_id(lead_id: str, crm_user_id: str) -> bool:
             conn.autocommit = True
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE leads SET crm_user_id = %s, crm_synced_at = NOW(), "
-                    "updated_at = NOW() WHERE id = %s",
+                    # crm_application_no is cleared here on purpose: it is
+                    # derived from crm_user_id, so a new link makes the cached
+                    # value a lie. Nothing else writes this column.
+                    "UPDATE leads SET crm_user_id = %s, crm_application_no = NULL, "
+                    "crm_synced_at = NOW(), updated_at = NOW() WHERE id = %s",
                     (crm_user_id, lead_id),
                 )
             return True
         except Exception:
             logger.exception("Failed to set crm_user_id on lead")
+            return False
+
+
+async def get_lead_crm_application_no(lead_id: str) -> str:
+    """
+    Read the cached CRM application number for a lead, or "" if not resolved yet.
+
+    This is the ``Application_No__c`` the admission API's document routes address
+    — *not* the userId (see ``app/crm/documents.py`` for why they differ). Cached
+    purely to save a round trip per offer; a miss is normal and expected.
+    """
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT crm_application_no FROM leads WHERE id = %s", (lead_id,)
+                )
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_application_no from lead")
+            return ""
+
+
+async def set_lead_crm_application_no(lead_id: str, application_no: str) -> bool:
+    """
+    Cache a resolved CRM application number. A hint, never a source of truth.
+
+    Passing "" clears it, which is how a stale value is discarded after the CRM
+    reports that the application no longer exists — without that, a lead whose
+    cached number has gone bad would be skipped forever.
+    """
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_application_no = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (application_no or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to cache crm_application_no on lead")
+            return False
+
+
+async def get_lead_sentiment_category(lead_id: str) -> str:
+    """
+    The categorizer's category for a lead ("Hot"/"Warm"/…), or "" if never scored.
+
+    A dedicated accessor because ``get_lead`` does **not** select the sentiment
+    columns — its SELECT stops at ``updated_at`` — so reading the category off a
+    lead dict silently yields nothing. That is exactly how the first version of
+    the CRM sentiment push failed: it looked like it worked and pushed nothing.
+    """
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_category FROM leads WHERE id = %s", (lead_id,))
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read current_category from lead")
+            return ""
+
+
+async def get_lead_crm_course(lead_id: str) -> str:
+    """The program we last told the CRM about, or "" if we never have."""
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT crm_course FROM leads WHERE id = %s", (lead_id,))
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_course from lead")
+            return ""
+
+
+async def set_lead_crm_course(lead_id: str, course: str) -> bool:
+    """
+    Remember the program the CRM now holds.
+
+    Only written after a successful push, so a failed write leaves the cache
+    stale and the next turn tries again.
+    """
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_course = %s, updated_at = NOW() WHERE id = %s",
+                    (course or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to cache crm_course on lead")
             return False
 
 

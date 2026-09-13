@@ -63,12 +63,18 @@ def sync_lead(
     phone: str = "",
     program: str = "",
     lead_id: str = "",
+    conversation_id: str = "",
 ) -> tuple[str, str]:
     """
     Ensure a lead row exists with the given profile data.
 
     Returns ``(lead_id_or_empty, error_message)`` — the second value is
     ``""`` on success, otherwise a human-readable error.
+
+    *conversation_id* is the chat's own id for this session. It is forwarded to
+    the backend, which is where the CRM link happens — Salesforce needs it to
+    name the conversation, and it must arrive on the turn that first supplies an
+    identifier (lookup-or-create is the only call that ever returns a userId).
 
     Strategy:
     1. If *lead_id* is known, PUT the data.
@@ -82,6 +88,7 @@ def sync_lead(
     if lead_id:
         updated = put_lead(lead_id, {
             "name": name, "email": email, "program_interest": program,
+            "conversation_id": conversation_id,
         })
         if updated:
             return updated.get("id", lead_id), ""
@@ -93,6 +100,7 @@ def sync_lead(
         "email": email,
         "program_interest": program,
         "source": "streamlit",
+        "conversation_id": conversation_id,
     })
     if not created:
         return lead_id, "backend server not reachable on port 8000"
@@ -104,10 +112,12 @@ def sync_lead(
     if lead_id and new_id != lead_id:
         put_lead(new_id, {
             "name": name, "email": email, "program_interest": program,
+            "conversation_id": conversation_id,
         })
     elif new_id:
         put_lead(new_id, {
             "name": name, "email": email, "program_interest": program,
+            "conversation_id": conversation_id,
         })
 
     return new_id, ""
@@ -119,6 +129,7 @@ def sync_program(
     email: str = "",
     phone: str = "",
     lead_id: str = "",
+    conversation_id: str = "",
 ) -> tuple[str, str]:
     """
     Persist *program_interest* to the backend.
@@ -126,4 +137,4 @@ def sync_program(
     Returns ``(lead_id_or_empty, error_message)``.
     Never loses data — always passes through :func:`sync_lead`.
     """
-    return sync_lead(name, email, phone, program, lead_id)
+    return sync_lead(name, email, phone, program, lead_id, conversation_id)

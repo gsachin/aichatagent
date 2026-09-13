@@ -52,11 +52,12 @@ import asyncio as _asyncio
 import base64
 import time as _time
 from datetime import datetime, timezone
+from xml.sax.saxutils import escape
 import json
 import logging
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -81,6 +82,7 @@ def _resolve_tunnel_host():
 _db_available = False
 _outbound_worker = None
 _follow_up_scheduler = None
+_crm_worker = None
 
 # AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so
 # while the assistant's TTS is playing we drop incoming caller audio —
@@ -250,12 +252,30 @@ async def lifespan(app_instance):
         logger.warning(f"Follow-up scheduler failed to start: {e}")
         _follow_up_scheduler = None
 
+    # Start the CRM outbox worker — drains failed CRM writes and expires lapsed
+    # offers. Until this existed, a transient CRM failure queued a row that
+    # nothing ever replayed.
+    try:
+        from app.crm.worker import CrmOutboxWorker
+        from app.config import settings
+
+        _crm_worker = CrmOutboxWorker(
+            poll_interval=settings.CRM_OUTBOX_POLL_INTERVAL
+        )
+        await _crm_worker.start()
+        logger.info("CRM outbox worker started")
+    except Exception as e:
+        logger.warning(f"CRM outbox worker failed to start: {e}")
+        _crm_worker = None
+
     yield
     # Shutdown
     if _outbound_worker:
         _outbound_worker.stop()
     if _follow_up_scheduler:
         await _follow_up_scheduler.stop()
+    if _crm_worker:
+        await _crm_worker.stop()
     logger.info("Server shutting down")
 
 
@@ -290,11 +310,33 @@ def _resolve_tunnel_host() -> str:
 
 
 # ── TwiML template ───────────────────────────────────────────────────
+#
+# `<Parameter>` is the only way the caller's number can reach the media stream:
+# Twilio Media Streams does not put the caller's number in the `start` event, so
+# it is captured at the webhook and threaded through as a custom parameter. The
+# value is XML-escaped on the way in (R14) — a `&` or `<` in a query parameter
+# would otherwise produce TwiML that Twilio rejects at call time.
+#
+# `<Stream>` is therefore no longer self-closing.
+
+def _stream_markup(host: str, phone: str = "") -> str:
+    """Build the `<Stream>` element, carrying the caller number when we have it."""
+    url = f"wss://{host}/ws/twilio"
+    if not phone:
+        return f'<Stream url="{url}" />'
+    # Inside an attribute, the double quote must be escaped too — saxutils
+    # handles &, < and > but leaves quotes alone.
+    return (
+        f'<Stream url="{url}">'
+        f'<Parameter name="phone" value="{escape(phone, {chr(34): "&quot;"})}" />'
+        f"</Stream>"
+    )
+
 
 TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="wss://{host}/ws/twilio" />
+        {stream}
     </Connect>
     <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back or try our WhatsApp channel for immediate assistance.</Say>
 </Response>"""
@@ -314,7 +356,7 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </Gather>
     <Say voice="Polly.Joanna">I didn't receive any input. Connecting you to the AI assistant now.</Say>
     <Connect>
-        <Stream url="wss://{host}/ws/twilio" />
+        {stream}
     </Connect>
     <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
 </Response>"""
@@ -471,6 +513,9 @@ async def websocket_twilio(websocket: WebSocket):
     tts_playing: bool = False
     transcript_parts: list[str] = []
     session = VoiceCallSession()  # direction defaults to "inbound"
+    # Created when the stream starts, once the caller's number is known. None
+    # until then, so a media frame arriving first cannot NameError.
+    call_linker = None
 
     try:
         while True:
@@ -503,12 +548,34 @@ async def websocket_twilio(websocket: WebSocket):
                 # Mint the conversation id now, while the call is starting. The CRM
                 # needs it here — lookup-or-create is the only endpoint that returns
                 # a userId, so this is the one chance to name the conversation.
-                # Inbound caller number is not available yet; that is Phase 5 (G1).
+                #
+                # The caller's number comes through as a <Parameter> on <Stream>
+                # (see _stream_markup): Media Streams does not carry it in the
+                # start event, so the webhook is the only place it exists.
+                caller_number = str(
+                    (start_payload.get("customParameters") or {}).get("phone") or ""
+                )
                 from app.crm import session as crm_session
 
-                conversation_id = crm_session.start(
-                    "inbound_call", stream_sid
-                ).conversation_id
+                inbound_session = crm_session.start(
+                    "inbound_call", stream_sid, phone_number=caller_number
+                )
+                conversation_id = inbound_session.conversation_id
+                logger.info(
+                    f"WS /ws/twilio: caller number {'received' if caller_number else 'missing'}"
+                )
+
+                # The CRM link for this call. It cannot happen yet — linking needs
+                # a name, and the caller has not said anything — so it is offered
+                # each turn below until it lands or runs out of tries.
+                from app.crm.voice import CallLinker
+
+                call_linker = CallLinker(
+                    channel="inbound_call",
+                    conversation_id=conversation_id,
+                    phone_number=caller_number,
+                    session_key=stream_sid,
+                )
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "inbound",
                     "conversation_id": conversation_id,
@@ -580,6 +647,19 @@ async def websocket_twilio(websocket: WebSocket):
                                 "dialogue": dialogue,
                             })
 
+                        # ── CRM: link as soon as the caller's name is known ──
+                        # Spawned, never awaited: this is a live call, and an
+                        # attempt runs an LLM extraction. The linker declines
+                        # once linked or out of tries, so the cost is bounded and
+                        # usually paid once. See app/crm/voice.py.
+                        if call_linker is not None and call_linker.can_try:
+                            from app.crm.tasks import spawn as _spawn_crm_task
+
+                            _spawn_crm_task(
+                                call_linker.attempt(" ".join(transcript_parts)),
+                                label=f"crm link for call {stream_sid}",
+                            )
+
                     # Send TTS audio chunks back through the WebSocket
                     session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
                     tts_playing = True
@@ -640,6 +720,13 @@ async def websocket_twilio(websocket: WebSocket):
             transcript_parts,
             ended.conversation_id if ended else "",
             channel=ended.channel if ended else "inbound_call",
+            # The carrier-supplied number, which the webhook threaded through
+            # the TwiML: it is the real caller, where the post-call extraction
+            # has only what the caller happened to say.
+            phone_number=ended.phone_number if ended else "",
+            # Set mid-call by the linker, if it managed to link.
+            crm_user_id=(call_linker.crm_user_id if call_linker else "")
+            or (ended.crm_user_id if ended else ""),
         )
         try:
             await websocket.close()
@@ -702,17 +789,48 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 }
                 session.call_id = stream_sid
                 # Mint the conversation id while the call is starting — see the
-                # inbound handler. The lead's phone number is known before dialling
-                # but is not threaded across the WebSocket yet; that is Phase 4 (G2).
+                # inbound handler. Unlike inbound, this call already knows who it
+                # dialled: the worker puts the lead id and number on the webhook
+                # URL, they arrive here as <Parameter>s, and the lead row gives
+                # us the name and email. So outbound can link at call start.
+                outbound_params = start_payload.get("customParameters") or {}
+                outbound_lead_id = str(outbound_params.get("leadId") or "")
+                outbound_phone = str(outbound_params.get("phone") or "")
                 from app.crm import session as crm_session
 
-                conversation_id = crm_session.start(
-                    "outbound_call", stream_sid
-                ).conversation_id
+                outbound_session = crm_session.start(
+                    "outbound_call",
+                    stream_sid,
+                    phone_number=outbound_phone,
+                    lead_id=outbound_lead_id,
+                )
+                conversation_id = outbound_session.conversation_id
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "outbound",
                     "conversation_id": conversation_id,
                 })
+                logger.info(
+                    f"WS /ws/twilio-outbound: lead id "
+                    f"{'received' if outbound_lead_id else 'missing'}, caller number "
+                    f"{'received' if outbound_phone else 'missing'}"
+                )
+
+                # ── CRM: link the person we dialled ──────────────────────
+                # Spawned so the greeting is never delayed by a CRM call, and
+                # because the whole dial already happened — nothing here is on
+                # the answer path.
+                if outbound_lead_id:
+                    from app.crm.tasks import spawn as _spawn_crm_task
+
+                    _spawn_crm_task(
+                        _link_outbound_call(
+                            lead_id=outbound_lead_id,
+                            conversation_id=conversation_id,
+                            phone_number=outbound_phone,
+                            session_key=stream_sid,
+                        ),
+                        label=f"crm link for outbound call {stream_sid}",
+                    )
 
                 # Send an initial AI greeting via TTS — identify caller + reason
                 # per the voice system prompt's outbound section.
@@ -846,26 +964,39 @@ async def websocket_twilio_outbound(websocket: WebSocket):
             transcript_parts,
             ended.conversation_id if ended else "",
             channel=ended.channel if ended else "outbound_call",
+            # We dialled this number, so it is authoritative — not a guess.
+            phone_number=ended.phone_number if ended else "",
+            # Set at call start by the outbound linker, if it linked.
+            crm_user_id=ended.crm_user_id if ended else "",
         )
 
 
 # ── HTTP: Outbound call voice TwiML (fetched by Twilio) ──────────────
 
 @app.api_route("/twilio/outbound-voice", methods=["GET", "POST"])
-async def twilio_outbound_voice_webhook():
+async def twilio_outbound_voice_webhook(
+    leadId: str = Query(""), phone: str = Query("")
+):
     """
     Twilio fetches this URL when an outbound call is answered.
     Returns TwiML that connects to the Media Streams WebSocket.
 
     Accepts both GET and POST because Twilio may use either method
     depending on how the outbound call is initiated.
+
+    `leadId`/`phone` are put on the URL by the outbound worker
+    (app/outbound/caller.py) and passed straight through as `<Parameter>`s, so
+    the media stream can tell who it is talking to and link them to the CRM.
     """
     host = _resolve_tunnel_host()
 
     from app.outbound.twiml import outbound_connect_twiml
 
-    twiml = outbound_connect_twiml(host)
-    logger.info(f"/twilio/outbound-voice: serving TwiML with host={host}")
+    twiml = outbound_connect_twiml(host, {"leadId": leadId, "phone": phone})
+    logger.info(
+        f"/twilio/outbound-voice: serving TwiML with host={host}, "
+        f"lead={'set' if leadId else 'none'}"
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -967,26 +1098,35 @@ async def twilio_outbound_status_callback(
 # ── HTTP: TwiML voice webhook ────────────────────────────────────────
 
 @app.get("/twilio/voice")
-async def twilio_voice_webhook():
+async def twilio_voice_webhook(From: str = Query("")):
     """
     Twilio voice webhook — serves IVR menu first.
     After the caller presses a digit (or timeout), connects to /ws/twilio.
+
+    `From` is the caller's number. These routes are GETs (Twilio is configured
+    that way), so it arrives as a query parameter and must be declared as one —
+    `Form` would silently never bind. It is threaded into the TwiML as a
+    `<Parameter>` because the media stream itself never carries it.
     """
     host = _resolve_tunnel_host()
-    twiml = TWIML_IVR_TEMPLATE.format(host=host)
-    logger.info(f"/twilio/voice: serving IVR menu with host={host}")
+    twiml = TWIML_IVR_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
+    logger.info(f"/twilio/voice: serving IVR menu with host={host}, caller={'set' if From else 'unknown'}")
     return Response(content=twiml, media_type="application/xml")
 
 
 @app.get("/twilio/voice/connect")
-async def twilio_voice_connect(Digits: str = ""):
+async def twilio_voice_connect(Digits: str = "", From: str = Query("")):
     """
     Called by Twilio after IVR <Gather> completes.
     Connects the caller to the AI WebSocket stream.
+
+    Twilio re-sends the original request's parameters on the `<Gather>` action,
+    so `From` is still present here — which is why it is declared again rather
+    than carried in a session.
     """
     host = _resolve_tunnel_host()
-    logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}")
-    twiml = TWIML_TEMPLATE.format(host=host)
+    logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}, caller={'set' if From else 'unknown'}")
+    twiml = TWIML_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -1218,7 +1358,9 @@ async def _whatsapp_chat_rag(question: str) -> str:
     return "Sorry, I couldn't process your question. Please try again."
 
 
-async def _whatsapp_offer_on_done(lead_id: str, lead_name: str) -> str:
+async def _whatsapp_offer_on_done(
+    lead_id: str, lead_name: str, conversation_id: str = ""
+) -> str:
     """
     Generate + send the offer letter when the student signals that all
     documents are uploaded ("done").
@@ -1249,7 +1391,9 @@ async def _whatsapp_offer_on_done(lead_id: str, lead_name: str) -> str:
                 "or PDFs of your transcript/marksheet and ID proof, then type 'done'."
             )
 
-        offer = await generate_and_send_offer(lead_id)
+        offer = await generate_and_send_offer(
+            lead_id, channel="whatsapp", conversation_id=conversation_id
+        )
         if offer:
             program = offer.get("program") or ""
             return (
@@ -1389,11 +1533,35 @@ async def _handle_offer_response(lead_id: str, status: str) -> dict | None:
         if offer and offer.get("status") == "sent":
             result = await update_offer_letter_status(offer["id"], status)
             logger.info(f"Offer {offer['id']}: student replied '{status}' via WhatsApp")
+            await _publish_offer_response(lead_id, status)
             return result
         return None
     except Exception:
         logger.exception("_handle_offer_response failed")
         return None
+
+
+async def _publish_offer_response(lead_id: str, status: str) -> None:
+    """
+    Tell the CRM what the student answered. Never raises.
+
+    The status keyword here is the app's own ("accepted"/"rejected"); the CRM
+    wants three different fields moved together (see ``push_offer_response``).
+    A lead with no CRM link is skipped — there is nothing to address.
+    """
+    try:
+        from app.leads.models import get_lead_crm_user_id
+
+        crm_user_id = await get_lead_crm_user_id(lead_id)
+        if not crm_user_id:
+            logger.info(f"Offer reply '{status}': lead {lead_id} has no CRM link — not published")
+            return
+
+        from app.crm.status import push_offer_response
+
+        await push_offer_response(crm_user_id, status)
+    except Exception:
+        logger.exception("Could not publish the offer response to the CRM")
 
 
 @app.post("/twilio/whatsapp")
@@ -1584,7 +1752,7 @@ async def twilio_whatsapp_webhook(
             if not lead_program:
                 answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
             else:
-                answer = await _whatsapp_offer_on_done(lead_id, lead_name)
+                answer = await _whatsapp_offer_on_done(lead_id, lead_name, conversation_id)
         # ── FIX: Capture program name from short replies (Critical bug fix) ──
         elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
             detected = _detect_meridian_program(msg_lower)
@@ -1658,7 +1826,7 @@ async def twilio_whatsapp_webhook(
 
 
 @app.post("/api/leads")
-async def api_create_lead(req: Request):
+async def api_create_lead(req: Request, background_tasks: BackgroundTasks):
     """Create a new lead."""
     try:
         body = await req.json()
@@ -1675,6 +1843,8 @@ async def api_create_lead(req: Request):
         source=body.get("source", "manual"),
         notes=body.get("notes", ""),
     )
+    if result and result.get("id"):
+        _schedule_chat_crm_link(background_tasks, body, result)
     return result or JSONResponse({"error": "Database unavailable"}, status_code=503)
 
 
@@ -1711,7 +1881,7 @@ async def api_get_lead(lead_id: str):
 
 
 @app.put("/api/leads/{lead_id}")
-async def api_update_lead(lead_id: str, req: Request):
+async def api_update_lead(lead_id: str, req: Request, background_tasks: BackgroundTasks):
     """Update a lead."""
     try:
         body = await req.json()
@@ -1732,8 +1902,109 @@ async def api_update_lead(lead_id: str, req: Request):
 
     result = await update_lead(lead_id, **kwargs)
     if result:
+        # The chat sends this on every program mention; the link is a no-op once
+        # the lead has a crm_user_id, so the repeat cost is one database read.
+        _schedule_chat_crm_link(background_tasks, {**body, "lead_id": lead_id}, result)
         return result
     return JSONResponse({"error": "Lead not found"}, status_code=404)
+
+
+# ── Web chat → CRM ───────────────────────────────────────────────────────────
+#
+# The Streamlit chat has no server-side session of its own: it mints a
+# conversation id in the browser tab (`app.py`) and posts it with its lead. That
+# id is what lets Salesforce name the conversation, and it is the reason this
+# runs here rather than in the Streamlit process — the CRM client, the database
+# and the circuit breaker all live in this one.
+
+def _schedule_chat_crm_link(
+    background_tasks: BackgroundTasks, body: dict, lead: dict
+) -> None:
+    """
+    Queue the CRM link for a web-chat lead. Never raises, never blocks the reply.
+
+    Backgrounded rather than awaited on purpose: Streamlit gives this request 10
+    seconds, and a cold CRM call with retries can outlast that — while all the
+    chat actually needs back is the lead id. A lead with no conversation id
+    (the dashboard's "add lead" form, a manual API call) declines inside
+    ``link_conversation`` with a logged reason, which is right: it is not a
+    conversation.
+    """
+    lead_id = str(lead.get("id") or "")
+    if not lead_id:
+        return  # nothing to attach the link to
+
+    try:
+        background_tasks.add_task(
+            _link_chat_lead,
+            lead_id=lead_id,
+            conversation_id=str(body.get("conversation_id") or ""),
+            phone_number=body.get("phone_number") or lead.get("phone_number") or "",
+            name=body.get("name") or lead.get("name") or "",
+            email=body.get("email") or lead.get("email") or "",
+            course=body.get("program_interest") or lead.get("program_interest") or "",
+        )
+    except Exception:
+        logger.exception("CRM link could not be scheduled for a web-chat lead (non-fatal)")
+
+
+async def _link_outbound_call(
+    *, lead_id: str, conversation_id: str, phone_number: str, session_key: str
+) -> None:
+    """
+    Link a dialled lead to the CRM at call start.
+
+    The advantage over inbound: the lead row already exists, so this links with
+    a full identity (name, email, program) straight from the database rather
+    than waiting for the caller to say who they are. The ``session_key`` is the
+    stream sid, so the live call can read the id back without another round trip.
+    """
+    try:
+        from app.crm import sync as crm_sync
+        from app.leads.models import get_lead
+
+        lead = await get_lead(lead_id)
+        if not lead:
+            logger.warning(f"Outbound call {session_key}: lead {lead_id} not found")
+            return
+
+        await crm_sync.link_conversation(
+            channel="outbound_call",
+            conversation_id=conversation_id,
+            lead=lead,
+            phone_number=phone_number or lead.get("phone_number") or "",
+            session_key=session_key,
+        )
+    except Exception:
+        logger.exception("CRM link failed for an outbound call (non-fatal)")
+
+
+async def _link_chat_lead(
+    *,
+    lead_id: str,
+    conversation_id: str,
+    phone_number: str,
+    name: str,
+    email: str,
+    course: str,
+) -> None:
+    if not lead_id:
+        return
+    try:
+        from app.crm import sync as crm_sync
+        from app.leads.models import get_lead
+
+        await crm_sync.link_conversation(
+            channel="chat",
+            conversation_id=conversation_id,
+            lead=await get_lead(lead_id),
+            phone_number=phone_number,
+            email=email,
+            name=name,
+            course=course,
+        )
+    except Exception:
+        logger.exception("CRM link failed for a web-chat lead (non-fatal)")
 
 
 @app.post("/api/leads/{lead_id}/call")
@@ -2238,7 +2509,8 @@ async def api_log_interaction(req: Request):
         "phone_number": "+91...",
         "transcript": "User: ...\nAssistant: ...",
         "channel": "streamlit" | "whatsapp" | "inbound_call" | "outbound_call",
-        "lead_id": "optional-uuid (if already known)"
+        "lead_id": "optional-uuid (echoed back; the lead is resolved by phone)",
+        "conversation_id": "optional-uuid — the chat's own id for this session"
     }
 
     If lead_id is provided, uses it directly. Otherwise, looks up by phone
@@ -2253,17 +2525,34 @@ async def api_log_interaction(req: Request):
     transcript = body.get("transcript", "").strip()
     channel = body.get("channel", "streamlit").strip()
     lead_id = body.get("lead_id", "").strip()
+    conversation_id = body.get("conversation_id", "").strip()
 
     if not transcript:
         return JSONResponse({"error": "transcript is required"}, status_code=422)
 
     try:
+        from app.leads.models import get_lead_by_phone, get_lead_crm_user_id
         from app.leads.service import log_interaction
+
+        # Attach the Salesforce user if this person is already linked, so the
+        # conversation row points at the same record the CRM holds.
+        crm_user_id = ""
+        try:
+            lead = await get_lead_by_phone(phone) if phone else None
+            if lead:
+                crm_user_id = await get_lead_crm_user_id(lead["id"])
+        except Exception:
+            logger.exception("Interaction log: could not read the CRM link")
 
         conv = await log_interaction(
             phone_number=phone,
             channel=channel,
             transcript=transcript,
+            # The chat's own conversation id, so a web chat is one conversation
+            # in the table — and carries the same id Salesforce was given.
+            # (lead_id is not passed: this helper upserts by phone.)
+            conversation_id=conversation_id or None,
+            crm_user_id=crm_user_id or None,
         )
         if conv:
             return {
@@ -2512,6 +2801,7 @@ async def api_upload_document(
     lead_id: str,
     file: UploadFile = File(...),
     doc_type: str = Form("other"),
+    conversation_id: str = Form(""),
 ):
     """Upload a document for a lead. Auto-triggers offer letter if conditions met."""
     from app.leads.models import get_lead
@@ -2563,7 +2853,13 @@ async def api_upload_document(
     from app.offers.service import evaluate_offer_readiness, generate_and_send_offer
     readiness = await evaluate_offer_readiness(lead_id)
     if readiness["ready"]:
-        offer_result = await generate_and_send_offer(lead_id)
+        # This endpoint is the web chat's upload path, so the offer it triggers
+        # is a chat conversation — not WhatsApp. The chat's own conversation id
+        # comes with the upload so the offer is logged against that
+        # conversation, rather than minting a second one the CRM never saw.
+        offer_result = await generate_and_send_offer(
+            lead_id, channel="chat", conversation_id=conversation_id
+        )
 
     return {
         "document": doc,
@@ -2672,6 +2968,11 @@ async def api_update_offer_status(offer_id: str, req: Request):
     from app.offers.models import update_offer_letter_status
     result = await update_offer_letter_status(offer_id, status)
     if result:
+        # A staff member recording a decision by hand is the same fact as the
+        # student typing ACCEPT — the CRM should not be able to tell them apart.
+        lead_id = str(result.get("lead_id") or "")
+        if lead_id:
+            await _publish_offer_response(lead_id, status)
         return result
     return JSONResponse({"error": "Offer letter not found"}, status_code=404)
 
@@ -2805,6 +3106,8 @@ async def _handle_disconnect(
     transcript_parts: list[str],
     conversation_id: str = "",
     channel: str = "inbound_call",
+    phone_number: str = "",
+    crm_user_id: str = "",
 ) -> None:
     """
     Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring.
@@ -2817,6 +3120,15 @@ async def _handle_disconnect(
     function used to hardcode "inbound_call", so every outbound call was logged
     as inbound — which is why the dashboard's outbound filter and icon existed
     but never matched anything.
+
+    ``phone_number`` is the carrier-supplied caller number. Before it was
+    threaded through, this handler read a phone from the LLM extraction — which
+    never asks for one — so every inbound call created a lead keyed on the empty
+    string and sentiment could not be attached to a lead at all (blocker B6).
+
+    ``crm_user_id`` is the Salesforce user the call was linked to mid-call, if it
+    was. Passing it through keeps the conversation row and the lead consistent
+    with the CRM.
     """
     transcript = " ".join(transcript_parts)
 
@@ -2831,32 +3143,68 @@ async def _handle_disconnect(
     except Exception:
         logger.exception("Lead extraction failed (non-fatal)")
 
-    # ── Step 2: Resolve lead_id from extracted data ────────────────
+    # ── Step 2: Resolve lead_id ────────────────────────────────────
+    #
+    # The carrier number is the identity to trust: it comes from Twilio, where
+    # the extraction below is whatever the caller said out loud. The LLM branch
+    # is kept for the channels that have no carrier number (the browser call
+    # page) and because it also carries the name/email/program it heard.
     resolved_lead_id = ""
     resolved_phone = ""
-    if extracted_lead:
-        from app.leads.models import get_lead_by_phone, upsert_lead_by_phone
-        # Try phone first
+    extracted_name = (extracted_lead or {}).get("name", "")
+    extracted_email = (extracted_lead or {}).get("email", "")
+    extracted_program = (extracted_lead or {}).get("program", "")
+
+    from app.leads.models import get_lead_by_phone, upsert_lead_by_phone
+
+    if phone_number:
+        lead = await get_lead_by_phone(phone_number)
+        if not lead:
+            lead = await upsert_lead_by_phone(
+                phone_number=phone_number,
+                name=extracted_name,
+                email=extracted_email,
+                program_interest=extracted_program,
+                source=channel,
+            )
+        if lead:
+            resolved_lead_id = lead["id"]
+            resolved_phone = phone_number
+
+    if not resolved_lead_id and extracted_lead:
+        # Fallback for callers with no carrier number: whatever the extraction
+        # heard, then a name match as the last resort.
         phone = extracted_lead.get("phone", "") or extracted_lead.get("phone_number", "")
         if phone:
             lead = await get_lead_by_phone(phone)
             if not lead:
                 lead = await upsert_lead_by_phone(
                     phone_number=phone,
-                    name=extracted_lead.get("name", ""),
-                    email=extracted_lead.get("email", ""),
-                    program_interest=extracted_lead.get("program", ""),
+                    name=extracted_name,
+                    email=extracted_email,
+                    program_interest=extracted_program,
                     source=channel,
                 )
             if lead:
                 resolved_lead_id = lead["id"]
                 resolved_phone = phone
-        # Fallback: try name match
-        if not resolved_lead_id and extracted_lead.get("name"):
+        if not resolved_lead_id and extracted_name:
             from app.leads.models import list_leads
-            leads = await list_leads(search=extracted_lead["name"], limit=1)
+            leads = await list_leads(search=extracted_name, limit=1)
             if leads:
                 resolved_lead_id = leads[0]["id"]
+                resolved_phone = leads[0].get("phone_number", "") or resolved_phone
+
+    # Persist the CRM link against the lead. Mid-call the linker had no lead row
+    # to write to (it does not exist until this point), so this is where the
+    # association becomes durable — and what makes the next call short-circuit.
+    if resolved_lead_id and crm_user_id:
+        try:
+            from app.leads.models import set_lead_crm_user_id
+
+            await set_lead_crm_user_id(resolved_lead_id, crm_user_id)
+        except Exception:
+            logger.exception("Could not persist the CRM link on the call's lead")
 
     # ── Step 3: Save to legacy table ───────────────────────────────
     try:
@@ -2879,6 +3227,7 @@ async def _handle_disconnect(
             transcript=transcript,
             channel=channel,
             conversation_id=conversation_id,
+            crm_user_id=crm_user_id,
         )
     except Exception:
         logger.exception("New leads-system logging failed (non-fatal)")

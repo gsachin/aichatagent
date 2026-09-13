@@ -126,10 +126,51 @@ async def log_interaction(
                 lead_id=lead_id,
             )
             logger.debug(f"Sentiment scored for lead {lead_id}")
+            await _publish_sentiment(lead_id, crm_user_id)
         except Exception:
             logger.exception("Sentiment scoring failed (non-fatal)")
 
     return conv
+
+
+async def _publish_sentiment(lead_id: str, crm_user_id: str = "") -> None:
+    """
+    Push the conversation's category to the CRM. Never raises.
+
+    Reads the category back off the lead rather than taking it from
+    ``score_transcript``'s return value: the scorer aggregates across the whole
+    conversation and persists the result, so the stored value is the considered
+    one, and this keeps the push correct whichever caller triggered the scoring.
+
+    Also the reason the score is read *after* persisting: pushing the per-exchange
+    emotion would send values the CRM's picklist has never heard of (R16).
+
+    Note the dedicated accessor. ``get_lead`` does not select the sentiment
+    columns, so reading `current_category` from a lead dict returns nothing at
+    all — which is how this silently pushed nothing the first time.
+    """
+    if not crm_user_id:
+        try:
+            from app.leads.models import get_lead_crm_user_id
+
+            crm_user_id = await get_lead_crm_user_id(lead_id)
+        except Exception:
+            logger.exception("Sentiment publish: could not resolve the CRM link")
+            return
+    if not crm_user_id:
+        return
+
+    try:
+        from app.leads.models import get_lead_sentiment_category
+        from app.crm.status import push_sentiment
+
+        category = await get_lead_sentiment_category(lead_id)
+        if not category:
+            logger.info(f"Sentiment publish: lead {lead_id} has no category yet")
+            return
+        await push_sentiment(crm_user_id, category)
+    except Exception:
+        logger.exception("Sentiment publish failed (non-fatal)")
 
 
 async def _auto_schedule_follow_up(lead_id: str, reason: str):
@@ -200,6 +241,7 @@ async def handle_post_interaction(
     channel: str = "whatsapp",
     call_duration_seconds: int = 0,
     conversation_id: str = "",
+    crm_user_id: str = "",
 ) -> bool:
     """
     Unified handler called after ANY interaction completes.
@@ -246,6 +288,9 @@ async def handle_post_interaction(
         follow_up_reason=follow_up_reason,
         call_duration_seconds=call_duration_seconds,
         conversation_id=conversation_id,
+        # The Salesforce user this conversation belongs to, when the channel
+        # managed to link it. Optional — omitting it leaves the row as it was.
+        crm_user_id=crm_user_id,
     )
 
     # 4. Check for admission intent → send WhatsApp document request

@@ -704,11 +704,20 @@ async def test_disabled_crm_makes_no_network_call(monkeypatch, override_settings
 
 
 @pytest.mark.anyio
-async def test_default_configuration_has_crm_disabled():
-    """The shipped default must be off — the suite runs against the real singleton."""
-    from app.config import settings
+async def test_default_configuration_has_crm_disabled(monkeypatch):
+    """
+    The *code* default must be off: reaching Salesforce requires an explicit
+    opt-in.
 
-    assert settings.CRM_ENABLED is False
+    Asserted against a freshly built Settings with the environment variable
+    removed, not against the running singleton — a deployment may legitimately
+    turn the CRM on in .env (this one has), and that must not read as the
+    default having changed.
+    """
+    monkeypatch.delenv("CRM_ENABLED", raising=False)
+    from app.config import Settings
+
+    assert Settings().CRM_ENABLED is False
 
 
 @pytest.mark.anyio
