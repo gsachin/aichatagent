@@ -49,6 +49,7 @@ from app.crm.client import (
     CrmUnknownStateError,
     get_client,
 )
+from app.crm import identity as identity_mod
 from app.crm.sync import enabled as crm_enabled
 from app.crm.tasks import spawn
 
@@ -73,8 +74,19 @@ STATUS_UNKNOWN = "unknown"
 
 
 def enabled() -> bool:
-    """CRM on, and the document upload not separately switched off."""
+    """CRM on, and the offer-letter upload not separately switched off."""
     return crm_enabled() and bool(settings.CRM_OFFER_UPLOAD_ENABLED)
+
+
+def documents_enabled() -> bool:
+    """
+    CRM on, and the *student* document upload not switched off.
+
+    A separate gate from the offer letter on purpose: an operator may want the
+    generated offer letter in the CRM while transcripts — which carry grades and
+    identity documents — stay on this host until someone signs off on that.
+    """
+    return crm_enabled() and bool(settings.CRM_DOCUMENT_UPLOAD_ENABLED)
 
 
 def _safe_segment(value: object, *, what: str, pattern: re.Pattern) -> str:
@@ -303,6 +315,141 @@ async def upload_offer_document(*, lead_id: str, offer_id: str, pdf_path: str) -
     return await get_client().single_flight(f"crm-doc:{application_no}", _do_upload)
 
 
+class TransferResult:
+    """
+    What a chunked upload attempt actually did.
+
+    Three outcomes, and the caller must treat them differently: the document is
+    there, it may or may not be there, or it is definitely not. ``step`` says
+    which call failed, for the log line.
+    """
+
+    def __init__(self, status: str, *, document_id: str = "", step: str = "",
+                 error: CrmError | None = None) -> None:
+        self.status = status          # "uploaded" | "unknown" | "failed"
+        self.document_id = document_id
+        self.step = step
+        self.error = error
+
+
+async def _transfer(
+    *,
+    application: str,
+    file_name: str,
+    blob: bytes,
+    document_type: str,
+    source: str,
+    label: str,
+    application_no: str,
+) -> TransferResult:
+    """
+    init → chunks → complete. Returns what happened; never raises.
+
+    Shared by the offer letter and by the student's own documents, because the
+    three calls and their retry rules are the same for any file: only the
+    ``document_type`` differs, and that is the caller's business.
+    """
+    client = get_client()
+    timeout = settings.CRM_UPLOAD_TIMEOUT_S
+    chunk_bytes = max(1, int(settings.CRM_UPLOAD_CHUNK_BYTES))
+    total_chunks = max(1, -(-len(blob) // chunk_bytes))
+
+    # ── 1. init ──────────────────────────────────────────────────────────
+    # is_create=False on purpose. Re-sending init mints a new upload session and
+    # orphans the old temp directory on the API host (nothing there ever GCs
+    # them), but a single transient 500 must not cost us the document. Losing the
+    # upload is the worse of the two, so this call keeps its retries.
+    #
+    # "" files: init carries form fields only, and httpx encodes a fields-only
+    # request as application/x-www-form-urlencoded (`files` empty is falsy at
+    # httpx/_content.py:211). The route declares those five as Form(...), and
+    # FastAPI parses both encodings — verified live against :8098, which answers
+    # 400 "Application ... was not found" for either, i.e. all five parsed. The
+    # chunk call below *is* multipart, because there the file part is real.
+    try:
+        init = await client.post_multipart(
+            f"/admissions/{application}/documents/uploads",
+            data={
+                "file_name": file_name,
+                "file_size": len(blob),
+                "total_chunks": total_chunks,
+                "document_type": document_type,
+                "source": source,
+            },
+            files={},
+            is_create=False,
+            timeout=timeout,
+        )
+    except CrmError as exc:
+        return TransferResult("failed", step="initiate the upload", error=exc)
+
+    upload_id = _safe_segment(
+        (init or {}).get("upload_id"), what="upload_id", pattern=_UPLOAD_ID_RE
+    )
+    if not upload_id:
+        logger.error(
+            f"crm.documents: upload init for {label} returned no usable "
+            f"upload_id: {init!r}"
+        )
+        return TransferResult("failed", step="initiate the upload")
+
+    # ── 2. chunks (1-based, raw bytes) ───────────────────────────────────
+    # Safe to retry: re-posting a chunk_number overwrites chunk_<n> upstream.
+    base = f"/admissions/{application}/documents/uploads/{upload_id}"
+    for number in range(1, total_chunks + 1):
+        piece = blob[(number - 1) * chunk_bytes: number * chunk_bytes]
+        try:
+            await client.post_multipart(
+                f"{base}/chunks",
+                data={"chunk_number": number},
+                files={"file": (file_name, piece, "application/pdf")},
+                is_create=False,
+                timeout=timeout,
+            )
+        except CrmError as exc:
+            logger.warning(
+                f"crm.documents: upload session {upload_id} is abandoned on the "
+                f"API host and will not be cleaned up by anything"
+            )
+            return TransferResult("failed", step=f"send chunk {number}", error=exc)
+
+    # ── 3. complete ──────────────────────────────────────────────────────
+    # is_create=True: this is the call that creates the ContentVersion, so a 500
+    # must never be retried automatically (see the module docstring).
+    try:
+        done = await client.post_multipart(
+            f"{base}/complete",
+            data={},
+            files={},
+            is_create=True,
+            timeout=timeout,
+        )
+    except CrmUnknownStateError as exc:
+        logger.error(
+            f"crm.documents: {label} — the CRM answered 500 on complete, so the "
+            f"document MAY exist on {application_no}. It is not being retried "
+            f"(that could duplicate it). Check the CRM and record the id by hand "
+            f"if it landed. {exc}"
+        )
+        return TransferResult("unknown", step="complete the upload", error=exc)
+    except CrmError as exc:
+        return TransferResult("failed", step="complete the upload", error=exc)
+
+    document = (done or {}).get("document") or {}
+    document_id = str(document.get("document_id") or "")
+    if not document_id:
+        logger.error(
+            f"crm.documents: complete for {label} returned no document_id: {done!r}"
+        )
+        return TransferResult("unknown", step="complete the upload")
+
+    logger.info(
+        f"crm.documents: {label} uploaded to {application_no} as {document_id} "
+        f"({file_name}, {len(blob)} bytes, {total_chunks} chunk(s))"
+    )
+    return TransferResult("uploaded", document_id=document_id)
+
+
 async def _upload(
     *,
     lead_id: str,
@@ -367,118 +514,26 @@ async def _upload(
             )
         return document_id
 
-    client = get_client()
-    timeout = settings.CRM_UPLOAD_TIMEOUT_S
-    chunk_bytes = max(1, int(settings.CRM_UPLOAD_CHUNK_BYTES))
-    total_chunks = max(1, -(-len(blob) // chunk_bytes))
-
-    # ── 1. init ──────────────────────────────────────────────────────────
-    # is_create=False on purpose. Re-sending init mints a new upload session and
-    # orphans the old temp directory on the API host (nothing there ever GCs
-    # them), but a single transient 500 must not cost us the document. Losing the
-    # upload is the worse of the two, so this call keeps its retries.
-    #
-    # "" files: init carries form fields only, and httpx encodes a fields-only
-    # request as application/x-www-form-urlencoded (`files` empty is falsy at
-    # httpx/_content.py:211). The route declares those five as Form(...), and
-    # FastAPI parses both encodings — verified live against :8098, which answers
-    # 400 "Application ... was not found" for either, i.e. all five parsed. The
-    # chunk call below *is* multipart, because there the file part is real.
-    try:
-        init = await client.post_multipart(
-            f"/admissions/{application}/documents/uploads",
-            data={
-                "file_name": file_name,
-                "file_size": len(blob),
-                "total_chunks": total_chunks,
-                "document_type": settings.CRM_OFFER_DOCUMENT_TYPE,
-                "source": settings.CRM_OFFER_DOCUMENT_SOURCE,
-            },
-            files={},
-            is_create=False,
-            timeout=timeout,
-        )
-    except CrmError as exc:
-        await set_offer_crm_upload(offer_id, status=STATUS_FAILED)
-        _log_upload_failure(offer_id, application_no, "initiate the upload", exc)
-        return ""
-
-    upload_id = _safe_segment(
-        (init or {}).get("upload_id"), what="upload_id", pattern=_UPLOAD_ID_RE
+    result = await _transfer(
+        application=application,
+        file_name=file_name,
+        blob=blob,
+        document_type=settings.CRM_OFFER_DOCUMENT_TYPE,
+        source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+        label=f"offer {offer_id}",
+        application_no=application_no,
     )
-    if not upload_id:
-        logger.error(
-            f"crm.documents: upload init for offer {offer_id} returned no usable "
-            f"upload_id: {init!r}"
-        )
-        await set_offer_crm_upload(offer_id, status=STATUS_FAILED)
-        return ""
 
-    # ── 2. chunks (1-based, raw bytes) ───────────────────────────────────
-    # Safe to retry: re-posting a chunk_number overwrites chunk_<n> upstream.
-    base = f"/admissions/{application}/documents/uploads/{upload_id}"
-    for number in range(1, total_chunks + 1):
-        piece = blob[(number - 1) * chunk_bytes: number * chunk_bytes]
-        try:
-            await client.post_multipart(
-                f"{base}/chunks",
-                data={"chunk_number": number},
-                files={"file": (file_name, piece, "application/pdf")},
-                is_create=False,
-                timeout=timeout,
-            )
-        except CrmError as exc:
-            await set_offer_crm_upload(offer_id, status=STATUS_FAILED)
-            _log_upload_failure(offer_id, application_no, f"send chunk {number}", exc)
-            logger.warning(
-                f"crm.documents: upload session {upload_id} is abandoned on the "
-                f"API host and will not be cleaned up by anything"
-            )
-            return ""
-
-    # ── 3. complete ──────────────────────────────────────────────────────
-    # is_create=True: this is the call that creates the ContentVersion, so a 500
-    # must never be retried automatically (see the module docstring).
-    try:
-        done = await client.post_multipart(
-            f"{base}/complete",
-            data={},
-            files={},
-            is_create=True,
-            timeout=timeout,
+    if result.status == STATUS_UPLOADED:
+        await set_offer_crm_upload(
+            offer_id, document_id=result.document_id, status=STATUS_UPLOADED
         )
-    except CrmUnknownStateError as exc:
-        await set_offer_crm_upload(offer_id, status=STATUS_UNKNOWN)
-        logger.error(
-            f"crm.documents: offer {offer_id} — the CRM answered 500 on complete, so "
-            f"the document MAY exist on {application_no}. It is not being retried "
-            f"(that could duplicate it). Check the CRM and set crm_document_id by "
-            f"hand if it landed. {exc}"
-        )
-        return ""
-    except CrmError as exc:
-        await set_offer_crm_upload(offer_id, status=STATUS_FAILED)
-        _log_upload_failure(offer_id, application_no, "complete the upload", exc)
-        return ""
+        return result.document_id
 
-    document = (done or {}).get("document") or {}
-    document_id = str(document.get("document_id") or "")
-    if not document_id:
-        logger.error(
-            f"crm.documents: complete for offer {offer_id} returned no document_id: "
-            f"{done!r}"
-        )
-        await set_offer_crm_upload(offer_id, status=STATUS_UNKNOWN)
-        return ""
-
-    await set_offer_crm_upload(
-        offer_id, document_id=document_id, status=STATUS_UPLOADED
-    )
-    logger.info(
-        f"crm.documents: offer {offer_id} uploaded to {application_no} as "
-        f"{document_id} ({file_name}, {len(blob)} bytes, {total_chunks} chunk(s))"
-    )
-    return document_id
+    await set_offer_crm_upload(offer_id, status=result.status)
+    if result.error is not None:
+        _log_upload_failure(offer_id, application_no, result.step, result.error)
+    return ""
 
 
 def _log_upload_failure(offer_id: str, application_no: str, step: str, exc: CrmError) -> None:
@@ -503,6 +558,159 @@ def _log_upload_failure(offer_id: str, application_no: str, step: str, exc: CrmE
         )
     else:
         logger.error(f"crm.documents: could not {step} for offer {offer_id} — {exc}")
+
+
+# ── The student's own documents ──────────────────────────────────────────────
+
+def _student_file_name(doc_id: str, original: str) -> str:
+    """
+    The name a student document is filed under in the CRM.
+
+    Keeps the original name — the admissions team reads these, and
+    "RAG.md.pdf" tells them more than a uuid does — but prefixes the local row id
+    so the name is unique per upload and can be used to recognise a document
+    that an earlier attempt already sent.
+    """
+    stem = Path(str(original or "document")).stem[:60] or "document"
+    return f"{str(doc_id)[:8].upper()}_{stem}.pdf"
+
+
+async def upload_student_document(
+    *, lead_id: str, doc_id: str, file_path: str, doc_type: str, original_name: str = ""
+) -> str:
+    """
+    Upload a document the student provided — transcript, ID proof — to the CRM.
+
+    The offer letter is generated by us; these are the documents that *justify*
+    it, and until now they never left this machine: ``lead_documents`` had no CRM
+    columns and nothing uploaded them, so the admissions team could see the
+    offer without ever seeing the transcript behind it.
+
+    Returns the CRM document id, or "" on any failure. Never raises.
+    """
+    if not documents_enabled():
+        logger.debug("crm.documents: student document upload disabled")
+        return ""
+
+    from app.leads.models import get_lead_crm_application_no, get_lead_crm_user_id
+    from app.offers.models import get_document_crm_upload, set_document_crm_upload
+
+    state = await get_document_crm_upload(doc_id)
+    if state.get("document_id"):
+        logger.debug(f"crm.documents: document {doc_id} is already in the CRM")
+        return state["document_id"]
+
+    user_id = await get_lead_crm_user_id(lead_id)
+    if not user_id:
+        logger.info(
+            f"crm.documents: lead {lead_id} has no CRM link — document not uploaded"
+        )
+        return ""
+
+    application_no = await get_lead_crm_application_no(lead_id)
+    if not application_no:
+        application_no = await resolve_application_no(user_id)
+        if not application_no:
+            await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+            return ""
+        from app.leads.models import set_lead_crm_application_no
+
+        await set_lead_crm_application_no(lead_id, application_no)
+
+    application = _safe_segment(
+        application_no, what="application_no", pattern=_APPLICATION_NO_RE
+    )
+    if not application:
+        await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+        return ""
+
+    path = Path(file_path)
+    if not path.is_file():
+        logger.error(f"crm.documents: document {doc_id} is not on disk ({file_path})")
+        await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+        return ""
+
+    try:
+        blob = path.read_bytes()
+    except OSError as exc:
+        logger.error(f"crm.documents: cannot read {file_path} — {exc}")
+        await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+        return ""
+    if not blob:
+        logger.error(f"crm.documents: {file_path} is empty — nothing to upload")
+        await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+        return ""
+
+    file_name = _student_file_name(doc_id, original_name or path.name)
+
+    # Same conservative rule as the offer letter: an unprovable absence means
+    # skip, because a duplicate ContentVersion cannot be deleted through this API.
+    state, existing = await _find_existing_offer_document(application, file_name)
+    if state == "unavailable":
+        return ""
+    if state == "stale":
+        from app.leads.models import set_lead_crm_application_no
+
+        await set_lead_crm_application_no(lead_id, "")
+        await set_document_crm_upload(doc_id, status=STATUS_FAILED)
+        return ""
+    if existing:
+        existing_id = str(existing.get("document_id") or "")
+        if existing_id:
+            await set_document_crm_upload(
+                doc_id, document_id=existing_id, status=STATUS_UPLOADED
+            )
+            logger.info(
+                f"crm.documents: document {doc_id} was already in the CRM as "
+                f"{existing_id} — recorded, not re-sent"
+            )
+        return existing_id
+
+    result = await _transfer(
+        application=application,
+        file_name=file_name,
+        blob=blob,
+        document_type=identity_mod.map_document_type(doc_type),
+        source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+        label=f"document {doc_id}",
+        application_no=application_no,
+    )
+
+    if result.status == STATUS_UPLOADED:
+        await set_document_crm_upload(
+            doc_id, document_id=result.document_id, status=STATUS_UPLOADED
+        )
+        return result.document_id
+
+    await set_document_crm_upload(doc_id, status=result.status)
+    if result.error is not None:
+        _log_upload_failure(doc_id, application_no, result.step, result.error)
+    return ""
+
+
+def schedule_document_upload(
+    *, lead_id: str, doc_id: str, file_path: str, doc_type: str, original_name: str = ""
+) -> None:
+    """
+    Start a student document upload in the background.
+
+    Called from the upload endpoints, which sit on a student's request: a
+    half-megabyte transcript is three HTTP calls, and none of them should make
+    the student wait or fail their upload.
+    """
+    if not documents_enabled():
+        logger.debug("crm.documents: student document upload disabled — not scheduling")
+        return
+    if not file_path:
+        return
+
+    spawn(
+        upload_student_document(
+            lead_id=lead_id, doc_id=doc_id, file_path=file_path,
+            doc_type=doc_type, original_name=original_name,
+        ),
+        label=f"document upload {doc_id}",
+    )
 
 
 # ── Fire and forget ──────────────────────────────────────────────────────────

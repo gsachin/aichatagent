@@ -158,6 +158,13 @@ class Settings:
     CRM_OFFER_UPLOAD_ENABLED: bool = field(
         default_factory=lambda: _env("CRM_OFFER_UPLOAD_ENABLED", "true").lower() == "true"
     )
+    # The student's own documents — transcript, ID proof. A separate switch
+    # because these carry grades and identity documents, and an operator may want
+    # the generated offer letter in the CRM while these stay on this host until
+    # someone signs off on that egress.
+    CRM_DOCUMENT_UPLOAD_ENABLED: bool = field(
+        default_factory=lambda: _env("CRM_DOCUMENT_UPLOAD_ENABLED", "true").lower() == "true"
+    )
     # These land in the ContentVersion fields Document_Type__c / Source__c. The
     # API validates neither (both are free strings), but both are restricted
     # picklists in the dev org, so an out-of-vocabulary value fails as a 500

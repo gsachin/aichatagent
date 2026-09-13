@@ -104,6 +104,16 @@ ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_uploaded_at   TIMESTAMP W
 ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_expired_at    TIMESTAMP WITH TIME ZONE;
 """
 
+# The student's own uploads — transcript, ID proof — get the same treatment as
+# the offer letter. Without these columns a document could be uploaded twice
+# (nothing would remember the first attempt) and an operator could not tell
+# which files actually reached Salesforce.
+ALTER_LEAD_DOCUMENTS_CRM_SQL = """
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_document_id   VARCHAR(32);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_upload_status VARCHAR(16);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_uploaded_at   TIMESTAMP WITH TIME ZONE;
+"""
+
 ALL_CRM_SQL = "\n".join(
     [
         ALTER_LEADS_SQL,
@@ -114,5 +124,6 @@ ALL_CRM_SQL = "\n".join(
         ALTER_LEADS_CRM_APPLICATION_SQL,
         ALTER_LEADS_CRM_COURSE_SQL,
         ALTER_OFFER_LETTERS_CRM_SQL,
+        ALTER_LEAD_DOCUMENTS_CRM_SQL,
     ]
 )

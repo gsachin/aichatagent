@@ -1263,6 +1263,18 @@ async def _handle_whatsapp_document(
             mime_type=content_type,
             size_bytes=len(file_bytes),
         )
+        if doc and doc.get("id"):
+            # Hand the file to the CRM too — the admissions team needs the
+            # transcript, not only the offer letter it justified.
+            try:
+                from app.crm.documents import schedule_document_upload
+
+                schedule_document_upload(
+                    lead_id=lead_id, doc_id=str(doc["id"]), file_path=str(stored_path),
+                    doc_type=doc_type, original_name=safe_name,
+                )
+            except Exception:
+                logger.exception("Could not schedule the CRM upload for a document")
 
         if doc and lead.get("program_interest", "").strip():
             # Offer letters are generated only when the student types "done"
@@ -2847,6 +2859,19 @@ async def api_upload_document(
         except Exception:
             pass
         return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+    # Hand the student's document to the CRM (backgrounded — three HTTP calls
+    # must not sit in the student's upload request).
+    if doc.get("id"):
+        try:
+            from app.crm.documents import schedule_document_upload
+
+            schedule_document_upload(
+                lead_id=lead_id, doc_id=str(doc["id"]), file_path=str(stored_path),
+                doc_type=doc_type, original_name=safe_name,
+            )
+        except Exception:
+            logger.exception("Could not schedule the CRM upload for a document")
 
     # Auto-trigger offer letter if the lead is fully ready
     offer_result = None

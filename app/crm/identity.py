@@ -62,6 +62,25 @@ CRM_ADMISSION_STATUS_VOCAB = frozenset(
 # mistake this constant exists to prevent.
 CRM_LEAD_CATEGORY_VOCAB = frozenset({"HOT", "WARM", "NURTURE", "AT RISK", "DISQUALIFIED"})
 
+# What the chat asks students for, onto the org's document vocabulary. Only the
+# types this app actually produces are listed; anything else falls back to
+# "Other" (see map_document_type).
+DOCUMENT_TYPE_MAP: dict[str, str] = {
+    "transcript": "Academic Transcript",
+    "academic_transcript": "Academic Transcript",
+    "marksheet": "10th Marksheet",
+    "id_proof": "ID Document",
+    "id": "ID Document",
+    "passport": "ID Document",
+    "resume": "Resume",
+    "cv": "Resume",
+    "financial": "Financial Document",
+    "recommendation": "Recommendation Letter",
+    "test_score": "Test Score",
+    "ielts": "IELTS Score",
+    "other": "Other",
+}
+
 # app/sentiment/categorizer.py:31-35 → Sentiment__c.  A clean .upper() for all
 # five, including At-Risk, which already carries the hyphen the CRM uses. (The
 # separate Lead_Category__c field spells it "AT RISK" — do not copy across.)
@@ -98,6 +117,7 @@ OFFER_STATUS_MAP: dict[str, str] = {
 # decision, and what the student answered. "Cancelled" and "Rejected-by-staff"
 # are the admissions team's calls, not ours to infer.
 ADMISSION_STATUS_MAP: dict[str, str] = {
+
     "documents_pending": "Documents Pending",
     "documents pending": "Documents Pending",
     "awaiting_documents": "Documents Pending",
@@ -314,6 +334,29 @@ def map_admission_status(value: object) -> str | None:
         f"crm.identity: {text!r} is not a valid Admission_Status__c value — not sending"
     )
     return None
+
+
+def map_document_type(value: object) -> str:
+    """
+    Map this app's ``lead_documents.doc_type`` onto ``Document_Type__c``.
+
+    The org's vocabulary is a restricted picklist built for exactly the
+    documents the chat asks students for — "Academic Transcript", "ID Document",
+    "10th Marksheet" and so on — but this app's own values are coarser
+    (``transcript``, ``id_proof``, ``other``). Anything unrecognised becomes
+    "Other" rather than being refused: the document is real, and filing it under
+    a general label is better than losing it. Always returns a valid value, so
+    unlike the other mappings there is no None case for a caller to handle.
+    """
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    mapped = DOCUMENT_TYPE_MAP.get(text)
+    if mapped:
+        return mapped
+    if text and text != "other":
+        logger.info(
+            f"crm.identity: document type {value!r} has no mapping — filing as 'Other'"
+        )
+    return "Other"
 
 
 def map_lead_category(value: object) -> str | None:
