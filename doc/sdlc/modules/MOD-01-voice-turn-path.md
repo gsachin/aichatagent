@@ -84,13 +84,57 @@ Today the turn is a chain of full-buffer handoffs: `llm_backend.chat()` returns 
 
 Serves `BRD-04`; implements `SM-02` ACCUMULATING → ENDPOINTED.
 
-The live decision is the RMS energy gate in `VoiceCallSession` — 30 consecutive silent frames at 20 ms per frame (`voice_handler.py:301` `silence_threshold_frames=30`), forced by a 300-frame (~6 s) max-utterance cap. The Pipecat `VADParams` block (`pipeline.py:174–180`) builds an analyzer that is never referenced, and must not be presented as a live setting (`REC-01`, `01-brd.md` Evidence Register "Pipecat VAD setting — inert"). This TRD makes that single decision explicit, configurable, documented at its real value, and reconciled against the latency budget with the arithmetic in B.2.
+The live decision is the RMS energy gate in `VoiceCallSession` — `VAD_SILENCE_MS`
+(default **600 ms**, 30 consecutive silent frames at 20 ms per frame), forced by
+a 300-frame (~6 s) max-utterance cap.
+
+**As built, 2026-09-19 — two things this TRD required were not true of the code,
+and both are now fixed.** The delay was the literal `30` in a constructor default
+that **no caller passed and no environment variable reached**: the delay was real
+but the "configuration" was a constant, which is what `BRD-04`'s last sentence
+forbids. It is now read per session from `VAD_SILENCE_MS`, so a deployment can
+change it and a test can vary it. Separately, the Pipecat `VADParams` block that
+this TRD called out as inert was **still being constructed** — and logging
+`[OK] SileroVADAnalyzer initialized (for transport config)` — announcing a second
+end-of-speech delay of 500 ms that nothing read. Calling it out in the design did
+not remove it; it has now been removed from `pipeline.py`, and the removal site
+carries the reason so it is not rebuilt.
+
+**The delay was not shortened, and that is a finding rather than an omission.**
+`BRD-02` wants p50 ≤ 700 ms and this delay alone is 600 ms of it (`AS-04`), but
+the load fixtures present a **240 ms mid-turn hesitation** as real caller
+behaviour, so the harness exercises nothing between 240 ms and the 600 ms
+threshold: lowering it would show a clean latency win with **zero detected harm**.
+A win the test suite cannot audit is not a win. What changed instead is that the
+window stopped being dead time — see `TRD-01`'s speculative-STT note below.
 
 ### TRD-03 — Emit per-stage turn marks with an explicit first-audio-to-carrier boundary
 
 Serves `BRD-01`; produces `DAT-07` rows; consumes `DG-04`'s derivation.
 
 The turn path is the only place that can timestamp the boundaries that matter. It marks, per turn: end-of-speech decision, transcript returned, gate decision, retrieval returned, prompt assembled, first token, last token, first synthesised chunk, and **first frame written to the carrier socket** — the last of these is the end of `BRD-02`'s measured segment and must be taken at the socket write in `main.py`'s `/ws/twilio` handler, not at the end of synthesis. Marks are emitted into `MOD-06` and can never fail, block or reorder a turn.
+
+**As-built emitting call sites (2026-09-19).** This section previously named no
+call sites, which meant the design could not be reconciled against the code.
+Every mark this module emits, with its site:
+
+| Mark | Site | Notes |
+|---|---|---|
+| `vad_end` | `voice_handler.py` `feed_audio()`, with `new_trace()` | Zero point for `processing_ms`; notes `vad_frames`, `endpoint_ms`, `work_class` |
+| `stt_done` | `voice_handler.py` `_transcribe()` | The ordinary path |
+| `stt_done` | `voice_handler.py` `process_utterance()` | The **speculative** path, noting `stt_from_speculative` |
+| `retrieval_done` | `app/rag.py` `retrieve_context()`, via `mark_current()` | Fires from the `to_thread` worker; reaches the right turn because the context is copied |
+| `llm_sent` / `llm_done` | `voice_handler.py` `_query_llm()` | `llm_done` notes `answer_chars` |
+| `tts_done` | `voice_handler.py`, two sites | Cache-hit and fresh-synthesis paths |
+| `first_audio_sent` | `main.py` `/ws/twilio`, at the socket write | Deliberately not at the end of synthesis |
+| *(notes)* | `voice_handler.py` `_turn_outcome()` | `outcome`, `degraded_reason` |
+
+**One mark this TRD names is not emitted: `llm_first_token`.** It is declared in
+`STAGES` but nothing produces it, so a full turn reports `stages_seen: 7` against
+`stages_expected: 8` — measured on 200 consecutive turns. It was added in
+anticipation of `TRD-01`'s streaming, which is `BLOCKED` on `DG-03`. The
+divergence is recorded in `MOD-06`; until streaming lands it must either be
+emitted or removed from `STAGES`, and no assertion should expect 8.
 
 ### TRD-04 — Bound every stage, and degrade to speech rather than to silence
 

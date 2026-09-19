@@ -94,13 +94,29 @@ Each trace record shall identify its caller and turn unambiguously, carry every 
 - **Serves:** `BRD-01`; contributes to `BRD-06` and `BRD-03` (cold versus warm is only separable if the record can be partitioned).
 - **Implements:** `SM-02` — the marks map onto the turn lifecycle's own transitions (`vad_end` ← ACCUMULATING → ENDPOINTED; `stt_done` ← → TRANSCRIBED; `llm_sent`/`llm_done` ← → GENERATING; `tts_done` ← → SYNTHESISING; `first_audio_sent` ← → EMITTED), and `DAT-07`.
 - **Required record fields:** `call_id`, `turn_id`, wall-clock timestamp for correlation, a monotonic-clock duration for every stage, the total, the count of stages seen, and the engine counters from the inference response (`prompt_eval_count`, `eval_count` and their token rates — the counters `BRD-01` names explicitly).
-- **Two gaps that must be closed, verified against the existing emitter:**
+- **Design gaps, reconciled against the emitter as built (2026-09-19).** This
+  table used to list gaps *to be closed*; three of the four are now closed, and
+  the reconciliation found one that had been closed on paper only.
 
-| Gap | Evidence | Requirement |
+| Gap | As-built status | Evidence |
 |---|---|---|
-| **No retrieval mark.** The existing `STAGES` tuple is `vad_end, stt_done, llm_sent, llm_done, tts_done, first_audio_sent` — there is no mark between `stt_done` and `llm_sent`, so retrieval time is unattributable | `app/perf_trace.py` `STAGES` | A retrieval mark (start and end) must exist, because the program's first success criterion names `retrieval_ms ≥ 0` and because `MOD-02` is the named concurrency bottleneck — an unmeasurable retrieval stage makes the central claim of the program unfalsifiable |
-| **Non-streaming has no TTFT.** `llm_sent` → `llm_done` measures the whole blocking call, so today the record cannot distinguish prefill from decode | `app/llm_backend.py:145` (`ollama.chat` without `stream=True`) | The record shall carry the engine's split (`prompt_eval_duration`, `eval_duration`) so prefill and decode stay separable; when streaming lands (`MOD-03`), a first-token mark is added rather than replacing the total |
-| **`0` versus missing.** The existing emitter omits a mark that never fired, which is correct — but its `total_ms` is computed from the last mark present | `app/perf_trace.py` `emit()` | The count of stages seen must be explicit and every consumer must treat a missing key as "did not happen". A stage that fired in under a millisecond is recorded as its real duration, never dropped |
+| **No retrieval mark.** The design note read: `STAGES` is `vad_end, stt_done, llm_sent, llm_done, tts_done, first_audio_sent`, so retrieval time is unattributable | **CLOSED.** `retrieval_done` is in `STAGES` and fires from inside `retrieve_context()` on **every** return path — MCP, legacy fallback and empty — because four marks would be four chances to miss one. `MOD-02`'s central claim is now falsifiable, and was falsified: `DEF-001` was found by reading this stage | `app/perf_trace.py` `STAGES`; `app/rag.py:117` |
+| **Non-streaming has no TTFT.** `llm_sent` → `llm_done` measures the whole blocking call, so the record cannot distinguish prefill from decode | **CLOSED for the split, OPEN for the mark.** The engine's own counters (`prompt_eval_duration`, `eval_duration`, `load_duration`) are carried per turn, so prefill and decode are separable today. **But `llm_first_token` is declared in `STAGES` and nothing emits it** — see below | `app/llm_backend.py` `_chat_ollama`; measured over 200 turns |
+| **`0` versus missing.** A mark that never fired is omitted, which is correct — but `total_ms` was computed from the last mark present | **CLOSED.** `stages_seen` and `stages_expected` are both emitted, so an absent stage is visibly absent rather than silently zero, and a consumer can tell a short-circuited turn from a complete one | `app/perf_trace.py` `emit()` |
+| **`stt_done` had one emitting site, inside `_transcribe`.** *(new, 2026-09-19)* Speculative STT serves the transcript without calling `_transcribe`, so the stage vanished from the record entirely — `stages_seen` fell to 6 on 199 of 200 rows and the trace could not say where the time went | **CLOSED.** The consuming path now closes `stt_done` itself and notes `stt_from_speculative`. Absent-is-not-zero was preserved; what broke was *present but unmarked* | `app/voice_handler.py` `process_utterance` |
+
+**`llm_first_token` is the one open item, and it is a design-vs-as-built
+divergence rather than a bug.** The mark was added to `STAGES` in anticipation
+of `US-004` (streaming), which is `BLOCKED` on `DG-03`. Nothing emits it, so
+every full turn reports `stages_seen: 7` against `stages_expected: 8` — a
+permanent, unexplained shortfall in the record. That is worse than a missing
+mark: a consumer cannot distinguish "streaming has not landed" from "a stage
+silently failed to fire", and the count that exists precisely to make absence
+visible is itself reporting an absence nobody can act on.
+
+This must be resolved when `US-004` lands, one way or the other: either the mark
+is emitted, or it is removed from `STAGES` until it can be. Until then, any
+`stages_seen`/`stages_expected` assertion must expect 7, not 8, and must say so.
 
 - **Numbers:** ≥6 stage marks plus counters on a full turn (`BRD-01`); the sum of consecutive stage durations shall reconcile to the total within 5 ms (`BRD-01` §11 criterion 1); turn identity is `(call_id, turn_id)` and is unique per turn — re-emission on a retry carries the same identity (`UC-07` retry scenario).
 - **Isolation:** records for concurrent turns are distinguished by `call_id`; the emitter holds no shared mutable buffer between turns, so two turns cannot merge. This is the `TRD-22` N=2 assertion, not an assumption from code reading (`BRD-06`, `UC-07` E2).
