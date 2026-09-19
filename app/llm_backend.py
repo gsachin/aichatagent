@@ -183,7 +183,7 @@ _keep_alive_unsupported = False
 
 
 def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None,
-                 temperature=None, keep_alive=None) -> str:
+                 temperature=None, keep_alive=None, num_predict=None) -> str:
     """ollama.chat with explicit keep-alive so residency survives the first call."""
     import ollama
 
@@ -193,6 +193,14 @@ def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None,
     options = {"num_ctx": int(num_ctx)}
     if temperature is not None:
         options["temperature"] = float(temperature)
+    # Tail guard. Generation is otherwise unbounded, so the worst case is set
+    # by the model's own appetite rather than by anything we chose -- and on a
+    # live call the worst case is the one that matters. None preserves the old
+    # behaviour exactly, which is why this is opt-in per call site and NOT a
+    # module default: `database.py` asks for structured JSON (lead extraction)
+    # and a 192-token ceiling there would truncate the object mid-field.
+    if num_predict is not None:
+        options["num_predict"] = int(num_predict)
     ka = KEEP_ALIVE if keep_alive is None else keep_alive
     try:
         response = ollama.chat(model=model, messages=messages, options=options,
@@ -245,6 +253,7 @@ def chat(
     num_ctx=None,
     temperature=None,
     json_mode=False,
+    num_predict=None,
 ) -> str:
     """
     Single-shot chat completion. Returns the assistant text.
@@ -258,11 +267,18 @@ def chat(
     - json_mode: reserved for API parity. Ollama call sites historically
       relied on prompt + defensive regex parsing (no format="json"), so
       both paths keep that behavior — no request-level change.
+    - num_predict: Ollama ONLY — output-token ceiling. None (the default)
+      means unbounded, exactly as before. The MLX path ignores it rather
+      than mapping it to max_tokens, because that mapping cannot be tested
+      on this box and an untested platform branch is worse than a
+      documented gap. Pass it from the VOICE answer path, never from a
+      structured-output path.
     """
     if provider_name() == "mlx":
         return _chat_mlx(messages, model=model, num_ctx=num_ctx, temperature=temperature)
     return _chat_ollama(
-        messages, model=model, preferred=preferred, num_ctx=num_ctx, temperature=temperature
+        messages, model=model, preferred=preferred, num_ctx=num_ctx,
+        temperature=temperature, num_predict=num_predict,
     )
 
 

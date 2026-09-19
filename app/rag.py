@@ -33,6 +33,15 @@ OLLAMA_BASE_URL = rag_legacy.OLLAMA_BASE_URL
 OLLAMA_MODEL = rag_legacy.OLLAMA_MODEL
 OLLAMA_NUM_CTX = rag_legacy.OLLAMA_NUM_CTX
 OLLAMA_TEMPERATURE = rag_legacy.OLLAMA_TEMPERATURE
+#: Output-token ceiling for the SPOKEN answer. 192 was chosen from the
+#: measured answer-length distribution, not from taste: over 83 golden-set
+#: cases the 95th percentile was 106 tokens (qwen2.5:14b) and 82
+#: (llama3.2:3b), and a ceiling of 192 truncates ZERO of them. It buys a
+#: bounded worst case -- the one thing an unbounded generation cannot give a
+#: live call -- while changing nothing on the answers actually produced.
+#: Set OLLAMA_NUM_PREDICT=0 to remove the ceiling.
+_num_predict_raw = os.environ.get("OLLAMA_NUM_PREDICT", "192").strip()
+OLLAMA_NUM_PREDICT = int(_num_predict_raw) if _num_predict_raw.lstrip("-").isdigit() else 192
 EMBED_MODEL = rag_legacy.EMBED_MODEL
 CHUNK_SIZE = rag_legacy.CHUNK_SIZE
 CHUNK_OVERLAP = rag_legacy.CHUNK_OVERLAP
@@ -226,6 +235,7 @@ def query_rag(question: str, *, mode: str = "voice") -> str | None:
             model=model,
             num_ctx=OLLAMA_NUM_CTX,
             temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
+            num_predict=OLLAMA_NUM_PREDICT if OLLAMA_NUM_PREDICT > 0 else None,
         )
 
     except Exception:

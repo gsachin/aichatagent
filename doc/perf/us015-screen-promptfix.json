@@ -1,0 +1,3037 @@
+{
+  "qwen2.5:14b": {
+    "model": "qwen2.5:14b",
+    "options": {
+      "num_ctx": 8192,
+      "temperature": 0.3
+    },
+    "tag": "promptfix",
+    "cases": 83,
+    "scorable": 30,
+    "blocked": 53,
+    "verdicts": {
+      "blocked": 53,
+      "fail": 21,
+      "pass": 9
+    },
+    "by_grade": {
+      "verified": {
+        "blocked": 7,
+        "fail": 10,
+        "pass": 7
+      },
+      "kb_traceable": {
+        "blocked": 46,
+        "fail": 11,
+        "pass": 2
+      }
+    },
+    "wall_seconds": 213.9,
+    "prefill_ms_p50": 604.9,
+    "generation_ms_p50": 992.9,
+    "wall_ms_p50": 1655.0,
+    "eval_tokens_p50": 39,
+    "eval_tokens_max": 129,
+    "cold_load_ms_max": 12.9,
+    "rows": [
+      {
+        "case_id": "acc-001",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 298,
+        "wall_ms": 2817.6,
+        "prefill_ms": 1262.1,
+        "generation_ms": 1497.4,
+        "prompt_tokens": 4062,
+        "eval_tokens": 58,
+        "load_ms": 6.7
+      },
+      {
+        "case_id": "acc-002",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 321,
+        "wall_ms": 2069.4,
+        "prefill_ms": 538.3,
+        "generation_ms": 1479.0,
+        "prompt_tokens": 4122,
+        "eval_tokens": 58,
+        "load_ms": 4.5
+      },
+      {
+        "case_id": "acc-003",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 143,
+        "wall_ms": 1381.9,
+        "prefill_ms": 604.9,
+        "generation_ms": 730.0,
+        "prompt_tokens": 4175,
+        "eval_tokens": 29,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-004",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 150,
+        "wall_ms": 1410.1,
+        "prefill_ms": 625.4,
+        "generation_ms": 735.1,
+        "prompt_tokens": 4251,
+        "eval_tokens": 29,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "acc-005",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 321,
+        "wall_ms": 2480.4,
+        "prefill_ms": 616.6,
+        "generation_ms": 1816.4,
+        "prompt_tokens": 4205,
+        "eval_tokens": 70,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-006",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 177,
+        "wall_ms": 1536.1,
+        "prefill_ms": 549.3,
+        "generation_ms": 937.7,
+        "prompt_tokens": 4138,
+        "eval_tokens": 37,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "acc-007",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 402,
+        "wall_ms": 2306.8,
+        "prefill_ms": 620.9,
+        "generation_ms": 1637.4,
+        "prompt_tokens": 4224,
+        "eval_tokens": 64,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-008",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 173,
+        "wall_ms": 1656.5,
+        "prefill_ms": 617.3,
+        "generation_ms": 992.9,
+        "prompt_tokens": 4207,
+        "eval_tokens": 39,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-009",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 420,
+        "wall_ms": 2482.9,
+        "prefill_ms": 524.0,
+        "generation_ms": 1904.3,
+        "prompt_tokens": 4071,
+        "eval_tokens": 74,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "adm-001",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 472,
+        "wall_ms": 3095.2,
+        "prefill_ms": 613.3,
+        "generation_ms": 2417.7,
+        "prompt_tokens": 4190,
+        "eval_tokens": 94,
+        "load_ms": 3.4
+      },
+      {
+        "case_id": "adm-002",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 613,
+        "wall_ms": 3581.8,
+        "prefill_ms": 541.1,
+        "generation_ms": 2993.9,
+        "prompt_tokens": 4126,
+        "eval_tokens": 116,
+        "load_ms": 4.5
+      },
+      {
+        "case_id": "adm-003",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 250,
+        "wall_ms": 1788.8,
+        "prefill_ms": 540.0,
+        "generation_ms": 1198.1,
+        "prompt_tokens": 4119,
+        "eval_tokens": 47,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "adm-004",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 264,
+        "wall_ms": 1872.0,
+        "prefill_ms": 543.4,
+        "generation_ms": 1279.2,
+        "prompt_tokens": 4128,
+        "eval_tokens": 50,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "adm-005",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 153,
+        "wall_ms": 1468.8,
+        "prefill_ms": 622.7,
+        "generation_ms": 785.5,
+        "prompt_tokens": 4228,
+        "eval_tokens": 31,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "adm-006",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 108,
+        "wall_ms": 1307.9,
+        "prefill_ms": 622.2,
+        "generation_ms": 633.6,
+        "prompt_tokens": 4230,
+        "eval_tokens": 25,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "adm-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 199,
+        "wall_ms": 1389.0,
+        "prefill_ms": 477.7,
+        "generation_ms": 862.3,
+        "prompt_tokens": 4125,
+        "eval_tokens": 34,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "adm-008",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 232,
+        "wall_ms": 1703.9,
+        "prefill_ms": 550.5,
+        "generation_ms": 1103.1,
+        "prompt_tokens": 4153,
+        "eval_tokens": 43,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "adv-005",
+        "intent": "Out-of-scope",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"AI\", \"artificial\", \"virtual\", \"automated\", \"not a person\", \"assistant\"]}",
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer_chars": 56,
+        "wall_ms": 1086.3,
+        "prefill_ms": 613.2,
+        "generation_ms": 421.5,
+        "prompt_tokens": 4210,
+        "eval_tokens": 17,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "bc-001",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 137,
+        "wall_ms": 1311.8,
+        "prefill_ms": 535.2,
+        "generation_ms": 730.5,
+        "prompt_tokens": 4115,
+        "eval_tokens": 29,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "bc-002",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 55,
+        "wall_ms": 975.4,
+        "prefill_ms": 607.8,
+        "generation_ms": 317.1,
+        "prompt_tokens": 4173,
+        "eval_tokens": 13,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "bc-003",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+          "spoken-format violation: 3 sentences (limit 2)",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 106,
+        "wall_ms": 1183.5,
+        "prefill_ms": 476.6,
+        "generation_ms": 655.8,
+        "prompt_tokens": 4026,
+        "eval_tokens": 26,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "camp-001",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 98 words (limit 80)"
+        ],
+        "answer_chars": 666,
+        "wall_ms": 4013.7,
+        "prefill_ms": 626.9,
+        "generation_ms": 3332.7,
+        "prompt_tokens": 4243,
+        "eval_tokens": 129,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "camp-002",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 206,
+        "wall_ms": 1741.8,
+        "prefill_ms": 627.7,
+        "generation_ms": 1065.5,
+        "prompt_tokens": 4264,
+        "eval_tokens": 42,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "camp-003",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 113,
+        "wall_ms": 1365.1,
+        "prefill_ms": 549.6,
+        "generation_ms": 757.8,
+        "prompt_tokens": 4318,
+        "eval_tokens": 30,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "con-001",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 106,
+        "wall_ms": 1542.2,
+        "prefill_ms": 602.6,
+        "generation_ms": 893.1,
+        "prompt_tokens": 4164,
+        "eval_tokens": 35,
+        "load_ms": 3.3
+      },
+      {
+        "case_id": "con-002",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 132,
+        "wall_ms": 1164.6,
+        "prefill_ms": 462.6,
+        "generation_ms": 657.7,
+        "prompt_tokens": 4164,
+        "eval_tokens": 26,
+        "load_ms": 2.2
+      },
+      {
+        "case_id": "con-003",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 108,
+        "wall_ms": 1381.0,
+        "prefill_ms": 545.9,
+        "generation_ms": 787.4,
+        "prompt_tokens": 4210,
+        "eval_tokens": 31,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "dates-001",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 223,
+        "wall_ms": 1834.6,
+        "prefill_ms": 559.2,
+        "generation_ms": 1227.5,
+        "prompt_tokens": 4157,
+        "eval_tokens": 48,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "dates-002",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 105,
+        "wall_ms": 1155.4,
+        "prefill_ms": 474.9,
+        "generation_ms": 634.4,
+        "prompt_tokens": 4126,
+        "eval_tokens": 25,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "dates-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 205,
+        "wall_ms": 1756.9,
+        "prefill_ms": 553.3,
+        "generation_ms": 1148.5,
+        "prompt_tokens": 4157,
+        "eval_tokens": 45,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "dates-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 114,
+        "wall_ms": 1259.4,
+        "prefill_ms": 549.8,
+        "generation_ms": 657.0,
+        "prompt_tokens": 4158,
+        "eval_tokens": 26,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "dates-005",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 157,
+        "wall_ms": 1396.6,
+        "prefill_ms": 478.8,
+        "generation_ms": 861.2,
+        "prompt_tokens": 4156,
+        "eval_tokens": 34,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "dates-006",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 112,
+        "wall_ms": 1197.3,
+        "prefill_ms": 554.0,
+        "generation_ms": 582.3,
+        "prompt_tokens": 4152,
+        "eval_tokens": 23,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "dates-007",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 223,
+        "wall_ms": 1872.0,
+        "prefill_ms": 624.8,
+        "generation_ms": 1197.7,
+        "prompt_tokens": 4228,
+        "eval_tokens": 47,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "dist-001",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"April 30\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer_chars": 161,
+        "wall_ms": 1536.8,
+        "prefill_ms": 544.2,
+        "generation_ms": 942.3,
+        "prompt_tokens": 4257,
+        "eval_tokens": 37,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "dist-003",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"financial aid\"]}"
+        ],
+        "answer_chars": 204,
+        "wall_ms": 1739.9,
+        "prefill_ms": 613.9,
+        "generation_ms": 1076.8,
+        "prompt_tokens": 4319,
+        "eval_tokens": 42,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "faq-001",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 50 words (limit 45)"
+        ],
+        "answer_chars": 291,
+        "wall_ms": 2346.3,
+        "prefill_ms": 525.8,
+        "generation_ms": 1773.1,
+        "prompt_tokens": 4176,
+        "eval_tokens": 69,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "faq-002",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer_chars": 190,
+        "wall_ms": 1629.2,
+        "prefill_ms": 550.3,
+        "generation_ms": 1018.2,
+        "prompt_tokens": 4254,
+        "eval_tokens": 40,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "fees-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 124,
+        "wall_ms": 1562.9,
+        "prefill_ms": 676.5,
+        "generation_ms": 836.4,
+        "prompt_tokens": 4316,
+        "eval_tokens": 33,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "fees-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 148,
+        "wall_ms": 1624.1,
+        "prefill_ms": 536.6,
+        "generation_ms": 1026.7,
+        "prompt_tokens": 4349,
+        "eval_tokens": 40,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "fees-003",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 157,
+        "wall_ms": 1655.0,
+        "prefill_ms": 628.2,
+        "generation_ms": 975.4,
+        "prompt_tokens": 4261,
+        "eval_tokens": 38,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "fees-004",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 95,
+        "wall_ms": 1508.0,
+        "prefill_ms": 794.7,
+        "generation_ms": 661.1,
+        "prompt_tokens": 4516,
+        "eval_tokens": 26,
+        "load_ms": 5.3
+      },
+      {
+        "case_id": "fees-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 111,
+        "wall_ms": 1087.9,
+        "prefill_ms": 384.2,
+        "generation_ms": 657.2,
+        "prompt_tokens": 4256,
+        "eval_tokens": 26,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "fees-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 208,
+        "wall_ms": 1727.7,
+        "prefill_ms": 608.9,
+        "generation_ms": 1070.6,
+        "prompt_tokens": 4190,
+        "eval_tokens": 42,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "fees-007",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 110,
+        "wall_ms": 1327.8,
+        "prefill_ms": 622.5,
+        "generation_ms": 657.1,
+        "prompt_tokens": 4231,
+        "eval_tokens": 26,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "fees-008",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 260,
+        "wall_ms": 2136.1,
+        "prefill_ms": 633.9,
+        "generation_ms": 1439.0,
+        "prompt_tokens": 4261,
+        "eval_tokens": 56,
+        "load_ms": 6.5
+      },
+      {
+        "case_id": "fees-009",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 122,
+        "wall_ms": 1663.6,
+        "prefill_ms": 749.6,
+        "generation_ms": 861.6,
+        "prompt_tokens": 4442,
+        "eval_tokens": 34,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "fees-011",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 214,
+        "wall_ms": 1930.6,
+        "prefill_ms": 609.2,
+        "generation_ms": 1275.8,
+        "prompt_tokens": 4186,
+        "eval_tokens": 50,
+        "load_ms": 3.3
+      },
+      {
+        "case_id": "hist-001",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 47 words (limit 45)"
+        ],
+        "answer_chars": 268,
+        "wall_ms": 2046.2,
+        "prefill_ms": 540.0,
+        "generation_ms": 1459.5,
+        "prompt_tokens": 4126,
+        "eval_tokens": 57,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "hist-002",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 87,
+        "wall_ms": 1174.6,
+        "prefill_ms": 532.8,
+        "generation_ms": 577.2,
+        "prompt_tokens": 4096,
+        "eval_tokens": 23,
+        "load_ms": 12.9
+      },
+      {
+        "case_id": "int-001",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 110,
+        "wall_ms": 1472.2,
+        "prefill_ms": 706.6,
+        "generation_ms": 706.5,
+        "prompt_tokens": 4369,
+        "eval_tokens": 28,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "int-002",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 78,
+        "wall_ms": 1145.1,
+        "prefill_ms": 679.5,
+        "generation_ms": 419.3,
+        "prompt_tokens": 4314,
+        "eval_tokens": 17,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "int-003",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 65,
+        "wall_ms": 991.0,
+        "prefill_ms": 540.9,
+        "generation_ms": 398.7,
+        "prompt_tokens": 4115,
+        "eval_tokens": 16,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "int-004",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 43,
+        "wall_ms": 894.7,
+        "prefill_ms": 540.4,
+        "generation_ms": 294.2,
+        "prompt_tokens": 4118,
+        "eval_tokens": 12,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "int-005",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 51,
+        "wall_ms": 901.9,
+        "prefill_ms": 527.1,
+        "generation_ms": 317.2,
+        "prompt_tokens": 4112,
+        "eval_tokens": 13,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "int-007",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 154,
+        "wall_ms": 1699.5,
+        "prefill_ms": 626.4,
+        "generation_ms": 1018.7,
+        "prompt_tokens": 4269,
+        "eval_tokens": 40,
+        "load_ms": 6.8
+      },
+      {
+        "case_id": "multi-001",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 144,
+        "wall_ms": 1493.6,
+        "prefill_ms": 474.6,
+        "generation_ms": 965.4,
+        "prompt_tokens": 4132,
+        "eval_tokens": 38,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "multi-002",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 4 sentences (limit 3)",
+          "spoken-format violation: 83 words (limit 60)"
+        ],
+        "answer_chars": 576,
+        "wall_ms": 3520.7,
+        "prefill_ms": 630.9,
+        "generation_ms": 2838.7,
+        "prompt_tokens": 4251,
+        "eval_tokens": 110,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 225,
+        "wall_ms": 2101.4,
+        "prefill_ms": 627.9,
+        "generation_ms": 1417.6,
+        "prompt_tokens": 4257,
+        "eval_tokens": 55,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "nasr-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 124,
+        "wall_ms": 1241.2,
+        "prefill_ms": 534.0,
+        "generation_ms": 656.5,
+        "prompt_tokens": 4209,
+        "eval_tokens": 26,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "nasr-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 148,
+        "wall_ms": 1321.2,
+        "prefill_ms": 549.9,
+        "generation_ms": 726.1,
+        "prompt_tokens": 4136,
+        "eval_tokens": 29,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "nasr-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 105,
+        "wall_ms": 1067.5,
+        "prefill_ms": 385.7,
+        "generation_ms": 625.0,
+        "prompt_tokens": 4144,
+        "eval_tokens": 25,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 160,
+        "wall_ms": 1707.4,
+        "prefill_ms": 632.6,
+        "generation_ms": 1025.0,
+        "prompt_tokens": 4273,
+        "eval_tokens": 40,
+        "load_ms": 7.2
+      },
+      {
+        "case_id": "nasr-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 210,
+        "wall_ms": 1952.3,
+        "prefill_ms": 621.4,
+        "generation_ms": 1279.2,
+        "prompt_tokens": 4236,
+        "eval_tokens": 50,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 429,
+        "wall_ms": 3348.4,
+        "prefill_ms": 707.0,
+        "generation_ms": 2577.5,
+        "prompt_tokens": 4380,
+        "eval_tokens": 100,
+        "load_ms": 7.7
+      },
+      {
+        "case_id": "nasr-010",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 190,
+        "wall_ms": 1666.9,
+        "prefill_ms": 623.4,
+        "generation_ms": 990.8,
+        "prompt_tokens": 4238,
+        "eval_tokens": 39,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "out-001",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer_chars": 73,
+        "wall_ms": 1114.1,
+        "prefill_ms": 610.9,
+        "generation_ms": 451.6,
+        "prompt_tokens": 4193,
+        "eval_tokens": 18,
+        "load_ms": 7.0
+      },
+      {
+        "case_id": "out-002",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer_chars": 230,
+        "wall_ms": 1981.2,
+        "prefill_ms": 620.7,
+        "generation_ms": 1313.9,
+        "prompt_tokens": 4210,
+        "eval_tokens": 51,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "pg-001",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 266,
+        "wall_ms": 1970.1,
+        "prefill_ms": 619.5,
+        "generation_ms": 1303.9,
+        "prompt_tokens": 4217,
+        "eval_tokens": 51,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "pg-002",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: Bachelor's in Science"
+        ],
+        "answer_chars": 199,
+        "wall_ms": 1973.3,
+        "prefill_ms": 667.1,
+        "generation_ms": 1249.0,
+        "prompt_tokens": 4294,
+        "eval_tokens": 49,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "phd-001",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: master's degree",
+          "spoken-format violation: 6 sentences (limit 3)",
+          "spoken-format violation: 93 words (limit 55)"
+        ],
+        "answer_chars": 587,
+        "wall_ms": 3654.2,
+        "prefill_ms": 545.4,
+        "generation_ms": 3059.3,
+        "prompt_tokens": 4119,
+        "eval_tokens": 118,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "phd-002",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: markdown emphasis/asterisks",
+          "spoken-format violation: list or enumeration",
+          "spoken-format violation: 7 sentences (limit 4)",
+          "spoken-format violation: 86 words (limit 70)"
+        ],
+        "answer_chars": 614,
+        "wall_ms": 3553.3,
+        "prefill_ms": 544.9,
+        "generation_ms": 2956.6,
+        "prompt_tokens": 4120,
+        "eval_tokens": 115,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "sch-001",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 463,
+        "wall_ms": 2854.8,
+        "prefill_ms": 605.5,
+        "generation_ms": 2195.3,
+        "prompt_tokens": 4164,
+        "eval_tokens": 85,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "sch-002",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 199,
+        "wall_ms": 1633.5,
+        "prefill_ms": 544.5,
+        "generation_ms": 1042.4,
+        "prompt_tokens": 4124,
+        "eval_tokens": 41,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "sch-003",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 322,
+        "wall_ms": 2233.5,
+        "prefill_ms": 467.5,
+        "generation_ms": 1720.0,
+        "prompt_tokens": 4065,
+        "eval_tokens": 67,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "sch-004",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 291,
+        "wall_ms": 1907.6,
+        "prefill_ms": 550.2,
+        "generation_ms": 1306.6,
+        "prompt_tokens": 4201,
+        "eval_tokens": 51,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "sch-007",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 257,
+        "wall_ms": 2041.1,
+        "prefill_ms": 632.2,
+        "generation_ms": 1358.9,
+        "prompt_tokens": 4319,
+        "eval_tokens": 53,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "stt-003",
+        "intent": "STT error correction / clarification",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: $18,500"
+        ],
+        "answer_chars": 92,
+        "wall_ms": 1069.3,
+        "prefill_ms": 485.0,
+        "generation_ms": 523.8,
+        "prompt_tokens": 4041,
+        "eval_tokens": 21,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "tc-001",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 187,
+        "wall_ms": 1923.6,
+        "prefill_ms": 623.8,
+        "generation_ms": 1253.9,
+        "prompt_tokens": 4241,
+        "eval_tokens": 49,
+        "load_ms": 3.3
+      },
+      {
+        "case_id": "tc-002",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: January 15"
+        ],
+        "answer_chars": 140,
+        "wall_ms": 1386.6,
+        "prefill_ms": 625.2,
+        "generation_ms": 706.2,
+        "prompt_tokens": 4231,
+        "eval_tokens": 28,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "ug-001",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech Computer Science",
+          "required fact missing: Bachelor of Business Administration",
+          "required fact missing: Bachelor of Commerce"
+        ],
+        "answer_chars": 195,
+        "wall_ms": 1590.5,
+        "prefill_ms": 619.4,
+        "generation_ms": 912.3,
+        "prompt_tokens": 4216,
+        "eval_tokens": 36,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "ug-002",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 3 Years",
+          "required fact missing: 10+2 (Any Stream)",
+          "spoken-format violation: 61 words (limit 60)"
+        ],
+        "answer_chars": 385,
+        "wall_ms": 2626.3,
+        "prefill_ms": 554.1,
+        "generation_ms": 2020.1,
+        "prompt_tokens": 4159,
+        "eval_tokens": 78,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "ug-003",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech AI & Machine Learning",
+          "required fact missing: 4 Years",
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer_chars": 133,
+        "wall_ms": 1648.9,
+        "prefill_ms": 705.1,
+        "generation_ms": 893.0,
+        "prompt_tokens": 4368,
+        "eval_tokens": 35,
+        "load_ms": 5.3
+      }
+    ],
+    "failures": [
+      "acc-001 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-002 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-003 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-004 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-005 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-007 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-008 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adv-005 [kb_traceable] fail: required fact missing: {\"any_of\": [\"AI\", \"artificial\", \"virtual\", \"automated\", \"not a pers",
+      "bc-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+      "bc-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+      "bc-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+      "camp-001 [verified] fail: spoken-format violation: 98 words (limit 80)",
+      "dates-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dist-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"April 30\"]}",
+      "dist-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"",
+      "faq-001 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "faq-002 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "fees-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-011 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "hist-001 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "int-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "multi-002 [kb_traceable] fail: spoken-format violation: 4 sentences (limit 3)",
+      "nasr-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-010 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "out-001 [kb_traceable] fail: spoken-format violation: 3 sentences (limit 2)",
+      "out-002 [kb_traceable] fail: spoken-format violation: 3 sentences (limit 2)",
+      "pg-002 [verified] fail: required fact missing: Bachelor's in Science",
+      "phd-001 [verified] fail: required fact missing: master's degree",
+      "phd-002 [verified] fail: spoken-format violation: markdown emphasis/asterisks",
+      "sch-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "stt-003 [kb_traceable] fail: required fact missing: $18,500",
+      "tc-002 [kb_traceable] fail: required fact missing: January 15",
+      "ug-001 [verified] fail: required fact missing: B.Tech Computer Science",
+      "ug-002 [verified] fail: required fact missing: 3 Years",
+      "ug-003 [verified] fail: required fact missing: B.Tech AI & Machine Learning"
+    ]
+  },
+  "llama3.2:3b": {
+    "model": "llama3.2:3b",
+    "options": {
+      "num_ctx": 8192,
+      "temperature": 0.3
+    },
+    "tag": "promptfix",
+    "cases": 83,
+    "scorable": 30,
+    "blocked": 53,
+    "verdicts": {
+      "blocked": 53,
+      "fail": 17,
+      "pass": 13
+    },
+    "by_grade": {
+      "verified": {
+        "blocked": 7,
+        "fail": 8,
+        "pass": 9
+      },
+      "kb_traceable": {
+        "blocked": 46,
+        "fail": 9,
+        "pass": 4
+      }
+    },
+    "wall_seconds": 97.3,
+    "prefill_ms_p50": 148.6,
+    "generation_ms_p50": 185.4,
+    "wall_ms_p50": 364.5,
+    "eval_tokens_p50": 24,
+    "eval_tokens_max": 129,
+    "cold_load_ms_max": 15.0,
+    "rows": [
+      {
+        "case_id": "acc-001",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 68,
+        "wall_ms": 417.4,
+        "prefill_ms": 296.8,
+        "generation_ms": 93.5,
+        "prompt_tokens": 4044,
+        "eval_tokens": 12,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "acc-002",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 76,
+        "wall_ms": 282.6,
+        "prefill_ms": 143.9,
+        "generation_ms": 103.7,
+        "prompt_tokens": 4101,
+        "eval_tokens": 13,
+        "load_ms": 6.6
+      },
+      {
+        "case_id": "acc-003",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 84,
+        "wall_ms": 314.1,
+        "prefill_ms": 147.5,
+        "generation_ms": 138.2,
+        "prompt_tokens": 4142,
+        "eval_tokens": 18,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-004",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 83,
+        "wall_ms": 314.3,
+        "prefill_ms": 167.3,
+        "generation_ms": 119.7,
+        "prompt_tokens": 4223,
+        "eval_tokens": 15,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "acc-005",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 81,
+        "wall_ms": 328.7,
+        "prefill_ms": 158.6,
+        "generation_ms": 142.5,
+        "prompt_tokens": 4156,
+        "eval_tokens": 19,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-006",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 483,
+        "wall_ms": 849.0,
+        "prefill_ms": 141.9,
+        "generation_ms": 679.3,
+        "prompt_tokens": 4105,
+        "eval_tokens": 87,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "acc-007",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 223,
+        "wall_ms": 483.6,
+        "prefill_ms": 164.0,
+        "generation_ms": 293.2,
+        "prompt_tokens": 4203,
+        "eval_tokens": 38,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-008",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 82,
+        "wall_ms": 354.3,
+        "prefill_ms": 159.4,
+        "generation_ms": 162.0,
+        "prompt_tokens": 4171,
+        "eval_tokens": 21,
+        "load_ms": 7.4
+      },
+      {
+        "case_id": "acc-009",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 125,
+        "wall_ms": 341.3,
+        "prefill_ms": 137.1,
+        "generation_ms": 175.1,
+        "prompt_tokens": 4053,
+        "eval_tokens": 23,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "adm-001",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 431,
+        "wall_ms": 839.5,
+        "prefill_ms": 158.6,
+        "generation_ms": 653.1,
+        "prompt_tokens": 4169,
+        "eval_tokens": 83,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "adm-002",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 440,
+        "wall_ms": 806.3,
+        "prefill_ms": 148.4,
+        "generation_ms": 629.7,
+        "prompt_tokens": 4114,
+        "eval_tokens": 81,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "adm-003",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 146,
+        "wall_ms": 405.6,
+        "prefill_ms": 143.2,
+        "generation_ms": 226.2,
+        "prompt_tokens": 4104,
+        "eval_tokens": 29,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "adm-004",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 195,
+        "wall_ms": 431.3,
+        "prefill_ms": 141.9,
+        "generation_ms": 263.6,
+        "prompt_tokens": 4117,
+        "eval_tokens": 34,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "adm-005",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 195,
+        "wall_ms": 465.4,
+        "prefill_ms": 161.3,
+        "generation_ms": 277.0,
+        "prompt_tokens": 4200,
+        "eval_tokens": 35,
+        "load_ms": 3.4
+      },
+      {
+        "case_id": "adm-006",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 65,
+        "wall_ms": 306.0,
+        "prefill_ms": 162.7,
+        "generation_ms": 114.9,
+        "prompt_tokens": 4216,
+        "eval_tokens": 15,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "adm-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 134,
+        "wall_ms": 365.5,
+        "prefill_ms": 128.4,
+        "generation_ms": 211.8,
+        "prompt_tokens": 4113,
+        "eval_tokens": 28,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "adm-008",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 126,
+        "wall_ms": 346.4,
+        "prefill_ms": 141.2,
+        "generation_ms": 176.4,
+        "prompt_tokens": 4111,
+        "eval_tokens": 23,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "adv-005",
+        "intent": "Out-of-scope",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"AI\", \"artificial\", \"virtual\", \"automated\", \"not a person\", \"assistant\"]}"
+        ],
+        "answer_chars": 168,
+        "wall_ms": 488.5,
+        "prefill_ms": 159.7,
+        "generation_ms": 290.9,
+        "prompt_tokens": 4198,
+        "eval_tokens": 38,
+        "load_ms": 7.9
+      },
+      {
+        "case_id": "bc-001",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 52,
+        "wall_ms": 299.7,
+        "prefill_ms": 144.9,
+        "generation_ms": 122.5,
+        "prompt_tokens": 4099,
+        "eval_tokens": 16,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "bc-002",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 98,
+        "wall_ms": 354.9,
+        "prefill_ms": 150.6,
+        "generation_ms": 175.3,
+        "prompt_tokens": 4151,
+        "eval_tokens": 23,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "bc-003",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer_chars": 111,
+        "wall_ms": 367.4,
+        "prefill_ms": 127.5,
+        "generation_ms": 210.7,
+        "prompt_tokens": 4003,
+        "eval_tokens": 27,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "camp-001",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 93 words (limit 80)"
+        ],
+        "answer_chars": 654,
+        "wall_ms": 1191.4,
+        "prefill_ms": 160.3,
+        "generation_ms": 1002.2,
+        "prompt_tokens": 4198,
+        "eval_tokens": 129,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "camp-002",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 107,
+        "wall_ms": 369.5,
+        "prefill_ms": 163.6,
+        "generation_ms": 177.5,
+        "prompt_tokens": 4244,
+        "eval_tokens": 23,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "camp-003",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 97,
+        "wall_ms": 326.4,
+        "prefill_ms": 143.9,
+        "generation_ms": 148.5,
+        "prompt_tokens": 4254,
+        "eval_tokens": 19,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "con-001",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 73,
+        "wall_ms": 354.2,
+        "prefill_ms": 148.0,
+        "generation_ms": 165.0,
+        "prompt_tokens": 4136,
+        "eval_tokens": 21,
+        "load_ms": 9.4
+      },
+      {
+        "case_id": "con-002",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 56,
+        "wall_ms": 238.6,
+        "prefill_ms": 120.9,
+        "generation_ms": 90.0,
+        "prompt_tokens": 4136,
+        "eval_tokens": 12,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "con-003",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 63,
+        "wall_ms": 336.2,
+        "prefill_ms": 142.4,
+        "generation_ms": 166.1,
+        "prompt_tokens": 4183,
+        "eval_tokens": 21,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "dates-001",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 94,
+        "wall_ms": 334.2,
+        "prefill_ms": 150.8,
+        "generation_ms": 153.2,
+        "prompt_tokens": 4140,
+        "eval_tokens": 19,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "dates-002",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 37,
+        "wall_ms": 235.8,
+        "prefill_ms": 122.9,
+        "generation_ms": 85.3,
+        "prompt_tokens": 4101,
+        "eval_tokens": 10,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "dates-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 88,
+        "wall_ms": 315.8,
+        "prefill_ms": 148.4,
+        "generation_ms": 138.2,
+        "prompt_tokens": 4140,
+        "eval_tokens": 18,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "dates-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 45,
+        "wall_ms": 257.4,
+        "prefill_ms": 146.1,
+        "generation_ms": 73.6,
+        "prompt_tokens": 4141,
+        "eval_tokens": 10,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "dates-005",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 39,
+        "wall_ms": 231.5,
+        "prefill_ms": 125.6,
+        "generation_ms": 76.0,
+        "prompt_tokens": 4141,
+        "eval_tokens": 10,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "dates-006",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 99,
+        "wall_ms": 328.2,
+        "prefill_ms": 146.0,
+        "generation_ms": 153.2,
+        "prompt_tokens": 4133,
+        "eval_tokens": 20,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "dates-007",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 136,
+        "wall_ms": 401.4,
+        "prefill_ms": 162.9,
+        "generation_ms": 208.1,
+        "prompt_tokens": 4198,
+        "eval_tokens": 27,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "dist-001",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"April 30\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer_chars": 99,
+        "wall_ms": 354.3,
+        "prefill_ms": 144.7,
+        "generation_ms": 173.1,
+        "prompt_tokens": 4195,
+        "eval_tokens": 23,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "dist-003",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"financial aid\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer_chars": 188,
+        "wall_ms": 512.1,
+        "prefill_ms": 160.4,
+        "generation_ms": 321.9,
+        "prompt_tokens": 4285,
+        "eval_tokens": 42,
+        "load_ms": 4.5
+      },
+      {
+        "case_id": "faq-001",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 81,
+        "wall_ms": 316.3,
+        "prefill_ms": 128.3,
+        "generation_ms": 157.6,
+        "prompt_tokens": 4154,
+        "eval_tokens": 20,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "faq-002",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 112,
+        "wall_ms": 359.7,
+        "prefill_ms": 141.4,
+        "generation_ms": 192.0,
+        "prompt_tokens": 4200,
+        "eval_tokens": 24,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "fees-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 52,
+        "wall_ms": 326.5,
+        "prefill_ms": 175.7,
+        "generation_ms": 122.1,
+        "prompt_tokens": 4286,
+        "eval_tokens": 15,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "fees-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 88,
+        "wall_ms": 331.2,
+        "prefill_ms": 139.6,
+        "generation_ms": 165.5,
+        "prompt_tokens": 4289,
+        "eval_tokens": 22,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "fees-003",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 105,
+        "wall_ms": 353.9,
+        "prefill_ms": 159.9,
+        "generation_ms": 162.5,
+        "prompt_tokens": 4215,
+        "eval_tokens": 21,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "fees-004",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 40,
+        "wall_ms": 318.0,
+        "prefill_ms": 196.4,
+        "generation_ms": 94.8,
+        "prompt_tokens": 4428,
+        "eval_tokens": 12,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "fees-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 128,
+        "wall_ms": 304.0,
+        "prefill_ms": 93.1,
+        "generation_ms": 185.4,
+        "prompt_tokens": 4202,
+        "eval_tokens": 24,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "fees-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 210,
+        "wall_ms": 549.2,
+        "prefill_ms": 161.9,
+        "generation_ms": 349.1,
+        "prompt_tokens": 4175,
+        "eval_tokens": 45,
+        "load_ms": 5.7
+      },
+      {
+        "case_id": "fees-007",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 61,
+        "wall_ms": 291.2,
+        "prefill_ms": 160.2,
+        "generation_ms": 105.3,
+        "prompt_tokens": 4180,
+        "eval_tokens": 14,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "fees-008",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 71,
+        "wall_ms": 347.2,
+        "prefill_ms": 164.0,
+        "generation_ms": 155.0,
+        "prompt_tokens": 4210,
+        "eval_tokens": 19,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "fees-009",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 74,
+        "wall_ms": 384.0,
+        "prefill_ms": 192.0,
+        "generation_ms": 161.6,
+        "prompt_tokens": 4385,
+        "eval_tokens": 21,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "fees-011",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 89,
+        "wall_ms": 332.6,
+        "prefill_ms": 148.6,
+        "generation_ms": 153.2,
+        "prompt_tokens": 4146,
+        "eval_tokens": 20,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "hist-001",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 46 words (limit 45)"
+        ],
+        "answer_chars": 278,
+        "wall_ms": 638.4,
+        "prefill_ms": 142.1,
+        "generation_ms": 470.1,
+        "prompt_tokens": 4108,
+        "eval_tokens": 60,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "hist-002",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 40,
+        "wall_ms": 257.2,
+        "prefill_ms": 137.8,
+        "generation_ms": 87.9,
+        "prompt_tokens": 4053,
+        "eval_tokens": 11,
+        "load_ms": 5.3
+      },
+      {
+        "case_id": "int-001",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 108,
+        "wall_ms": 404.3,
+        "prefill_ms": 181.0,
+        "generation_ms": 193.9,
+        "prompt_tokens": 4301,
+        "eval_tokens": 25,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "int-002",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 52,
+        "wall_ms": 304.8,
+        "prefill_ms": 163.5,
+        "generation_ms": 112.7,
+        "prompt_tokens": 4254,
+        "eval_tokens": 15,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "int-003",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 39,
+        "wall_ms": 282.7,
+        "prefill_ms": 144.4,
+        "generation_ms": 91.0,
+        "prompt_tokens": 4099,
+        "eval_tokens": 12,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "int-004",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 80,
+        "wall_ms": 339.7,
+        "prefill_ms": 140.6,
+        "generation_ms": 154.2,
+        "prompt_tokens": 4094,
+        "eval_tokens": 19,
+        "load_ms": 15.0
+      },
+      {
+        "case_id": "int-005",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 125,
+        "wall_ms": 408.7,
+        "prefill_ms": 130.9,
+        "generation_ms": 244.8,
+        "prompt_tokens": 4095,
+        "eval_tokens": 30,
+        "load_ms": 5.5
+      },
+      {
+        "case_id": "int-007",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 52,
+        "wall_ms": 303.9,
+        "prefill_ms": 162.6,
+        "generation_ms": 114.0,
+        "prompt_tokens": 4218,
+        "eval_tokens": 15,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "multi-001",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 4 sentences (limit 3)"
+        ],
+        "answer_chars": 312,
+        "wall_ms": 706.9,
+        "prefill_ms": 122.5,
+        "generation_ms": 555.9,
+        "prompt_tokens": 4107,
+        "eval_tokens": 70,
+        "load_ms": 4.5
+      },
+      {
+        "case_id": "multi-002",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 258,
+        "wall_ms": 590.5,
+        "prefill_ms": 163.9,
+        "generation_ms": 397.1,
+        "prompt_tokens": 4208,
+        "eval_tokens": 51,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "nasr-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 123,
+        "wall_ms": 450.0,
+        "prefill_ms": 162.0,
+        "generation_ms": 253.5,
+        "prompt_tokens": 4206,
+        "eval_tokens": 33,
+        "load_ms": 5.5
+      },
+      {
+        "case_id": "nasr-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 178,
+        "wall_ms": 539.4,
+        "prefill_ms": 141.1,
+        "generation_ms": 370.1,
+        "prompt_tokens": 4194,
+        "eval_tokens": 48,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "nasr-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 69,
+        "wall_ms": 273.3,
+        "prefill_ms": 141.1,
+        "generation_ms": 105.8,
+        "prompt_tokens": 4118,
+        "eval_tokens": 14,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "nasr-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 60,
+        "wall_ms": 229.2,
+        "prefill_ms": 93.2,
+        "generation_ms": 110.4,
+        "prompt_tokens": 4104,
+        "eval_tokens": 14,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "nasr-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 111,
+        "wall_ms": 390.4,
+        "prefill_ms": 163.9,
+        "generation_ms": 200.2,
+        "prompt_tokens": 4238,
+        "eval_tokens": 26,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "nasr-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 201,
+        "wall_ms": 542.4,
+        "prefill_ms": 160.0,
+        "generation_ms": 338.2,
+        "prompt_tokens": 4185,
+        "eval_tokens": 42,
+        "load_ms": 12.0
+      },
+      {
+        "case_id": "nasr-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 200,
+        "wall_ms": 572.5,
+        "prefill_ms": 185.0,
+        "generation_ms": 334.0,
+        "prompt_tokens": 4322,
+        "eval_tokens": 42,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "nasr-010",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 141,
+        "wall_ms": 401.4,
+        "prefill_ms": 161.0,
+        "generation_ms": 209.7,
+        "prompt_tokens": 4187,
+        "eval_tokens": 27,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "out-001",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 104,
+        "wall_ms": 399.8,
+        "prefill_ms": 161.4,
+        "generation_ms": 207.8,
+        "prompt_tokens": 4175,
+        "eval_tokens": 27,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "out-002",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 50 words (limit 45)"
+        ],
+        "answer_chars": 288,
+        "wall_ms": 643.0,
+        "prefill_ms": 161.4,
+        "generation_ms": 454.8,
+        "prompt_tokens": 4183,
+        "eval_tokens": 58,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "pg-001",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 138,
+        "wall_ms": 436.4,
+        "prefill_ms": 159.8,
+        "generation_ms": 250.4,
+        "prompt_tokens": 4189,
+        "eval_tokens": 32,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "pg-002",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 2 Years"
+        ],
+        "answer_chars": 96,
+        "wall_ms": 400.6,
+        "prefill_ms": 168.5,
+        "generation_ms": 205.4,
+        "prompt_tokens": 4264,
+        "eval_tokens": 26,
+        "load_ms": 3.4
+      },
+      {
+        "case_id": "phd-001",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 6 sentences (limit 3)",
+          "spoken-format violation: 90 words (limit 55)"
+        ],
+        "answer_chars": 584,
+        "wall_ms": 999.7,
+        "prefill_ms": 143.8,
+        "generation_ms": 828.6,
+        "prompt_tokens": 4108,
+        "eval_tokens": 107,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "phd-002",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 5 sentences (limit 4)",
+          "spoken-format violation: 84 words (limit 70)"
+        ],
+        "answer_chars": 604,
+        "wall_ms": 1028.3,
+        "prefill_ms": 141.5,
+        "generation_ms": 855.0,
+        "prompt_tokens": 4104,
+        "eval_tokens": 107,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "sch-001",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 377,
+        "wall_ms": 698.3,
+        "prefill_ms": 148.9,
+        "generation_ms": 520.0,
+        "prompt_tokens": 4149,
+        "eval_tokens": 66,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "sch-002",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 117,
+        "wall_ms": 364.5,
+        "prefill_ms": 141.5,
+        "generation_ms": 189.6,
+        "prompt_tokens": 4105,
+        "eval_tokens": 25,
+        "load_ms": 7.1
+      },
+      {
+        "case_id": "sch-003",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 87,
+        "wall_ms": 284.1,
+        "prefill_ms": 117.0,
+        "generation_ms": 136.8,
+        "prompt_tokens": 4053,
+        "eval_tokens": 18,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "sch-004",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 110,
+        "wall_ms": 331.2,
+        "prefill_ms": 147.9,
+        "generation_ms": 150.6,
+        "prompt_tokens": 4185,
+        "eval_tokens": 20,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "sch-007",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer_chars": 349,
+        "wall_ms": 781.3,
+        "prefill_ms": 159.2,
+        "generation_ms": 593.8,
+        "prompt_tokens": 4259,
+        "eval_tokens": 77,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "stt-003",
+        "intent": "STT error correction / clarification",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: $18,500"
+        ],
+        "answer_chars": 97,
+        "wall_ms": 340.4,
+        "prefill_ms": 125.6,
+        "generation_ms": 190.2,
+        "prompt_tokens": 4022,
+        "eval_tokens": 25,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "tc-001",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 135,
+        "wall_ms": 474.4,
+        "prefill_ms": 161.3,
+        "generation_ms": 284.5,
+        "prompt_tokens": 4213,
+        "eval_tokens": 35,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "tc-002",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer_chars": 138,
+        "wall_ms": 402.5,
+        "prefill_ms": 161.7,
+        "generation_ms": 204.1,
+        "prompt_tokens": 4204,
+        "eval_tokens": 26,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "ug-001",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech Computer Science",
+          "required fact missing: Bachelor of Business Administration",
+          "required fact missing: Bachelor of Commerce"
+        ],
+        "answer_chars": 345,
+        "wall_ms": 713.9,
+        "prefill_ms": 161.6,
+        "generation_ms": 519.6,
+        "prompt_tokens": 4168,
+        "eval_tokens": 64,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "ug-002",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 3 Years",
+          "required fact missing: 10+2 (Any Stream)"
+        ],
+        "answer_chars": 170,
+        "wall_ms": 493.8,
+        "prefill_ms": 146.1,
+        "generation_ms": 319.8,
+        "prompt_tokens": 4144,
+        "eval_tokens": 41,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "ug-003",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech AI & Machine Learning",
+          "required fact missing: 4 Years",
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 51 words (limit 45)"
+        ],
+        "answer_chars": 308,
+        "wall_ms": 686.7,
+        "prefill_ms": 178.5,
+        "generation_ms": 482.2,
+        "prompt_tokens": 4309,
+        "eval_tokens": 61,
+        "load_ms": 3.8
+      }
+    ],
+    "failures": [
+      "acc-001 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-002 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-003 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-004 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-005 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-007 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-008 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adv-005 [kb_traceable] fail: required fact missing: {\"any_of\": [\"AI\", \"artificial\", \"virtual\", \"automated\", \"not a pers",
+      "bc-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+      "bc-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+      "bc-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+      "camp-001 [verified] fail: spoken-format violation: 93 words (limit 80)",
+      "dates-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dist-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"April 30\"]}",
+      "dist-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"",
+      "fees-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-011 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "hist-001 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "int-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "multi-001 [kb_traceable] fail: spoken-format violation: 4 sentences (limit 3)",
+      "nasr-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-010 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "out-002 [kb_traceable] fail: spoken-format violation: 3 sentences (limit 2)",
+      "pg-002 [verified] fail: required fact missing: 2 Years",
+      "phd-001 [verified] fail: spoken-format violation: 6 sentences (limit 3)",
+      "phd-002 [verified] fail: spoken-format violation: 5 sentences (limit 4)",
+      "sch-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "stt-003 [kb_traceable] fail: required fact missing: $18,500",
+      "ug-001 [verified] fail: required fact missing: B.Tech Computer Science",
+      "ug-002 [verified] fail: required fact missing: 3 Years",
+      "ug-003 [verified] fail: required fact missing: B.Tech AI & Machine Learning"
+    ]
+  }
+}

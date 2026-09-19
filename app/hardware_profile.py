@@ -243,10 +243,18 @@ TIERS = [
                      OLLAMA_NUM_CTX="4096", WHISPER_MODEL="base.en",
                      WHISPER_NUM_THREADS="4", FASTAPI_WORKERS="2", RAG_TOP_K="4", RAG_FETCH_K="16")),
     # ── NVIDIA discrete GPU ──
+    # OLLAMA_MODEL here was "qwen2.5:14b" by the assumption that a bigger card
+    # should carry a bigger model. The US-015 screen does not support it: on 83
+    # golden-set cases the 14B and llama3.2:3b miss required facts identically
+    # (28 each, paired discordance 7-7, McNemar p = 1.00) while the 14B breaks
+    # the 2-sentence spoken limit 2.3x as often (37 vs 16, paired 26-5,
+    # p = 0.0002). That is a property of the model, not of the card, so it does
+    # not become true again on a larger GPU. Measured on an RTX 5060 Ti 16 GB;
+    # screen-grade, no PO approval (DG-03) -- see doc/perf/us015-model-decision.md.
     dict(tier_id="nvidia_high", label="NVIDIA ≥12 GB VRAM", platforms=["nvidia"],
          min_mem=12.0, max_mem=float("inf"), mem_field="vram_gb",
          values=dict(LLM_PROVIDER="ollama", MLX_MODEL=DEFAULT_MLX_MODEL,
-                     MLX_EMBED_MODEL=DEFAULT_MLX_EMBED_MODEL, OLLAMA_MODEL="qwen2.5:14b",
+                     MLX_EMBED_MODEL=DEFAULT_MLX_EMBED_MODEL, OLLAMA_MODEL="llama3.2:3b",
                      OLLAMA_NUM_CTX="8192", WHISPER_MODEL="small.en",
                      WHISPER_NUM_THREADS="8", FASTAPI_WORKERS="4", RAG_TOP_K="5", RAG_FETCH_K="20")),
     dict(tier_id="nvidia_mid", label="NVIDIA 6–11 GB VRAM", platforms=["nvidia"],
