@@ -2,7 +2,7 @@
 
 # US-016 — Two-caller admission control and the deterministic fixed response [Lens: PO]
 
-- **Status:** **NOT STARTED**
+- **Status:** **IMPLEMENTED - ACs verified; PO wording approval outstanding** · `test_us016_admission.py` 56/56, refusal path observed on the live server · DoD 4/10
 
 - **Story:** As a **caller who reaches the line at the worst possible moment — when both lines are already live, or when the assistant's model has just gone away**, I want **to hear a sentence played from an asset that was prepared in advance, on a contract that was decided before the moment arrived rather than improvised inside it**, so that **a full line and a broken dependency both sound like a service that is still in control**.
 - **Business value:** `06-architecture.md` §5 and `MOD-01` R3 currently own this as **one sentence** — "refuse a third call rather than degrade all three" — with no implementation contract behind it, while `BRD-13`'s failure-capability matrix has just made a second obligation explicit: an inference-engine loss must end in a **deterministic fixed response**, "which is a build item, not an accepted gap". Neither obligation has a home today. Both are the same shape at the point of delivery — *a caller hears a prepared sentence with no model and no synthesis running at request time* — which is why they are one story and one asset set.
@@ -343,13 +343,44 @@ def on_generation_failure(turn: Turn, assets: AssetSet) -> Outcome:
 - Related stories: `US-005` (streaming synthesis — the reason the assets are pre-produced rather than synthesised at request time), `US-002` (the harness that drives the N=3 window), `US-013` (bounded dependency calls and the half-open probe — the engine-loss branch is what the caller hears while the engine is gone), `US-014` (the interruption decision, which changes `SM-01`'s SPEAKING transitions and must not collide with this story's admission branch)
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-6, TAC-1 … TAC-10)
-- [ ] Tests from the LLD test scenarios pass (T-1 … T-22)
-- [ ] Perf/load test passed against the story's TACs (TAC-1 N=3 refusal count; TAC-2 live-session p95 within 1.5× and no turn over 3,000 ms; TAC-7 CPU/RAM ≤ 80%)
-- [ ] Schema migration applied — n/a for a durable store; the new assets (`assets/pre_synthesised/`) and the admission sink (`logs/admissions.jsonl`) are recorded, and the missing `DAT-xx` registry slot for the asset set is raised as a follow-on rather than assumed
+- [ ] All ACs pass (AC-1 … AC-6, TAC-1 … TAC-10) — **AC-1…AC-6 pass offline, and the refusal path was observed on the live server**; the TAC-2/TAC-7 load figures under an N=3 window are unmeasured
+- [ ] Tests from the LLD test scenarios pass (T-1 … T-22) — **16 of 22; see the coverage table below.** The 6 open are the two scripted-caller e2e scenarios and the four load scenarios
+- [ ] Perf/load test passed against the story's TACs (TAC-1 N=3 refusal count; TAC-2 live-session p95 within 1.5× and no turn over 3,000 ms; TAC-7 CPU/RAM ≤ 80%) — **not met: the harness drives `--n 1|2` only, so no N=3 window has been produced**
+- [ ] Schema migration applied — n/a for a durable store; the new assets (`app/static/audio/`) and the admission sink are recorded, and the missing `DAT-xx` registry slot for the asset set is raised as a follow-on rather than assumed — **the asset set exists and is gitignored, which is itself the finding: a clone has no assets until the build script runs, and the refusal now degrades to carrier `<Say>` rather than to silence**
 - [ ] Module docs updated if contracts changed — `MOD-01` B.3 (the carrier-facing endpoint gains the admission branch), B.6 (the "Third caller arrives" row gains its contract, and the "Generation fails or returns empty" row's **gap** is closed), and R3 (the refusal is now a specified behaviour, not a sentence); `06-architecture.md` §5 MOD-01's "refuse **or queue**" is closed to **refuse**, with the rejected queue alternative and the trigger that would reopen it recorded; `01-brd.md` `BRD-13`'s scope note gains the pointer that its inference-engine row is built
-- [ ] **The scripted caller-facing text of both assets carries Product-Owner approval**, recorded with the asset manifest — this is caller-facing content in the same sign-off class as critical-intent ground truth (`AS-05`, `DG-03`), and it is not an engineering wording choice
-- [ ] The wording review is recorded: no internal vocabulary, no model name, no promise the surviving components cannot keep (`AC-5`)
-- [ ] `BRD-15` rollback demonstrated: reverting admits the third call and restores today's behaviour exactly, with the three-way degradation observed
+- [ ] **The scripted caller-facing text of both assets carries Product-Owner approval**, recorded with the asset manifest — **OPEN, and not an engineering decision.** The wording is drafted and its mechanical rules are enforced, but this is caller-facing content in the same sign-off class as `DG-03`, and it is the Product Owner's to approve. The two lines are in `app/admission.py` as `BUSY_TEXT` and `FIXED_RESPONSE_TEXT`
+- [x] The wording review is recorded: no internal vocabulary, no model name, no promise the surviving components cannot keep (`AC-5`) — enforced at build time by `scripts/build_call_assets.py` and re-asserted by the test suite, so a hand-edited line cannot reach a caller
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` sets `ADMISSION_ENABLED=0`, observes the third call being admitted again and the refusal path not being taken, and restores. Not asserted — watched
 - [ ] `SM-01`'s state list is confirmed unchanged; `SM-02`'s amendment is recorded in `03-data-state-analysis.md` B.2 rather than left as a transition the machine calls illegal
-- [ ] Refusals are confirmed to be counted as neither failed calls nor turns, and the four outcomes (served, degraded, refused, failed) are distinguishable in whatever summary the operator reads
+- [x] Refusals are confirmed to be counted as neither failed calls nor turns, and the four outcomes (served, degraded, refused, failed) are distinguishable in whatever summary the operator reads — `Admission.snapshot()["outcomes"]` reports all four separately, and the test asserts a refusal is never folded into `failed`
+
+### LLD test coverage — T-1 … T-22
+
+| LLD | Covered by | Status |
+|---|---|---|
+| T-1 | `test_us016_admission.py` AC-4 (decision from one read, no reservation) | **PASS** |
+| T-2 | AC-2 (four outcomes, no REFUSED→FAILED path) | **PASS** |
+| T-3 | AC-3 (the play path reads bytes and touches no synthesiser) | **PASS** |
+| T-4 | LLD T-4 (a manifest/voice mismatch is reported) | **PASS** |
+| T-5 | TAC-1 (two live + a third → one refusal, zero new sessions) | **PASS** |
+| T-6 | AC-1 (no `<Connect>`, no session, no history) | **PASS** |
+| T-7 | LLD T-7 (no phone number, no caller text in the record) | **PASS** — *this found a real defect; see below* |
+| T-8 | AC-2 (no turn row for a refused call, refusal still visible) | **PASS** |
+| T-9 | TAC-4 (busy asset byte-identical over 12 plays) | **PASS** |
+| T-10 | AC-5 (engine loss → fixed response in the same turn) | **PASS** (code path) |
+| T-11 | AC-3 (synthesis down → both still play) | **PASS** |
+| T-12 | AC-5 (both down → fixed response; no asset → clean end) | **PASS** |
+| T-13 | AC-5 (byte-identical across two failures) | **PASS** |
+| T-14 | AC-1 (redial after a slot frees → fresh session) | **PASS** |
+| T-15 | AC-4 (24 concurrent decisions, all definite) | **PASS** |
+| T-16 | `test_brd15_rollback.py` | **PASS** |
+| T-17 | — e2e, two scripted callers plus a refused third | OPEN |
+| T-18 | — e2e, a live call surviving an engine kill | OPEN |
+| T-19 | — load, N=3 window | OPEN |
+| T-20 | — load, N=3 p95 and cap | OPEN |
+| T-21 | — load, N=3 CPU/RAM | OPEN |
+| T-22 | — load, 30-minute sustained refusals | OPEN |
+
+**The T-7 result is the one to read.** The first version of `Decision.as_record()` stored `call_sid` verbatim — and `call_sid` arrives as the carrier's `From`, which is the caller's **phone number**. A refused caller's number would have been written into the admission record. The scenario caught it; the record now stores a truncated one-way digest, and the test asserts the number does not appear.
+
+**Why the 6 remain open.** T-17 and T-18 need scripted callers with an engine kill mid-conversation; T-19…T-22 need an N=3 window, and the harness accepts `--n 1|2` only. Both are harness capabilities rather than admission work: the admission contract itself is covered by T-1…T-16.

@@ -2,7 +2,7 @@
 
 # US-013 — Bound every dependency call and probe for recovery [Lens: PO]
 
-- **Status:** **NOT STARTED**
+- **Status:** **IMPLEMENTED - ACs verified** · `test_us013_breaker.py` 39/39 · `test_brd15_rollback.py` demonstrates the revert · DoD 2/8
 
 - **Story:** As a **caller during a retrieval outage**, I want **to wait once for the failure and not once every thirty seconds for as long as the outage lasts**, so that **a service that is already down does not keep taking my answer's time budget away from me**.
 - **Business value:** `BRD-14` requires every outbound dependency call to carry a timeout justified against the latency budget, and a tripped circuit to **probe for recovery** rather than paying the timeout on every subsequent request. Today a failed retrieval costs the caller the 2,500 ms read timeout **plus** a full re-retrieval from the local store — the caller pays twice for one failure — and the flat 30 s cooldown retries the dead service with the full timeout again and again for the duration of the outage.
@@ -252,11 +252,40 @@ async def retrieve_context(question: str) -> RetrievalResult: ...
 - Related workflow: `WF-01` step 6 and its dependency-failure row; `WF-02` steps 3–5 for the two-caller case (one caller's degradation must not become the other's)
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-10)
-- [ ] Tests from the LLD test scenarios pass (T-1 … T-22)
-- [ ] Perf/load test passed against the story's TACs (TAC-4 outage cost bounded per window and not growing with turns; TAC-6 retrieval p95 within the 400 ms allowance when healthy; TAC-10 N=2 with the service killed, `turns_over_3000ms: 0`)
-- [ ] Schema migration applied — n/a (in-process breaker state; the `DAT-07` fields are `US-001`'s record)
+- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-10) — **AC-1…AC-4 pass offline; the TAC-4/TAC-6/TAC-10 load figures are unmeasured**
+- [ ] Tests from the LLD test scenarios pass (T-1 … T-22) — **11 of 22; see the coverage table below.** The 11 open are the embedding hop, malformed input, the live/text paths and every load scenario
+- [ ] Perf/load test passed against the story's TACs (TAC-4 outage cost bounded per window and not growing with turns; TAC-6 retrieval p95 within the 400 ms allowance when healthy; TAC-10 N=2 with the service killed, `turns_over_3000ms: 0`) — **not met: no outage run has been made**
+- [x] Schema migration applied — n/a (in-process breaker state; the `DAT-07` fields are `US-001`'s record)
 - [ ] Module docs updated if contracts changed — `MOD-02` B.2 (degradation ladder, unchanged in order) and B.7/B.8 (the breaker row: "flat breaker → probe-on-timer" implemented), and B.3 if the client's bound changes the interface description
-- [ ] Outage-cost evidence recorded: the wall time charged to a dead dependency per window, showing the probe's fraction rather than the full 2,500 ms per window
-- [ ] `DG-06` verdict recorded for `MOD-02`'s shared state (the breaker), jointly with `US-012`'s cache verdict, before any `BRD-06` claim is made
-- [ ] `BRD-15` rollback demonstrated: reverting the bound and the probe restores today's flat 30 s cooldown exactly
+- [ ] Outage-cost evidence recorded: the wall time charged to a dead dependency per window, showing the probe's fraction rather than the full 2,500 ms per window — **the probe's budget is recorded and asserted (1.5 s vs 6.0 s), but the per-window wall time against a real dead service has not been measured**
+- [ ] `DG-06` verdict recorded for `MOD-02`'s shared state (the breaker), jointly with `US-012`'s cache verdict, before any `BRD-06` claim is made — **`US-012`'s half is recorded (per-call adopted); this half is not**
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` restores the two-state breaker, observes an elapsed cooldown retrying the dead service blind at the full timeout, and restores the three-state one. Not asserted — watched
+
+### LLD test coverage — T-1 … T-22
+
+| LLD | Covered by | Status |
+|---|---|---|
+| T-1 | `test_us013_breaker.py` AC-1 (budget arithmetic) | **PASS** |
+| T-2 | AC-1 (connect bounded below the read) | **PASS** |
+| T-3 | AC-2 (open refuses the primary, no per-turn probing) | **PASS** |
+| T-4 | AC-2 (half-open admits exactly once) | **PASS** |
+| T-5 | AC-2 (probe budget strictly below the full read) | **PASS** |
+| T-6 | AC-2 (a successful probe closes the circuit) | **PASS** |
+| T-7 | AC-2 (a failed probe reopens and restarts the window) | **PASS** |
+| T-8 | — embedding hop under the same bound | OPEN |
+| T-9 | — malformed response never yields empty context | OPEN |
+| T-10 | — primary killed, turn inside one budget | OPEN (live) |
+| T-11 | LLD T-11 (state, probe budget and counts are reported) | **PASS** |
+| T-12 | AC-2 (recovery needs no restart and no operator action) | **PASS** |
+| T-13 | AC-3 (two callers, one probe) | **PASS** |
+| T-14 | — all rungs unavailable, spoken outcome | OPEN |
+| T-15 | LLD T-15 (an abandoned probe still leaves its record) | **PASS** |
+| T-16 | `test_brd15_rollback.py` | **PASS** |
+| T-17 | — `/ws/voice/text` regression guard | OPEN |
+| T-18 | — e2e during an outage | OPEN |
+| T-19 | — load, service killed mid-run | OPEN |
+| T-20 | — load, healthy retrieval p95 | OPEN |
+| T-21 | — load, service restored mid-run | OPEN |
+| T-22 | — load, 2.5 s stall on one caller | OPEN |
+
+**Why the 11 remain open.** They divide into two groups and neither is breaker work: the rungs *below* the breaker (T-8, T-9, T-14, T-17) live in the retrieval ladder rather than the circuit, and the rest need a service killed mid-run (T-10, T-18…T-22), which is a harness capability the program does not have yet. The breaker's own contract — states, single probe, cost, recovery, revert — is covered by T-1…T-7 and T-11…T-16.

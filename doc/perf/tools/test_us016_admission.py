@@ -222,6 +222,56 @@ def ac2_outcomes() -> None:
           "third" not in reg.live_ids(), str(reg.live_ids()))
 
 
+# ───────────────────── LLD T-4 / T-7: the record and the manifest ─────────────────────
+
+def lld_record_and_manifest() -> None:
+    print("\n-- LLD T-4 / T-7  the record carries no personal data; drift is detected")
+
+    # T-7 / TAC-8: the admission record must hold no phone number and no caller
+    # text. `call_sid` arrives as the carrier's From, which IS a phone number,
+    # and the first version of as_record() stored it verbatim.
+    import json
+    reg = reset(limit=2)
+    reg.register("A")
+    reg.register("B")
+    phone = "+15551234567"
+    reg.decide(call_sid=phone)
+    reg.note_asset_played(adm.BUSY_ASSET, call_sid=phone)
+    blob = json.dumps(reg.snapshot(), ensure_ascii=False)
+
+    check("T-7  the phone number does not appear in the admission record",
+          phone not in blob, "the record must carry no personal data")
+    check("T-7  nor does a bare digit run from it",
+          "5551234567" not in blob)
+    check("T-7  no transcript text appears",
+          "caller" not in blob.lower().replace("caller_ref", ""))
+    check("T-7  a stable non-identifying reference IS present, so records correlate",
+          any(r.get("caller_ref") for r in reg.snapshot()["decision_records"]))
+    check("T-7  and the same caller yields the same reference",
+          adm._caller_ref(phone) == adm._caller_ref(phone)
+          and adm._caller_ref(phone) != adm._caller_ref("+15559999999"))
+
+    # T-4: a manifest whose voice no longer matches the live configuration is
+    # detectable, which is what the boot gate reports.
+    manifest = adm.read_manifest()
+    check("T-4  the manifest records the voice configuration it was built with",
+          "voice" in manifest and "speed" in manifest, str(sorted(manifest)))
+    old = os.environ.get("KOKORO_VOICE")
+    try:
+        os.environ["KOKORO_VOICE"] = "definitely_not_the_recorded_voice"
+        drift = adm.asset_drift()
+        check("T-4  a mismatched voice is reported", drift is not None, str(drift))
+        check("T-4  and the report names the regeneration command",
+              "build_call_assets" in (drift or ""), str(drift))
+    finally:
+        if old is None:
+            os.environ.pop("KOKORO_VOICE", None)
+        else:
+            os.environ["KOKORO_VOICE"] = old
+    check("T-4  with the recorded voice restored there is no drift",
+          adm.asset_drift() is None)
+
+
 # ───────────────────── AC-4: single-valued ─────────────────────
 
 def ac4_single_valued() -> None:
@@ -321,6 +371,7 @@ def main() -> int:
     ac5_wording()
     ac1_endpoint()
     ac2_outcomes()
+    lld_record_and_manifest()
     ac4_single_valued()
     ac6_no_cost()
     revert()

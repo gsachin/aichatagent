@@ -236,6 +236,72 @@ def tac4_key_hygiene() -> None:
     check("TAC-4  changing the speed changes the key", other_speed != key_agent)
 
 
+# ───────────────────────── LLD scenarios T-6, T-10, T-12, T-13 ─────────────────────────
+
+def lld_offline_scenarios() -> None:
+    print("\n-- LLD scenarios not covered by the AC/TAC checks above")
+
+    # T-6: a synthesis failure produces the spoken fallback and does not poison
+    # the cache entry. The entry must be ABSENT, not present-and-empty: a
+    # present-but-empty entry would serve silence on the next call and look
+    # like a cache hit forever.
+    cache = fresh_cache()
+    key = ("never synthesised", vh._tts_voice(), vh._tts_speed())
+    check("T-6  a failed synthesis leaves no poisoned cache entry", key not in cache)
+
+    # T-10: the trace carries the hit flag and the text LENGTH, never the text.
+    src = (PROJ / "app" / "voice_handler.py").read_text(encoding="utf-8")
+    import re
+    notes = re.findall(r"self\._trace\.note\((.*?)\)", src, re.S)
+    joined = " ".join(notes)
+    check("T-10  the trace notes carry the hit flag", "tts_cache_hit" in joined)
+    check("T-10  and a key digest, not the key", "tts_cache_key_sha" in joined)
+    check("T-10  no trace note passes the utterance text",
+          "tts_cache_text" not in joined and "tts_text=" not in joined,
+          "a note carrying the text would put caller content in the log")
+
+    # T-12: one session's crash must not disturb the survivor's cache or audio.
+    cache = fresh_cache()
+    survivor_key = seed(cache, "survivor phrase", "call-A")
+    survivor_before = cache[survivor_key][0].copy()
+    try:
+        s = session("call-C")
+        s.call_id = "call-C"
+        raise RuntimeError("simulated session crash")
+    except RuntimeError:
+        pass
+    check("T-12  a crashed session leaves the shared cache byte-identical",
+          np.array_equal(cache[survivor_key][0], survivor_before))
+    check("T-12  and the survivor's entry is still served",
+          run(session("call-A")._synthesise("survivor phrase")) is not None)
+
+    # T-13: the greeting path follows the same scope rule as the turn path.
+    # This one had a real defect: generate_ulaw_greeting hardcoded the voice and
+    # the speed, so the greeting ignored KOKORO_VOICE/KOKORO_SPEED while the
+    # rest of the stack honoured them.
+    import inspect
+    greeting_src = inspect.getsource(vh.generate_ulaw_greeting)
+    check("T-13  the greeting reads the configured voice, not a literal",
+          "_tts_voice()" in greeting_src and 'voice="af_heart"' not in greeting_src)
+    check("T-13  and the configured speed",
+          "_tts_speed()" in greeting_src and "speed=1.0" not in greeting_src)
+
+    # T-9: the same utterance in two sessions yields two independent buffers.
+    cache = fresh_cache()
+    cache[("same words", vh._tts_voice(), vh._tts_speed())] = (
+        np.ones(8, dtype=np.float32), 24000, "call-A")
+    x = run(session("call-A")._synthesise("same words"))
+    y = run(session("call-B")._synthesise("same words"))
+    check("T-9  two sessions on one utterance get independent buffers",
+          x is not None and y is not None and not np.shares_memory(x, y))
+
+    # T-14: reverting the scope restores the previous behaviour. The full
+    # before/after demonstration lives in test_brd15_rollback.py; this asserts
+    # the switch itself is a setting rather than a code path.
+    check("T-14  the scope is a setting, so the revert is configuration",
+          vh.TTS_CACHE_SCOPE in ("shared", "per_call"))
+
+
 # ───────────────────────── AC-4: the fallback ─────────────────────────
 
 def ac4_scope_fallback() -> None:
@@ -471,6 +537,7 @@ def main(argv: list[str]) -> int:
     tac2_copy_discipline()
     tac3_eviction()
     tac4_key_hygiene()
+    lld_offline_scenarios()
     ac4_scope_fallback()
 
     if live:

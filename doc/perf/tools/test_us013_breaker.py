@@ -230,6 +230,43 @@ def ac4_recording() -> None:
             os.environ["USE_MCP_RAG"] = old
 
 
+# ───────────────────── LLD T-11 / T-15: the record ─────────────────────
+
+def lld_record() -> None:
+    print("\n-- LLD T-11 / T-15  the record states the rung, the state and the cost")
+
+    reset()
+    st = m.mcp_rag_status()
+    check("T-11  the record carries the breaker state", "breaker_state" in st)
+    check("T-11  and the probe's budget, so the outage cost is readable",
+          st.get("probe_read_timeout_s") is not None,
+          str(st.get("probe_read_timeout_s")))
+    check("T-11  and the count of openings and probes",
+          "breaker_opens" in st and "breaker_probes" in st)
+
+    # T-15: a turn abandoned at its deadline still leaves a record. The probe's
+    # reduced budget IS that deadline, and the probe is counted when claimed --
+    # before the outcome is known -- so an abandoned probe is visible rather
+    # than silently absent from the count.
+    reset()
+    force_open(age_s=float(os.environ.get("RAG_MCP_COOLDOWN", "30")) + 1.0)
+    claimed = m.claim_probe()
+    check("T-15  the probe is counted at claim time, before its outcome",
+          claimed and m.mcp_rag_status()["breaker_probes"] == 1)
+    m._breaker["probe_claimed_at"] = time.monotonic() - 999.0
+    m._probe_in_flight()          # the reclaim path
+    check("T-15  an abandoned probe still leaves its count behind",
+          m.mcp_rag_status()["breaker_probes"] == 1,
+          "a probe that died without a verdict is visible in the record")
+
+    # The state is observable while the outage is in progress, not only after.
+    reset()
+    force_open(age_s=1.0)
+    check("T-11  the outage state is readable mid-outage",
+          m.mcp_rag_status()["breaker_state"] == "open")
+    reset()
+
+
 def main() -> int:
     print("=" * 74)
     print("US-013 -- bounded dependency calls and the half-open probe (BRD-14)")
@@ -242,6 +279,7 @@ def main() -> int:
     ac2_probe()
     ac3_single_flight()
     ac4_recording()
+    lld_record()
     reset()
 
     print()

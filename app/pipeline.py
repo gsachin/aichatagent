@@ -315,15 +315,24 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     if not _bg_priority_enabled():
         return query_rag(user_text, mode=mode)
 
-    from app.work_priority import classify, GATE, VOICE
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
     work_class, defect = classify(mode)
     if work_class == VOICE:
         label = "voice" if defect is None else f"unclassified:{mode}"
         with GATE.voice_turn(label=label):
             return query_rag(user_text, mode=mode)
-    with GATE.background_unit(label="background", mode=mode):
-        return query_rag(user_text, mode=mode)
+    try:
+        with GATE.background_unit(label="background", mode=mode):
+            return query_rag(user_text, mode=mode)
+    except BackgroundDeferred:
+        # Refused because the line stayed busy past its budget. It answers
+        # nothing rather than being interleaved -- and this is NOT a
+        # caller-facing failure: no caller is waiting on it, and it must not
+        # appear in any caller-facing failure figure (AC-2). The gate has
+        # already recorded the reason and the wait (TAC-6).
+        logger.info("background query deferred past its budget and refused: %r", mode)
+        return None
 
 
 async def test_pipeline_with_text(user_text: str) -> str | None:

@@ -70,6 +70,19 @@ FIXED_RESPONSE_TEXT = (
 OUTCOMES = ("served", "degraded", "failed", "refused")
 
 
+def _caller_ref(call_sid: str) -> str:
+    """A short, one-way reference for a caller identifier.
+
+    `call_sid` is whatever the caller supplied -- in production the carrier's
+    `From`, which is a phone number. TAC-8 keeps personal data out of the
+    admission record, so the reference is a truncated digest: stable enough to
+    correlate two records from one caller, and not the number itself.
+    """
+    if not call_sid:
+        return ""
+    return hashlib.sha256(f"admission:{call_sid}".encode("utf-8")).hexdigest()[:12]
+
+
 def enabled() -> bool:
     """US-016 revert: one setting, no code change (`BRD-15`)."""
     return os.environ.get("ADMISSION_ENABLED", "1").strip().lower() not in (
@@ -110,11 +123,19 @@ class Decision:
     reason: str = ""
 
     def as_record(self) -> dict:
+        """TAC-8 / LLD T-7: the record carries no phone number and no caller text.
+
+        `call_sid` arrives as the carrier's `From` parameter, which IS the
+        caller's phone number. A short one-way digest is stored instead: an
+        operator can still correlate two records from the same caller, and the
+        record itself holds no personal data. The check is a test, not a habit
+        -- the first version of this method stored `From` verbatim.
+        """
         return {
             "outcome": "admitted" if self.admitted else "refused",
             "live_at_decision": self.live,
             "limit": self.limit,
-            "call_sid": self.call_sid,
+            "caller_ref": _caller_ref(self.call_sid),
             "reason": self.reason,
             "ts": time.time(),
         }
@@ -225,7 +246,7 @@ class Admission:
         """Record that a caller heard a prepared asset rather than generated audio."""
         with self._lock:
             self.records.asset_plays.append(
-                {"asset": asset, "call_sid": call_sid, "ts": time.time()})
+                {"asset": asset, "caller_ref": _caller_ref(call_sid), "ts": time.time()})
             if asset == FIXED_RESPONSE_ASSET:
                 self.records.fixed_response_plays += 1
 

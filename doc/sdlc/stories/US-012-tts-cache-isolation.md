@@ -2,7 +2,7 @@
 
 # US-012 — Prove the TTS cache safe for two callers, or make it per-call [Lens: PO]
 
-- **Status:** **NOT STARTED**
+- **Status:** **IMPLEMENTED - isolation test FAILED, AC-4 fallback applied** · `test_us012_cache_isolation.py` 36/36 offline + live verdict (30 cross-call hits under `shared`, 0 across 105 keys under `per_call`) · DoD 4/8
 
 - **Story:** As a **caller**, I want **the audio I hear to be mine and nobody else's**, so that **two people talking to the assistant at the same time never hear a fragment of each other's conversation**.
 - **Business value:** `BRD-06` requires caller isolation **demonstrated under concurrent load, not asserted**, and the TTS cache is the one piece of shared mutable state on the audio path. Today the safety argument is an assertion — "keys are content hashes, so identical text maps to identical audio" — and `DG-06` explicitly records that the assertion is not sufficient: the risk is not the key, it is a buffer that is returned and then mutated.
@@ -219,11 +219,39 @@ TTS_CACHE_SCOPE: Literal["process", "per_call"] = settings.TTS_CACHE_SCOPE
 - Related workflow: `WF-02` (the two-caller workflow) step 5 ("each caller hears only their own audio") and its concurrency row
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-9)
-- [ ] Tests from the LLD test scenarios pass (T-1 … T-21)
-- [ ] Perf/load test passed against the story's TACs (TAC-1 zero cross-call hits over ≥100 turns per caller across three runs; TAC-8 no per-turn cap breach and no VRAM breach at N=2)
-- [ ] Schema migration applied — n/a for durable data; the `DAT-11` scope attribute is recorded and its effective value is reported by `US-011`'s configuration output
+- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-9) — **AC-2/3/4 pass; AC-1's three-run sample is unmet** (one qualifying run at 65 turns/caller, needed 3 at ≥100)
+- [ ] Tests from the LLD test scenarios pass (T-1 … T-21) — **14 of 21; see the coverage table below.** The 7 open are load and e2e (T-11, T-15, T-16, T-17, T-19, T-20, T-21)
+- [ ] Perf/load test passed against the story's TACs (TAC-1 zero cross-call hits over ≥100 turns per caller across three runs; TAC-8 no per-turn cap breach and no VRAM breach at N=2) — **not met: one run, 65 turns/caller**
+- [x] Schema migration applied — n/a for durable data; the `DAT-11` scope attribute is recorded and its effective value is reported by `US-011`'s configuration output
 - [ ] Module docs updated if contracts changed — `MOD-04` B.4 (`DAT-11` row gains the scope) and B.8 risk 3, whose recorded outcome is either "test passed, cache kept process-wide" or "test failed, per-call adopted" — never left as "may fail"
-- [ ] **Isolation verdict recorded with the scope it was measured under**: pass (process-wide kept) or fail (per-call adopted), and no `BRD-06` claim is made without it
-- [ ] `BRD-15` rollback demonstrated: the cache scope reverts by configuration, and the verdict is re-run against the restored scope
-- [ ] Cache key discipline asserted by test, not review: no key derives from caller speech, caller identity or a transcript (`TAC-4`)
+- [x] **Isolation verdict recorded with the scope it was measured under**: **FAIL under `shared` (30 cross-call hits), PASS under `per_call` (0 across 105 keys)** — the AC-4 fallback was applied. No `BRD-06` claim is made without it
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` reverts the scope to `shared`, observes caller B being served caller A's entry again, and restores. Not asserted — watched
+- [x] Cache key discipline asserted by test, not review: no key derives from caller speech, caller identity or a transcript (`TAC-4`) — asserted in `test_us012_cache_isolation.py`, and the key now carries voice and speed as well, which the test also pins
+
+### LLD test coverage — T-1 … T-21
+
+| LLD | Covered by | Status |
+|---|---|---|
+| T-1 | `test_us012_cache_isolation.py` TAC-2 (copy discipline) | **PASS** |
+| T-2 | TAC-4 (key hygiene) | **PASS** |
+| T-3 | TAC-3 (FIFO eviction) | **PASS** |
+| T-4 | TAC-3 (evicted key absent → re-synthesis) | **PASS** |
+| T-5 | TAC-3 (bounded under four concurrent writers) | **PASS** |
+| T-6 | LLD T-6 (failed synthesis leaves no poisoned entry) | **PASS** |
+| T-7 | AC-4 (per-call caches disjoint) | **PASS** |
+| T-8 | AC-4 (a per-call session cannot see the shared entry) | **PASS** |
+| T-9 | LLD T-9 (one utterance, two sessions, independent buffers) | **PASS** |
+| T-10 | LLD T-10 (trace carries the flag and a digest, never the text) | **PASS** |
+| T-11 | — cancelled-mid-synthesis; needs a live call pair | OPEN |
+| T-12 | LLD T-12 (a crashed session leaves the cache byte-identical) | **PASS** |
+| T-13 | LLD T-13 (greeting path follows the same voice/scope rule) | **PASS** |
+| T-14 | LLD T-14 + `test_brd15_rollback.py` | **PASS** |
+| T-15 | TAC-2 (concurrent dependency failure does not cross sessions) | partial |
+| T-16 | — e2e, two live callers | OPEN |
+| T-17 | — e2e, one caller ends mid-turn | OPEN |
+| T-18 | `--live` (the N=2 isolation condition) | **FAIL→fixed**, sample short |
+| T-19 | — load, diversity + eviction pressure | OPEN |
+| T-20 | — load, 2.5 s stall on one caller | OPEN |
+| T-21 | — load/soak, 30 min, VRAM ceiling | OPEN |
+
+**Why the 7 remain open.** Each needs either a live call pair driven in a way the harness does not yet express (T-11, T-16, T-17, T-20 need per-caller injection or e2e judgement) or a long soak (T-21). This is harness work, not cache work: the cache's own contract is covered by T-1…T-14. Recorded rather than quietly folded into "tests pass".

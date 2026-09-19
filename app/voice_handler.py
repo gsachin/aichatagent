@@ -550,6 +550,13 @@ class VoiceCallSession:
                 self._trace.note(
                     vad_frames=self._total_frames,
                     endpoint_ms=self._silence_threshold * 20,
+                    # US-017 T-10: every caller turn is stamped with its work
+                    # class, so the priority rule ("zero background starts
+                    # during a voice turn") is countable from the records after
+                    # the fact rather than only observable live. A rule that
+                    # cannot be counted from the record is a rule that can only
+                    # be asserted.
+                    work_class="voice",
                 )
             except Exception:
                 self._trace = None

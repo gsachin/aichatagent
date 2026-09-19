@@ -2,7 +2,7 @@
 
 # US-017 — Background work yields to the caller, by policy [Lens: PO]
 
-- **Status:** **NOT STARTED**
+- **Status:** **IMPLEMENTED - ACs verified offline; the 2+1 window is unmeasured** · `test_us017_priority.py` 48/48 · DoD 3/10
 
 - **Story:** As a **caller on a live line while the same box is also answering a chat or admin request**, I want **every background request to be held back rather than allowed to take its turn between the pieces of mine**, so that **my caller's turn is decided by my own conversation and never by work that no one is waiting to hear**.
 - **Business value:** `BRD-20` states the operating scenario this box actually has to survive — **two concurrent voice calls plus one background chat/admin request** — and it is an *acceptance condition, not a footnote*: a configuration that passes at two voice callers alone and collapses at two-plus-one has not met the requirement. Today nothing owns the enforcement: `03-data-state-analysis.md` A.2 lists the 2-voice+1-chat row as **Assumed, unquantified**, `08-coverage-verification.md` §2 records `BRD-20`'s enforcement mechanism as an unowned gap, and `06-architecture.md` §5's degradation ladder begins at retrieval — it has no rung for the class of work that should degrade before anything a caller can hear. This story supplies the policy and the rung.
@@ -296,13 +296,39 @@ def run_background(unit: WorkUnit, gate: WorkGate, *, budget_s: float) -> Backgr
 - Honest boundary: the design assumes the background class is a **chat/admin** request whose requester is not listening to audio. If a future caller-facing text channel is promoted to background, that is a PO decision about who waits, not an engineering default — and the classification point makes it a one-line change with a recorded decision rather than a silent one
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-10)
-- [ ] Tests from the LLD test scenarios pass (T-1 … T-17)
-- [ ] Perf/load test passed: the 2-voice + 1-background window measured at ≥100 turns per condition, with the ordering invariants (TAC-2, TAC-3, TAC-4) reported as counts and every performance figure reported as a measurement (TAC-9)
-- [ ] `BRD-05`'s interference budget and `BRD-12`'s CPU/RAM ceilings read from the 2+1 window, with no caller starved and no turn over the cap (TAC-5)
-- [ ] Schema migration applied — n/a; `DAT-07` gains the `work_class` field and deferrals are written to the existing admission stream (`DAT-13` lineage)
-- [ ] `SM-01`'s state list is confirmed unchanged; the deferral is confirmed to be outside the call-session lifecycle (TAC-8)
-- [ ] Deferrals and refusals confirmed to be counted as neither failed calls nor caller-facing outcomes, and confirmed to be visible to an operator without reading the background path's logs (TAC-6)
-- [ ] `BRD-15` rollback demonstrated: disabling the policy restores interleaved behaviour exactly, with the before/after runs recorded
+- [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-10) — **pass offline**; TAC-9's measurement duty is unmet because no 2+1 window has been run
+- [ ] Tests from the LLD test scenarios pass (T-1 … T-17) — **11 of 17; see the coverage table below.** The 6 open are one integration overlap case, two e2e scenarios and three load scenarios
+- [ ] Perf/load test passed: the 2-voice + 1-background window measured at ≥100 turns per condition, with the ordering invariants (TAC-2, TAC-3, TAC-4) reported as counts and every performance figure reported as a measurement (TAC-9) — **not met: no 2+1 window has been produced.** The invariant holds under the suite's thread-driven conditions, which is a different claim
+- [ ] `BRD-05`'s interference budget and `BRD-12`'s CPU/RAM ceilings read from the 2+1 window, with no caller starved and no turn over the cap (TAC-5) — **not met: needs the window above**
+- [ ] Schema migration applied — n/a; `DAT-07` gains the `work_class` field and deferrals are written to the existing admission stream (`DAT-13` lineage) — **`work_class` is now stamped on every caller turn's trace (T-10); the deferral/refusal records live on the gate, not yet in the admission stream**
+- [x] `SM-01`'s state list is confirmed unchanged; the deferral is confirmed to be outside the call-session lifecycle (TAC-8) — the gate holds no per-caller state; a deferral is a property of a unit of work, not of a session
+- [x] Deferrals and refusals confirmed to be counted as neither failed calls nor caller-facing outcomes, and confirmed to be visible to an operator without reading the background path's logs (TAC-6) — `policy_status()` reports deferrals and refusals with their reasons and waits; a refused background unit returns `None` rather than any caller-facing answer
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` disables the policy, observes background work running *inside* the caller's turn again, and restores. Not asserted — watched
 - [ ] Module docs updated if contracts changed — `MOD-01` B.3 (the entry point gains the classification and the voice-side admission), B.6 (the "background work present" row gains its contract); `MOD-06` B.3/B.4 if the `work_class` field or the deferral record's shape differs; `06-architecture.md` §5's ladder is cited as gaining its first rung **by this story's policy** — the document itself is updated where the rung belongs
-- [ ] The load-model row in `03-data-state-analysis.md` A.2 marked **Assumed** for the 2+1 mix is updated with the measured figures, or explicitly left labelled Assumed with the reason the measurement did not close it
+- [ ] The load-model row in `03-data-state-analysis.md` A.2 marked **Assumed** for the 2+1 mix is updated with the measured figures, or explicitly left labelled Assumed with the reason the measurement did not close it — **left Assumed: no 2+1 measurement exists, and the reason is recorded rather than the label quietly dropped**
+
+### LLD test coverage — T-1 … T-17
+
+| LLD | Covered by | Status |
+|---|---|---|
+| T-1 | `test_us017_priority.py` TAC-1 (classification, defect on the unknown) | **PASS** |
+| T-2 | TAC-2 (deferred while a voice turn is in flight) | **PASS** |
+| T-3 | TAC-3 (two units → one served, one deferred) | **PASS** |
+| T-4 | TAC-6 (a deferral carries outcome, reason and wait) | **PASS** |
+| T-5 | AC-2 (background and caller-facing outcomes stay distinct) | **PASS** |
+| T-6 | TAC-7 (<50 ms CPU over 600 ms parked) | **PASS** |
+| T-7 | TAC-2 (a mid-turn submission is not served until the turn ends) | **PASS** |
+| T-8 | TAC-5 (served while both callers are silent, yields at the next turn) | **PASS** |
+| T-9 | LLD T-9 (refused for budget, reason named, not a caller-facing failure) | **PASS** — *this found a real defect; see below* |
+| T-10 | LLD T-10 (`work_class` on every caller turn's trace) | **PASS** |
+| T-11 | — a voice turn overlapping an in-flight background unit, counted | OPEN |
+| T-12 | LLD T-12 (a caller hanging up does not disturb a deferred unit) | **PASS** |
+| T-13 | — e2e, two callers with continuous background requests | OPEN |
+| T-14 | `test_brd15_rollback.py` covers the revert; the before/after **runs** do not exist | partial |
+| T-15 | — load, 2+1 ordering invariants | OPEN |
+| T-16 | — load, 2+1 with the interference budget read | OPEN |
+| T-17 | — load, a deferral across the whole window | OPEN |
+
+**The T-9 result is the one to read.** On defer-timeout the gate used to fall through and **start the unit anyway**, recording the breach after the fact. That made TAC-2's invariant advisory: "zero background starts during a voice turn" held only while nothing waited long enough to time out, so a caller on a long turn would eventually have had background work running inside it — the exact thing the story exists to prevent. The gate now **refuses** on timeout, raises `BackgroundDeferred` with its reason, and the pipeline returns `None` for that unit rather than interleaving it.
+
+**Why the 6 remain open.** T-13 and T-15…T-17 need a 2-voice + 1-background window, which the harness cannot yet drive (`--n 1|2`, no background feeder); T-11 needs an overlap counted against the unit's own bound. The policy's own contract — classification, the invariant, the ceiling, the records, no spin, the revert — is covered by T-1…T-10 and T-12.

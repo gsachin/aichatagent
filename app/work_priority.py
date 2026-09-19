@@ -45,6 +45,17 @@ BACKGROUND = "background"
 CLASSES = (VOICE, BACKGROUND)
 
 
+class BackgroundDeferred(Exception):
+    """A background unit was refused because the line stayed busy past its budget.
+
+    TAC-6: a deferral is never silently dropped, and a refusal names its reason.
+    So a refusal is an exception carrying that reason rather than a quiet
+    return, and the caller decides what a background request that could not run
+    should answer -- never the caller-facing path, which must not see it at all
+    (AC-2).
+    """
+
+
 def classify(mode: str | None) -> tuple[str, str | None]:
     """Map a caller-supplied mode onto a work class.
 
@@ -66,6 +77,7 @@ class _Records:
     """TAC-6: deferral is recorded, and silence is prohibited."""
 
     deferrals: list[dict] = field(default_factory=list)
+    refusals: list[dict] = field(default_factory=list)
     classification_defects: list[dict] = field(default_factory=list)
     background_starts_during_voice: list[dict] = field(default_factory=list)
     max_background_concurrent: int = 0
@@ -78,6 +90,8 @@ class _Records:
             "background_units": self.background_units,
             "deferrals": len(self.deferrals),
             "deferral_records": list(self.deferrals[-20:]),
+            "refusals": len(self.refusals),
+            "refusal_records": list(self.refusals[-20:]),
             "classification_defects": len(self.classification_defects),
             "classification_defect_records": list(self.classification_defects[-20:]),
             "background_starts_during_voice": len(self.background_starts_during_voice),
@@ -175,10 +189,28 @@ class WorkGate:
                 # and is woken by voice_turn's notify_all rather than by polling.
                 self._cv.wait(timeout=min(remaining, 1.0))
             waited_ms = (time.monotonic() - started_wait) * 1000.0
+
+            # The budget expired and the line is still busy. The unit is
+            # REFUSED, not admitted.
+            #
+            # This used to fall through and start anyway, recording the breach
+            # after the fact. That made TAC-2's invariant advisory: "zero
+            # background starts during a voice turn" was true only while
+            # nothing waited long enough to time out, and a caller on a long
+            # turn would eventually have background work running inside it.
+            # A refusal keeps the invariant absolute, and TAC-6 requires the
+            # refusal to name its reason rather than be silently dropped.
             if self._voice_active > 0:
                 self.records.background_starts_during_voice.append(
                     {"label": label, "voice_active": self._voice_active,
                      "waited_ms": round(waited_ms, 1), "ts": time.time()})
+                self.records.refusals.append(
+                    {"label": label, "reason": "defer budget expired; voice still in flight",
+                     "waited_ms": round(waited_ms, 1), "voice_active": self._voice_active,
+                     "ts": time.time()})
+                raise BackgroundDeferred(
+                    f"{label!r} deferred {waited_ms:.0f} ms and the line was still busy")
+
             self._background_active += 1
             self.records.background_units += 1
             self.records.max_background_concurrent = max(

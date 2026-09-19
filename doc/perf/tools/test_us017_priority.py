@@ -299,6 +299,80 @@ def ac5_revert() -> None:
           str(sorted(st)))
 
 
+# ───────────────────── LLD T-9 / T-10 / T-12 ─────────────────────
+
+def lld_refusal_and_class() -> None:
+    print("\n-- LLD T-9 / T-10 / T-12")
+
+    # T-9: a unit refused for budget NAMES its reason, and the refusal is not a
+    # caller-facing failure.
+    from app.work_priority import BackgroundDeferred
+
+    gate = WorkGate(defer_timeout_s=0.3)
+    hold = threading.Event()
+
+    def voice() -> None:
+        with gate.voice_turn(label="caller"):
+            hold.wait(timeout=5)
+
+    vt = threading.Thread(target=voice)
+    vt.start()
+    time.sleep(0.1)
+
+    caught = None
+    try:
+        with gate.background_unit(label="long-job", mode="chat"):
+            caught = "started"
+    except BackgroundDeferred as exc:
+        caught = exc
+    hold.set()
+    vt.join(timeout=5)
+
+    check("T-9  a unit that cannot run is REFUSED, not started anyway",
+          isinstance(caught, BackgroundDeferred),
+          f"got {caught!r} -- starting it would break TAC-2")
+    check("T-9  the refusal names its reason",
+          caught is not None and "busy" in str(caught), str(caught))
+    snap = gate.snapshot()
+    check("T-9  the refusal is recorded with its reason and wait",
+          snap["refusals"] == 1 and snap["refusal_records"][0].get("reason"),
+          str(snap["refusal_records"]))
+    check("T-9  the refused unit never became a background start",
+          snap["max_background_concurrent"] == 0, str(snap["max_background_concurrent"]))
+
+    # T-10: every caller turn is stamped with its work class, so the invariant
+    # is countable from the records.
+    import inspect
+    import app.voice_handler as vh
+
+    src = inspect.getsource(vh)
+    check("T-10  the turn trace carries work_class", 'work_class="voice"' in src)
+    check("T-10  and it is set where the trace is created, not patched on later",
+          "work_class=\"voice\"" in src.split("def _pcm_to_ulaw_chunks")[0])
+
+    # T-12: a caller hanging up while a unit is deferred does not disturb it and
+    # shares no state with it.
+    gate2 = WorkGate(defer_timeout_s=10.0)
+    done = threading.Event()
+
+    def bg() -> None:
+        with gate2.background_unit(label="bg"):
+            done.set()
+
+    with gate2.voice_turn(label="caller-A"):
+        t = threading.Thread(target=bg)
+        t.start()
+        time.sleep(0.2)
+        check("T-12  the unit is deferred while caller A is live", not done.is_set())
+    # caller A hangs up: the voice turn exits, which is the whole of the state
+    # a deferral shares with it.
+    t.join(timeout=5)
+    check("T-12  when the caller hangs up the deferred unit is served",
+          done.is_set())
+    check("T-12  and the gate holds no per-caller state",
+          gate2.voice_active == 0 and gate2.background_active == 0)
+
+
 def main() -> int:
     print("=" * 74)
     print("US-017 -- background work yields to the caller (BRD-20)")
@@ -312,6 +386,7 @@ def main() -> int:
     tac5_no_starvation()
     tac6_records()
     tac7_no_spin()
+    lld_refusal_and_class()
     ac5_revert()
 
     print()
