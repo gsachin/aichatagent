@@ -20,7 +20,18 @@
 | 11 Verification | done | 08-coverage-verification.md — validator run |
 
 ## ID registry
-AS-01…08 · BRD-01…21 · UC-01…10 · WF-01…03 · DAT-01…14 · DG-01…06 · SM-01…03 · CV-01…04 · MOD-01…07 · REC-01…13 · TRD-01…26 · US-001…US-018
+AS-01…08 · BRD-01…21 · UC-01…10 · WF-01…03 · DAT-01…14 · DG-01…06 · SM-01…03 · CV-01…04 · MOD-01…07 · REC-01…13 · TRD-01…26 · US-001…US-018 · DEF-001
+
+## Defects — deferred past story completion
+
+| ID | Severity | Component | One line | Status |
+|---|---|---|---|---|
+| `DEF-001` | Critical | `MOD-02` retrieval (`app/rag_mcp.py`) | The MCP primary retrieval intermittently hangs for the full 6.0 s read ceiling, then falls back to local Chroma in 600 ms — costing ~6.6 s on ~5–8% of turns. Latency only; grounding is preserved. Silent in the logs. | **DEFERRED** to after all 18 stories |
+
+`DEF-001` carries its own evidence, so it does not need re-deriving. It is safe
+to defer **only** while its finding C6 holds — that grounding is preserved. If a
+fallback is ever observed returning empty or degraded context, it stops being
+deferrable.
 
 ## Story completion — 18 stories, counted 2026-09-19
 
