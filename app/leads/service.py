@@ -11,6 +11,7 @@ Wraps the raw CRUD in app.leads.models with higher-level operations:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 logger = logging.getLogger("leads.service")
@@ -191,7 +192,8 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        raw = backend_chat(
+        raw = await asyncio.to_thread(
+            backend_chat,
             messages=[
                 {
                     "role": "user",
@@ -384,7 +386,8 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
             try:
                 from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-                raw = backend_chat(
+                raw = await asyncio.to_thread(
+                    backend_chat,
                     messages=[
                         {
                             "role": "user",
@@ -446,7 +449,8 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
     try:
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-        raw = backend_chat(
+        raw = await asyncio.to_thread(
+            backend_chat,
             messages=[{
                 "role": "user",
                 "content": (

@@ -52,8 +52,18 @@ BLOCKING = {
 
 #: Sources worth scanning: the request-handling surface. `to_thread` callers
 #: are clean by construction -- the scan looks for a DIRECT call.
+#:
+#: `database.py` and `leads/service.py` were MISSING from this list, and that
+#: omission had teeth: on 2026-09-19 the post-call path called the synchronous
+#: Ollama client from four `async def`s, the loop froze inside a socket read
+#: with Ollama idle, and the whole service went down for minutes. py-spy put
+#: the MainThread in `httpx sync read <- ollama.chat <-
+#: extract_lead_from_transcript <- handle_post_interaction <- _handle_disconnect`.
+#: A guard that only watches the files you happened to think of is a guard that
+#: reports green on the path nobody looked at.
 SOURCES = ("app/main.py", "app/pipeline.py", "app/voice_handler.py",
-           "app/admission.py", "app/work_priority.py")
+           "app/admission.py", "app/work_priority.py",
+           "app/database.py", "app/leads/service.py")
 
 IN_SCOPE = os.environ.get("EVENT_LOOP_SCAN_PATHS")
 
