@@ -2,7 +2,7 @@
 
 # US-001 — Turn tracing marks and records [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified** · `test_us001_tracer.py` 17/17 · DoD 3/6 · LLD mapping and the 30-minute soak are open
+- **Status:** **IMPLEMENTED - ACs verified** · `test_us001_tracer.py` 24/24 · DoD 4/6 · LLD mapping and the 30-minute soak are open
 
 - **Story:** As a **developer maintaining the voice pipeline**, I want **every voice turn to emit one machine-readable record carrying each stage boundary it passed and the inference engine's own counters**, so that **per-stage latency is measured on this machine instead of inferred from component numbers**.
 - **Business value:** `BRD-01` has no home in the existing code and `DAT-07` does not exist. Every later decision in this program — which change to adopt, which to revert — is only defensible once a real call produces a real decomposition.
