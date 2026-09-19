@@ -2,6 +2,8 @@
 
 # US-016 — Two-caller admission control and the deterministic fixed response [Lens: PO]
 
+- **Status:** **NOT STARTED**
+
 - **Story:** As a **caller who reaches the line at the worst possible moment — when both lines are already live, or when the assistant's model has just gone away**, I want **to hear a sentence played from an asset that was prepared in advance, on a contract that was decided before the moment arrived rather than improvised inside it**, so that **a full line and a broken dependency both sound like a service that is still in control**.
 - **Business value:** `06-architecture.md` §5 and `MOD-01` R3 currently own this as **one sentence** — "refuse a third call rather than degrade all three" — with no implementation contract behind it, while `BRD-13`'s failure-capability matrix has just made a second obligation explicit: an inference-engine loss must end in a **deterministic fixed response**, "which is a build item, not an accepted gap". Neither obligation has a home today. Both are the same shape at the point of delivery — *a caller hears a prepared sentence with no model and no synthesis running at request time* — which is why they are one story and one asset set.
 - **Priority:** **Must** — TPO ordering note: the refusal path is the only thing standing between a third caller and a three-way degraded call, and it must exist **before** any N=3 traffic meets the stack. It sequences *after* `US-005` (streaming synthesis) because both paths need to know what the synthesis path can and cannot do, and *after* `US-002` because the N=3 window cannot be demonstrated without the harness. It is independent of `US-006`/`US-014`: it changes no existing caller's turn.

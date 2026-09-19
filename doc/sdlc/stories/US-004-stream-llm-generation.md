@@ -2,6 +2,8 @@
 
 # US-004 — Stream LLM generation to the caller [Lens: PO]
 
+- **Status:** **BLOCKED - `DG-03` (changes what the model returns)**
+
 - **Story:** As a **caller waiting on the line**, I want **the assistant to start speaking from the first clause the model produces**, so that **I stop waiting in silence for a whole answer to be written before I hear a single word**.
 - **Business value:** The non-streaming call is the single largest architectural defect this program addresses (`06-architecture.md` §1). Today the caller waits for the *worst* term in the chain; after this change the caller waits for the *first*.
 - **Priority:** **Must** — TPO ordering note: this is the largest single latency lever and it is the prerequisite for US-005 (streaming synthesis has nothing to consume until generation streams). It is flag-gated so the revert is a config change, not a code revert (`BRD-15`).

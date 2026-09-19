@@ -2,6 +2,8 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
+- **Status:** **IMPLEMENTED - ACs verified (`test_us011_config_truth.py` 16/16) · DoD 3/8**
+
 - **Story:** As an **operator who changes a setting and restarts the stack**, I want **the value I typed to be the value the running process uses**, so that **I am not debugging a latency number that was produced by a setting I never chose**.
 - **Business value:** `BRD-16` requires that the effective value of any setting is discoverable and unambiguous. Today three documents describe configuration (`.env`, `.machine_profile.json`, `start_services.ps1` defaults) and nothing reconciles them; five keys have been found written but never read, including one that records a tuning decision (`FASTAPI_WORKERS=4`) that the runtime silently discards. Every performance number the program reports rests on knowing which values were actually in force.
 - **Priority:** **Must** — TPO ordering note: this is sequenced **before** the measurement stories are trusted rather than before they are run. A harness that records a `DAT-07` row without recording the configuration behind it produces an unattributable number, and the plan's phase gate (`WF-03` step 5: a gain below half the prediction stops and debugs) needs an attribution to be possible at all.
@@ -225,11 +227,14 @@ def sweep_inert_keys() -> tuple[str, ...]: ...
 - Related workflow: `WF-03` step 5 (the phase gate — a measured gain below half the prediction stops and debugs, which requires the configuration behind the number); `UC-06`'s startup and recovery rows
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
+- [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-17)
 - [ ] Perf/load test passed against the story's TACs (TAC-8 no start-time or per-turn regression)
 - [ ] Schema migration applied — yes: `DAT-09` gains per-key provenance; `.machine_profile.json`'s `applied` block is marked non-authoritative in the docs and in the loader
 - [ ] Module docs updated if contracts changed — `MOD-07` B.4 (`DAT-09` inventory gains provenance) and B.6 if the implementation differs from `TRD-24`
-- [ ] Inert-key sweep recorded: every configured key listed with its resolution (read, or reported inert by name); the five known instances each resolved to one of the two
-- [ ] Effective-configuration output verified to contain no secret values (TAC-4), and the verification is a test rather than a review
+- [x] Inert-key sweep recorded: every configured key listed with its resolution (read, or reported inert by name); the five known instances each resolved to one of the two
+- [x] Effective-configuration output verified to contain no secret values (TAC-4), and the verification is a test rather than a review
 - [ ] `BRD-15` rollback demonstrated: a setting reverted through the authoritative file restores the previous effective value
+
+
+**Outstanding:** LLD test mapping (T-1..T-17); TAC-8 no-regression load test not run; `.machine_profile.json`'s `applied` block is not yet marked non-authoritative in the docs and loader; `MOD-07` B.4/B.6 not reconciled; `BRD-15` rollback not demonstrated.

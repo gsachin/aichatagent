@@ -42,6 +42,20 @@ $TunnelFile  = Join-Path $ProjectRoot ".whatsapp_tunnel"
 $FastAPIPort = 8000
 $StreamlitMainPort = 8501
 $StreamlitDashboardPort = 8502
+# The enterprise-rag-core MCP service (Step 6b). It is started in its own step,
+# but it belongs in the cleanup lists above with every other port: the MCP
+# server outlives the launcher that spawns it, so a previous run's copy still
+# owns the port -- and the launcher log file it inherited -- on the next run.
+$RagMcpPort = 8010
+
+# The Salesforce admission API (see doc/salesforce/). A SEPARATE repo with its own
+# venv, started from its own directory: its config calls load_dotenv() with no
+# path, so it reads .env from the working directory — launched from here it would
+# load THIS project's .env and fail to authenticate. Override the location with
+# $env:SALESFORCE_API_ROOT when it lives somewhere else.
+$CrmApiPort  = 8098
+$CrmApiRoot  = if ($env:SALESFORCE_API_ROOT) { $env:SALESFORCE_API_ROOT } else { "D:\project\salesforce\salesforce-admission-api" }
+$CrmPython   = Join-Path $CrmApiRoot "venv\Scripts\python.exe"
 
 # Prefer the project venv (created by bootstrap_services) when present,
 # falling back to system python — keeps pre-venv setups working unchanged.
@@ -58,6 +72,87 @@ function Write-Step   { Write-Host ("{0}{1}{2}--- {3} ---{4}" -f "`n", $CYAN, $B
 function Write-OK     { Write-Host ("{0}  OK: {1}{2}" -f $GREEN, ($args -join ' '), $RESET) }
 function Write-Warn   { Write-Host ("{0}  WARN: {1}{2}" -f $YELLOW, ($args -join ' '), $RESET) }
 function Write-Err    { Write-Host ("{0}  ERROR: {1}{2}" -f $RED, ($args -join ' '), $RESET) }
+
+# ---- Port ownership -------------------------------------------------------
+function Stop-PortOwner {
+    # Free one TCP port by killing whatever is listening on it.
+    #
+    # The PID that Get-NetTCPConnection reports is not always killable. Windows
+    # attributes a socket to the PID that *created* it, even after that process
+    # has handed the socket to a child and exited -- which is what uvicorn does
+    # under --workers: the supervisor binds, spawns workers that inherit the
+    # socket, then dies. netstat keeps naming the dead supervisor, so both
+    # Get-Process and taskkill report "not found". The previous `if ($proc)`
+    # guard treated that as "nothing to do" and skipped the port in silence,
+    # leaving the surviving worker to answer /health indefinitely -- so a later
+    # run's fresh server died on bind while its health poll reported success.
+    # The live holder is a descendant of the dead PID: walk the CIM parent
+    # chain and kill the orphaned subtree.
+    param([int]$Port)
+
+    foreach ($round in 1..3) {
+        $connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+        $owners = @($connections.OwningProcess | Select-Object -Unique | Where-Object { $_ -gt 0 })
+
+        if ($owners.Count -eq 0) { return $true }
+
+        $killed = $false
+
+        foreach ($procId in $owners) {
+            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+
+            if ($proc) {
+                try {
+                    $proc | Stop-Process -Force -ErrorAction Stop
+                    Write-OK ("Killed {0} (PID {1}) on port {2}" -f $proc.ProcessName, $procId, $Port)
+                    $killed = $true
+                } catch {
+                    Write-Warn ("Could not kill PID {0} on port {1}: {2}" -f $procId, $Port, $_.Exception.Message)
+                }
+                continue
+            }
+
+            Write-Warn ("Port {0} is held by PID {1}, which no longer exists - the socket was inherited" -f $Port, $procId)
+
+            # Collect the dead PID's descendants, keeping only those that are
+            # orphaned themselves: a live parent means that branch is intact and
+            # taskkill /T takes its subtree along with it. Filtering on the
+            # orphan test also keeps a reused PID from dragging an unrelated
+            # process tree into the kill.
+            $killable = @()
+            $frontier = @($procId)
+            for ($depth = 0; $depth -lt 4 -and $frontier.Count -gt 0; $depth++) {
+                $filter = ($frontier | ForEach-Object { "ParentProcessId=$_" }) -join " or "
+                $children = @(Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue)
+                if ($children.Count -eq 0) { break }
+                foreach ($child in $children) {
+                    if (-not (Get-Process -Id $child.ParentProcessId -ErrorAction SilentlyContinue)) {
+                        $killable += $child
+                    }
+                }
+                $frontier = @($children.ProcessId)
+            }
+
+            if ($killable.Count -eq 0) {
+                Write-Warn ("  No orphaned holder found for port {0} - it may belong to another session" -f $Port)
+                continue
+            }
+
+            foreach ($child in $killable) {
+                cmd /c "taskkill /F /T /PID $($child.ProcessId) 2>NUL" | Out-Null
+                Write-OK ("Killed inherited-socket holder {0} (PID {1}) on port {2}" -f $child.Name, $child.ProcessId, $Port)
+                $killed = $true
+            }
+        }
+
+        Start-Sleep -Seconds 1
+        if (-not (Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue)) { return $true }
+        if (-not $killed) { break }   # nothing changed; another pass would repeat it
+    }
+
+    Write-Warn ("Port {0} is STILL busy" -f $Port)
+    return $false
+}
 
 # ---- Tool discovery (user-scope winget installs are invisible to old shells) ----
 function Find-DockerCli {
@@ -262,16 +357,8 @@ if (-not $finalCheck) {
     Write-Err "Cannot kill cloudflared -- reboot may be needed"
 }
 
-foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort)) {
-    $connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-    $pids = $connections.OwningProcess | Select-Object -Unique | Where-Object { $_ -gt 0 }
-    foreach ($procId in $pids) {
-        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-        if ($proc) {
-            $proc | Stop-Process -Force
-            Write-OK ("Killed {0} (PID {1}) on port {2}" -f $proc.ProcessName, $procId, $port)
-        }
-    }
+foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort, $RagMcpPort)) {
+    $null = Stop-PortOwner -Port $port
 }
 Write-OK "Process cleanup complete"
 
@@ -282,7 +369,7 @@ Write-OK "Cleared stale TUNNEL_HOST env var (server will read .whatsapp_tunnel f
 # ==== Step 2: Verify ports are free ========================================
 Write-Step "Step 2: Verifying ports are free"
 
-foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort)) {
+foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort, $RagMcpPort)) {
     $attempt = 0
     $portBusy = $true
     while ($portBusy -and $attempt -lt 10) {
@@ -298,11 +385,7 @@ foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort)) 
 
     if ($portBusy) {
         Write-Warn ("Port {0} is STILL busy after 10s - may be TIME_WAIT" -f $port)
-        if ($conn) {
-            $conn.OwningProcess | Select-Object -Unique | Where-Object { $_ -gt 0 } | ForEach-Object {
-                Get-Process -Id $_ -ErrorAction SilentlyContinue | Stop-Process -Force
-            }
-        }
+        $null = Stop-PortOwner -Port $port
         Start-Sleep -Seconds 2
     } else {
         Write-OK ("Port {0} is free" -f $port)
@@ -503,6 +586,76 @@ if (-not $serverReady) {
     exit 1
 }
 
+# ==== Step 5b: Salesforce admission API (port $CrmApiPort) ==================
+# Optional infrastructure, so it warns and continues rather than aborting the
+# launch (the same treatment the RAG core gets in 6b). It is not *harmless*
+# though: with CRM_ENABLED=true the app writes to it on every conversation, so
+# if it is down those writes queue in crm_sync_outbox and are dropped after 10
+# attempts. Say so plainly when it does not come up.
+Write-Step "Step 5b: Salesforce admission API (port $CrmApiPort)"
+
+$CrmApiProcess = $null
+if ((Test-Path $CrmApiRoot) -and (Test-Path $CrmPython)) {
+    $CrmApiLog = Join-Path $env:TEMP "salesforce_api.log"
+    $crmArgs = @{
+        FilePath               = $CrmPython
+        # main:app, not app.main:app — that repo's entrypoint is at its root.
+        ArgumentList           = "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "$CrmApiPort"
+        # The reason this cannot copy Step 5 verbatim: no other Start-Process in
+        # this script sets a working directory, and this app resolves both its
+        # imports and its .env relative to one.
+        WorkingDirectory       = $CrmApiRoot
+        WindowStyle            = "Hidden"
+        PassThru               = $true
+        RedirectStandardOutput = $CrmApiLog
+        # Step 5 omits stderr; uvicorn sends tracebacks there, so keep both.
+        RedirectStandardError  = "$CrmApiLog.err"
+    }
+    try {
+        $CrmApiProcess = Start-Process @crmArgs
+        Write-OK ("Salesforce API starting (PID {0}) - log: {1}" -f $CrmApiProcess.Id, $CrmApiLog)
+    } catch {
+        Write-Warn ("Could not start the Salesforce API: {0}" -f $_.Exception.Message)
+        $CrmApiProcess = $null
+    }
+
+    if ($CrmApiProcess) {
+        $attempt = 0
+        $crmReady = $false
+        $crmHealthUrl = "http://127.0.0.1:{0}/health" -f $CrmApiPort
+        while (-not $crmReady -and $attempt -lt 30) {
+            Start-Sleep -Seconds 1
+            $attempt++
+            # A 200 here proves only that *something* serves the port. What has
+            # to be serving it is the process started above: when a stale server
+            # still owns the port our copy dies on bind (Errno 10048) and the
+            # stale one answers this very poll -- which is how a dead API got
+            # reported as "responding" on every launch.
+            if ($CrmApiProcess.HasExited) {
+                Write-Warn ("Salesforce API exited during startup (exit code {0}) - port {1} is held by another process" -f $CrmApiProcess.ExitCode, $CrmApiPort)
+                Write-Warn ("  Log: {0} (a lost port race shows up as Errno 10048)" -f $CrmApiLog)
+                break
+            }
+            $crmResult = curl.exe -s -o NUL -w "%{http_code}" $crmHealthUrl 2>$null
+            if ($crmResult -eq "200") {
+                Write-OK ("Salesforce API responding (took ~{0}s)" -f $attempt)
+                $crmReady = $true
+            }
+        }
+        if (-not $crmReady) {
+            Write-Warn ("Salesforce API did NOT come up on port {0} - check {1}" -f $CrmApiPort, $CrmApiLog)
+            Write-Warn "  The app will still run; CRM writes will queue and be dropped after 10 attempts."
+        }
+    }
+} else {
+    Write-Warn "Salesforce API repo not found at $CrmApiRoot - skipping it"
+    Write-Warn "  Set `$env:SALESFORCE_API_ROOT to its location, or start it by hand:"
+    Write-Warn "    cd <repo>; .\venv\Scripts\uvicorn.exe main:app --reload --port $CrmApiPort"
+    if ($env:CRM_ENABLED -eq "true") {
+        Write-Warn "  CRM_ENABLED is true, so CRM writes will queue and be dropped after 10 attempts."
+    }
+}
+
 # ==== Step 6: Ollama model pre-warming ====================================
 Write-Step "Step 6: Ollama model pre-warming"
 
@@ -512,24 +665,47 @@ if ($ollamaCheck -eq "200") {
     Write-OK "Ollama is running"
     $ollamaUp = $true
 } else {
-    Write-Warn "Ollama not reachable on port 11434 -- skip pre-warming"
+    # US-007 / AC-2: a skipped pre-warm is a NOT-READY condition, not a warning
+    # an operator can scroll past. The first call would otherwise pay the cold
+    # load (measured 32,919 ms) with a caller listening to silence.
+    Write-Err "Ollama not reachable on port 11434 -- the stack is NOT READY"
+    Write-Err "  Without the engine there is no inference at all. Start Ollama, then re-run."
+    $script:WarmNotReady = $true
 }
 
 if ($ollamaUp) {
-    $modelList = curl.exe -s "http://127.0.0.1:11434/api/tags" 2>$null | & $PythonExe -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin).get('models',[])]; print('\n'.join(models))" 2>$null
-    if ($modelList) {
-        Write-OK ("Found models: {0}" -f ($modelList -split "`n" -join ", "))
-        foreach ($model in ($modelList -split "`n" | Where-Object { $_ })) {
-            Write-OK ("Pre-warming: {0} ..." -f $model)
-            $null = curl.exe -s -X POST "http://127.0.0.1:11434/api/generate" -H "Content-Type: application/json" -d "{`"model`":`"$model`",`"prompt`":`"ping`",`"keep_alive`":`"24h`",`"max_tokens`":1}" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-OK ("  {0} loaded into GPU (keep_alive=24h)" -f $model)
-            } else {
-                Write-Warn ("  Pre-warm failed for {0}" -f $model)
-            }
+    # US-007 / AC-1: warm with THE REAL VOICE PROMPT, not the literal "ping".
+    # "ping" warms weights only; the prompt prefix -- the thing that makes the
+    # first turn fast -- stayed cold. `app.boot_readiness` builds the identical
+    # prompt the serving path sends (same builder, same num_ctx, same
+    # temperature, same keep_alive) and then CONFIRMS warmth from the engine's
+    # own prefill counters rather than from a log line this script wrote.
+    Write-OK "Pre-warming with the real voice prompt (prefix, not a placeholder) ..."
+    # `python -m app.<mod>` resolves the package from the CWD, and this script
+    # never sets one -- without this, an operator running it from anywhere but
+    # the repo root gets "No module named app". PROJ inside the module is
+    # derived from __file__, so .env resolves correctly either way.
+    Push-Location $ProjectRoot
+    try {
+        $readyJson = cmd /c "$PythonExe -m app.boot_readiness --json 2>&1"
+    } finally { Pop-Location }
+    try {
+        $readyState = ($readyJson | Out-String | ConvertFrom-Json)
+        $pfx  = $readyState.prefix
+        $load = if ($pfx.load_ms -ne $null) { $pfx.load_ms } else { "n/a" }
+        if ($pfx.warm) {
+            Write-OK ("  prefix warm: prefill {0} ms -> {1} ms on an identical repeat (x{2})" -f `
+                $pfx.first_prefill_ms, $pfx.confirm_prefill_ms, $pfx.speedup)
+            Write-OK ("  model resident: {0} (load {1} ms)" -f $pfx.model, $load)
+        } else {
+            Write-Err ("  prefix NOT warm: prefill {0} ms on an identical repeat" -f $pfx.confirm_prefill_ms)
+            Write-Err ("  detail: {0}" -f $pfx.error)
+            $script:WarmNotReady = $true
         }
-    } else {
-        Write-Warn "No models found in Ollama -- run: ollama pull qwen2.5:7b"
+    } catch {
+        Write-Err ("Pre-warm could not be verified: {0}" -f $_.Exception.Message)
+        Write-Err "  Raw output: $readyJson"
+        $script:WarmNotReady = $true
     }
 }
 
@@ -549,15 +725,31 @@ if ((Test-Path $ERCRoot) -and (Test-Path $ERCLauncher)) {
     # pumps anonymous pipes; the launcher's MCP server (a long-lived
     # grandchild) inherits those pipe write-handles, so the pipes never reach
     # EOF and the capture hangs forever even after the launcher exits.
-    $ercLauncherLog = Join-Path $env:TEMP "erc_launcher.log"
-    if (Test-Path $ercLauncherLog) { Remove-Item $ercLauncherLog -Force -ErrorAction SilentlyContinue }
-    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port 8010 -KbPath `"$ERCKb`" > `"$ercLauncherLog`" 2>&1"
+    # Per-run log filename. File redirection solved the pipe hang above, but it
+    # hands the same long-lived grandchild an open handle to this file -- so
+    # with a fixed name it stays locked for as long as any server from the
+    # previous run is alive, and cmd.exe then cannot open the redirect target
+    # at all ("The process cannot access the file..."), so a stale
+    # erc_launcher.log gets dumped below as if it were this run's output.
+    # Step 1 freeing $RagMcpPort is what releases that handle; the unique name
+    # keeps the redirect safe even if a server somehow outlives the kill.
+    $ercLauncherLog = Join-Path $env:TEMP ("erc_launcher_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+    # One log per launch would otherwise accumulate in TEMP forever.
+    Get-ChildItem (Join-Path $env:TEMP "erc_launcher_*.log") -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port $RagMcpPort -KbPath `"$ERCKb`" > `"$ercLauncherLog`" 2>&1"
     if ($LASTEXITCODE -eq 0) {
-        Write-OK "ERC MCP service up: http://127.0.0.1:8010/mcp (retrieval: MCP-first, automatic fallback)"
+        Write-OK ("ERC MCP service up: http://127.0.0.1:{0}/mcp (retrieval: MCP-first, automatic fallback)" -f $RagMcpPort)
     } else {
         Write-Warn "ERC launcher failed -- RAG falls back to local Chroma (auto mode)"
         Write-Warn ("Full launcher log: {0}" -f $ercLauncherLog)
-        Get-Content $ercLauncherLog -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { Write-Warn $_ }
+        $ercTail = Get-Content $ercLauncherLog -Tail 5 -ErrorAction SilentlyContinue
+        if ($ercTail) {
+            $ercTail | ForEach-Object { Write-Warn $_ }
+        } else {
+            Write-Warn "  (launcher log is empty -- it never started; see the error above)"
+        }
     }
 } else {
     Write-Warn "enterprise-rag-core repo not found at $ERCRoot -- RAG falls back to local Chroma (auto mode)"
@@ -706,7 +898,16 @@ for ($tunnelAttempt = 1; $tunnelAttempt -le 12; $tunnelAttempt++) {
     Start-Sleep -Seconds 5
 }
 if (-not $tunnelOk) {
-    Write-Err ("Tunnel NOT reachable after 5 attempts: https://{0}/" -f $TunnelHost)
+    Write-Err ("Tunnel NOT reachable after 12 attempts: https://{0}/" -f $TunnelHost)
+}
+
+# The local CRM API: re-assert what Step 5b already waited for, so the summary
+# reflects the state at the end of the run rather than at startup.
+$crmVerify = curl.exe -s -o NUL -w "%{http_code}" "http://127.0.0.1:$CrmApiPort/health" 2>$null
+if ($crmVerify -eq "200") {
+    Write-OK ("Salesforce API reachable: http://127.0.0.1:{0}/health" -f $CrmApiPort)
+} else {
+    Write-Warn ("Salesforce API not responding on port {0} (HTTP {1})" -f $CrmApiPort, $crmVerify)
 }
 
 # Verify Twilio webhook matches
@@ -797,8 +998,15 @@ if ($ChatTunnelHost -or $DashTunnelHost) {
 }
 Write-Host ("{0}Local Services:{1}" -f $BOLD, $RESET)
 Write-Host ("   FastAPI backend:  {0}http://localhost:{1}{2}" -f $CYAN, $FastAPIPort, $RESET)
+if ($CrmApiProcess -and -not $CrmApiProcess.HasExited) {
+    Write-Host ("   Salesforce API:   {0}http://127.0.0.1:{1}{2}  (repo: {0}{3}{2})" -f $CYAN, $CrmApiPort, $RESET, $CrmApiRoot)
+} elseif ($CrmApiProcess) {
+    Write-Host ("   Salesforce API:   {0}exited - port {1} is not served by this run{2}" -f $YELLOW, $CrmApiPort, $RESET)
+} else {
+    Write-Host ("   Salesforce API:   {0}not started{1}  (expected at {0}{2}{1})" -f $YELLOW, $RESET, $CrmApiRoot)
+}
 Write-Host ("   Enterprise RAG Core: {0}{1}{2}  (repo: {0}https://github.com/gsachin/enterprise-rag-core{2})" -f $CYAN, $ERCRoot, $RESET)
-Write-Host ("     MCP service:       {0}http://127.0.0.1:8010/mcp{1}  (retrieval: MCP-first, automatic fallback)" -f $CYAN, $RESET)
+Write-Host ("     MCP service:       {0}http://127.0.0.1:{1}/mcp{2}  (retrieval: MCP-first, automatic fallback)" -f $CYAN, $RagMcpPort, $RESET)
 
 if ($WithStreamlit) {
     Write-Host ("   Dashboard:         {0}http://localhost:{1}{2}" -f $CYAN, $StreamlitDashboardPort, $RESET)
@@ -812,6 +1020,9 @@ Write-Host ""
 Write-Host ("{0}Logs:{1}" -f $BOLD, $RESET)
 Write-Host ("   Server:  {0}" -f $ServerLog)
 Write-Host ("   Tunnel:  {0}" -f $TunnelLog)
+if ($CrmApiProcess) {
+    Write-Host ("   Salesforce API: {0}" -f (Join-Path $env:TEMP "salesforce_api.log"))
+}
 
 if ($WithStreamlit) {
     Write-Host ("   Dash:    {0}" -f $DashLog)
@@ -830,11 +1041,36 @@ if ($NamedTunnel) {
     Write-Host ("{0}a fresh tunnel and update all configs.{1}" -f $YELLOW, $RESET)
     Write-Host ("{0}Tip: Use -NamedTunnel for a permanent URL.{1}" -f $CYAN, $RESET)
 }
+# ==== Final step: readiness gate (US-007 / TRD-26) =========================
+# The gate is the operator's evidence, not a log line. It re-checks all four
+# clauses AFTER every service has had its chance to start, and names what is
+# missing. Readiness never blocks the operator from using the stack (AC-4) --
+# it only refuses to call it ready, and says so in the exit code (TAC-5).
+Write-Step "Readiness gate"
+
+Push-Location $ProjectRoot
+try {
+    $gateOutput = cmd /c "$PythonExe -m app.boot_readiness --config 2>&1"
+    $gateExit = $LASTEXITCODE
+} finally { Pop-Location }
+$gateOutput | ForEach-Object { Write-Host ("  {0}" -f $_) }
+
+if ($gateExit -eq 0) {
+    Write-OK "Stack is READY -- the first call is a warm call (BRD-03)"
+} else {
+    Write-Err "Stack is UP BUT NOT READY -- see the clauses above"
+    if ($script:WarmNotReady) {
+        Write-Err "  the boot-time warm failed; the first call will be cold"
+    }
+    Write-Host ("   {0}Services are running and usable. The gate refuses the readiness CLAIM,{1}" -f $YELLOW, $RESET)
+    Write-Host ("   {0}not the stack. Fix the named clauses and re-run to certify.{1}" -f $YELLOW, $RESET)
+}
+
 Write-Host ""
 Write-Host ("{0}Press Ctrl+C to stop all services...{1}" -f $CYAN, $RESET)
 
 # Check background processes
-$FastAPIProcess, $CloudflaredProcess | ForEach-Object {
+$FastAPIProcess, $CloudflaredProcess, $CrmApiProcess | Where-Object { $_ } | ForEach-Object {
     if ($_.HasExited) {
         Write-Err ("{0} (PID {1}) has already exited!" -f $_.ProcessName, $_.Id)
     }

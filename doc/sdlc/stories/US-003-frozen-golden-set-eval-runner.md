@@ -2,6 +2,8 @@
 
 # US-003 — Frozen golden set and evaluation runner [Lens: PO]
 
+- **Status:** **AWAITING SIGN-OFF - 161 cases built, 137 ground truths PENDING, 0 approved**
+
 - **Story:** As a **Product Owner accountable for answer quality**, I want **a frozen, hashed, task-representative evaluation set with my approved ground truth for the critical intents, and a runner that scores candidates against it**, so that **"no quality regression" is a checkable claim instead of an opinion, and a change that would hurt a fee or deadline answer is stopped before a caller hears it**.
 - **Business value:** `BRD-08`/`BRD-09` are the only defence for the 28-intent behaviour surface while the program changes what the model sees and how fast it speaks. Without this set, every Class B and C change in the program ships unmeasured.
 - **Priority:** **Must** — TPO ordering note: this is `DG-03`, the **only `block` decision** in Stage 4. It gates the quality half of `WF-03` and it is blocked on a human (PO ground truth, `AS-05`), not on engineering — so it is started first and finished first, and the engineering half (runner, freeze, hashing) proceeds while the ground truth is authored.

@@ -2,6 +2,8 @@
 
 # US-002 — N=1/N=2 load harness at carrier framing [Lens: PO]
 
+- **Status:** **IN PROGRESS - harness drives the live WS; TAC-1 framing FAILS; 2 gaps open**
+
 - **Story:** As a **developer running performance experiments**, I want **scripted caller audio replayed into the live WebSocket endpoint at 8 kHz µ-law and 20 ms framing, at one and two concurrent callers**, so that **concurrency can be measured without two humans on two phones and without a harness that flatters the system**.
 - **Business value:** `BRD-05` (two simultaneous callers) cannot be claimed, and `BRD-07`/`BRD-11`/`BRD-12` cannot be verified, by any means that exists today. This story turns "two callers" from an assumption (`AS-01`) into a measured condition.
 - **Priority:** **Must** — TPO ordering note: builds with US-001 and US-003 as the Phase A deliverable; every concurrency story downstream (US-008, US-012, US-013) has no pass/fail evidence until this harness exists.

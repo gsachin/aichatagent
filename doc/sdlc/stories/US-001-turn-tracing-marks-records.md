@@ -2,6 +2,8 @@
 
 # US-001 — Turn tracing marks and records [Lens: PO]
 
+- **Status:** **IMPLEMENTED - ACs verified (`test_us001_tracer.py` 17/17) · DoD 2/6**
+
 - **Story:** As a **developer maintaining the voice pipeline**, I want **every voice turn to emit one machine-readable record carrying each stage boundary it passed and the inference engine's own counters**, so that **per-stage latency is measured on this machine instead of inferred from component numbers**.
 - **Business value:** `BRD-01` has no home in the existing code and `DAT-07` does not exist. Every later decision in this program — which change to adopt, which to revert — is only defensible once a real call produces a real decomposition.
 - **Priority:** **Must** — TPO ordering note: this is the program's Phase A deliverable and it gates every later story (`05-modularization.md` §3 "note the shape"; `WF-03` step 1 requires a baseline before any change is proposed). Nothing else in the program is adoptable before this lands.
@@ -252,9 +254,12 @@ def new_trace(call_id: str, turn_id: int) -> TurnTrace: ...
 - Related workflow: `WF-01` (steps 3–10 are the boundaries marked), `WF-02` step 6 (traces must not merge at N=2)
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-6)
+- [x] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-6)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-16)
 - [ ] Perf/load test passed against TAC-1 and TAC-5 (30-minute N=2 soak; overhead ≤ 5 ms p95)
-- [ ] Schema migration applied — n/a (append-only JSONL; `DAT-07` is net-new, no migration)
+- [x] Schema migration applied — n/a (append-only JSONL; `DAT-07` is net-new, no migration)
 - [ ] Module docs updated if contracts changed — `MOD-06` B.3 (`trace.mark` / `trace.note` / `trace.emit` signatures) and B.6 (edge-case table) if the stage set differs from `TRD-21`
 - [ ] `MOD-01` B.3/B.4 updated with the emitting call sites, and `app/perf_trace.py` committed (today it is untracked)
+
+
+**Outstanding:** LLD test mapping (suite cites T-2..T-12 of T-1..T-16); the 30-minute N=2 soak (TAC-1/TAC-5, overhead <= 5 ms p95) has NOT been run; `MOD-06` B.6 still documents the PRE-fix stage set (`MOD-06:101` describes "no retrieval mark" as the gap) and `MOD-01` carries no `perf_trace` emitting call sites.

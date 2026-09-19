@@ -2,6 +2,8 @@
 
 # US-008 — De-serialize retrieval so no caller waits behind another [Lens: PO]
 
+- **Status:** **IMPLEMENTED - measured, but NO acceptance test exists · DoD 1/7**
+
 - **Story:** As a **caller on the second line**, I want **my retrieval to run while Caller A's retrieval is still running**, so that **my answer does not start late because a stranger asked a slow question**.
 - **Business value:** Retrieval is the program's only **non-resource** bottleneck — one caller's slow query delays another caller's turn with no CPU, VRAM or bandwidth anywhere near saturation. `BRD-07` is a fairness requirement, and it is the one degradation a caller experiences for no physical reason at all.
 - **Priority:** **Must** — TPO ordering note: this is a change **inside `MOD-02`** (and, for the primary path, inside the `enterprise-rag-core` repository), sequenced independently of the streaming work so the two experiments cannot confound each other (`BRD-05`'s rule: one variable at a time).
@@ -227,7 +229,10 @@ class RetrievalResult:
 - [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-20)
 - [ ] Perf/load test passed against the story's TACs (TAC-1 1.5× overlap with the injected 2.5 s stall, TAC-2 retrieval p95 at N=1 and N=2, TAC-7 three consecutive N=2 runs)
-- [ ] Schema migration applied — n/a (no durable store on this path)
+- [x] Schema migration applied — n/a (no durable store on this path)
 - [ ] Module docs updated if contracts changed — `MOD-02` B.3 (`retrieve_context` row) and B.6 (edge-case table) if the implementation differs from `TRD-07`; the ERC-side change is recorded against the ERC test gate
 - [ ] `BRD-15` rollback demonstrated: the concurrency change is revertible by configuration or a single revertable commit on each side (`app/` and `enterprise-rag-core`)
 - [ ] If the ERC change cannot land without altering the `retrieve_context` contract, the fallback design (bounded timeout + local store, meeting `BRD-07` by isolation) is recorded as the adopted outcome
+
+
+**Outstanding — this story is the weakest in the program.** No acceptance test exists at all: it is marked implemented on a measurement (retrieval mean 7,164 -> 2,227 ms) with no suite covering its ACs or TACs, and no LLD test mapping. TAC-1/TAC-2/TAC-7 (1.5x overlap, retrieval p95 at N=1 and N=2, three consecutive N=2 runs) have not been run as specified. `MOD-02` not reconciled.

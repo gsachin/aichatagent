@@ -2,6 +2,8 @@
 
 # US-007 — Boot-time warm state is verifiable, not assumed [Lens: PO]
 
+- **Status:** **IMPLEMENTED - ACs verified (`test_us007_readiness.py` 30/30) · DoD 5/8**
+
 - **Story:** As an **operator starting the stack**, I want **the stack to refuse to call itself ready until the model is resident and the real voice prompt prefix is warm, and to tell me exactly what is missing when it is not**, so that **I stop discovering a cold stack from a caller who waited half a minute in silence**.
 - **Business value:** `BRD-17` requires the inference model **and its prompt prefix** resident before the first call is accepted, and the GPU not idle-clocked at the moment a call arrives. Today the pre-warm sends the literal prompt `"ping"` — it warms weights, not the voice prompt prefix — and a skipped pre-warm is a warning the operator can miss.
 - **Priority:** **Must** — TPO ordering note: US-006 fixes residency on the *serving* path; this story makes the *boot* state verifiable. They are deliberately separate: a stack that holds weights but never warms the prefix, or warms the prefix but lets it expire on the first chat, must be distinguishable — otherwise a single green log line covers both defects.
@@ -244,11 +246,14 @@ function Write-ReadinessReport {
 - Related workflow: `WF-03` step 2 (a change applied on a branch behind a flag is taken against a stack whose readiness has been confirmed)
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
+- [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-19)
-- [ ] Perf/load test passed — n/a for the turn path (`MOD-07` has no runtime load); TAC-2's "cold load paid once at boot" is measured over repeated start-and-call cycles instead
-- [ ] Schema migration applied — n/a; the readiness report is an output artefact
+- [x] Perf/load test passed — n/a for the turn path (`MOD-07` has no runtime load); TAC-2's "cold load paid once at boot" is measured over repeated start-and-call cycles instead
+- [x] Schema migration applied — n/a; the readiness report is an output artefact
 - [ ] Module docs updated if contracts changed — `MOD-07` B.3 (readiness report row) and B.6 (edge-case table) if the gate differs from `TRD-26`; `06-architecture.md` §2 MOD-07 flow already describes the pre-warm as "exists but is undone"
-- [ ] Acceptance observed externally: the model resident in `nvidia-smi` at the moment a call arrives, and the GPU not idle-clocked — never from a boot success line
+- [x] Acceptance observed externally: the model resident in `nvidia-smi` at the moment a call arrives, and the GPU not idle-clocked — never from a boot success line
 - [ ] `BRD-15` rollback demonstrated: the gate is one revertable commit, and removing it restores today's behaviour exactly
-- [ ] A deliberately added inert key makes the gate fail loudly — the check is tested as well as the config (the `TRD-25` requirement that the check itself is verified)
+- [x] A deliberately added inert key makes the gate fail loudly — the check is tested as well as the config (the `TRD-25` requirement that the check itself is verified)
+
+
+**Outstanding:** LLD test mapping (suite is not tagged T-1..T-19); `MOD-07` B.6 edge-case table not reconciled; `BRD-15` rollback not demonstrated by an actual revert. **Note:** the four-clause gate is implemented and live-verified, including the GPU-clock clause that AC-3 scenario 2 requires.

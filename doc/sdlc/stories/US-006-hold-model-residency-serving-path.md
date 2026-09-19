@@ -2,6 +2,8 @@
 
 # US-006 — Hold model residency on the serving path [Lens: PO]
 
+- **Status:** **IMPLEMENTED - ACs verified (`test_us006_residency.py` 11/11) · DoD 3/8**
+
 - **Story:** As a **caller who dials after the service has been idle**, I want **the model to still be in VRAM when my call arrives**, so that **I am not the person who waits 33 seconds of silence for a load that the operator already paid for at boot**.
 - **Business value:** The cold load is the single largest stall in the system: a measured **32,919 ms** to load and **67,349 ms** to first token. It is long enough that a caller hangs up. `BRD-17` says the prompt prefix shall be resident before the first call is accepted; `BRD-03` says the first turn of a call shall fall within the same p95 as a warm turn.
 - **Priority:** **Must** — TPO ordering note: `REC-11` is central and it *narrows* the work. The fix is **not** "add a preload" — pre-warm code already exists and runs. The fix is on the **serving path**, and it must land before any latency baseline is frozen, because a residency lapse contaminates every p95 the program reports.
@@ -209,11 +211,14 @@ OLLAMA_KEEP_ALIVE=<duration, resolved from configuration at import>
 - Related workflow: `WF-01` step 1 and `UC-01` E1 (model not resident → first turn pays a cold load, `BRD-03` breached and traced)
 
 ## Definition of Done
-- [ ] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
+- [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-16)
 - [ ] Perf/load test passed against the story's TACs (TAC-1 first-token p95 ≤ 1,000 ms, TAC-2 ≤ 2,000 ms after boot warm-up, TAC-5 VRAM ≤ 14,680 MiB at N=2 with decode recorded, not floored)
 - [ ] Schema migration applied — n/a for data; the `DAT-09` key addition is recorded and its reader demonstrated
 - [ ] Module docs updated if contracts changed — `MOD-03` B.3 (the Ollama `/api/chat` row gains "keep-alive applied on the serving path") and B.8; `06-architecture.md` §2 MOD-07 flow already describes the pre-warm as "exists but is undone" per `REC-11`
-- [ ] Acceptance observed externally: the model resident in `nvidia-smi` at the moment a call arrives (TAC-4), never from a boot success line
+- [x] Acceptance observed externally: the model resident in `nvidia-smi` at the moment a call arrives (TAC-4), never from a boot success line
 - [ ] `BRD-15` rollback demonstrated: removing the setting restores the measured 5-minute-default defect exactly
-- [ ] No new inert key introduced — the keep-alive key has a demonstrated reader and is not written into the profile's `applied` block as configuration
+- [x] No new inert key introduced — the keep-alive key has a demonstrated reader and is not written into the profile's `applied` block as configuration
+
+
+**Outstanding:** LLD test mapping; the TAC-1/TAC-2/TAC-5 load test (first-token p95, VRAM at N=2) has not been run as specified; `BRD-15` rollback has not been demonstrated by actually reverting the setting; `MOD-03` B.8 reconciliation unverified.

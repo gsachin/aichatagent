@@ -43,10 +43,11 @@ Percentages are counts taken from the Stage 5 matrices and the Stage 10 mapping 
 | Test coverage | 14 / 14 stories carry LLD test scenarios | 100% |
 | Traceability | references resolve (validator Level 1) | 100% |
 
-### Story-coverage gap (89%) — accepted, with owner and rationale
+### Story-coverage gap (90%) — accepted, with owner and rationale
 
 | Gap | Owner | Rationale |
 |---|---|---|
+| `MOD-05` (Lead & CRM) has no story — `UC-04`, `UC-05`, `SM-03` unimplemented | **PO — accepted 2026-09-19** | **Out of scope for this program.** `06-architecture.md` §60 puts `MOD-05` strictly post-call and off the turn path, and `01-brd.md` §2 excludes new user-facing features and the chat/WhatsApp path. A performance program has no change to make here. Recorded now because the gap was previously invisible: this table counts `BRD-xx` ownership only, and `BRD-13`/`BRD-18` are cited by `US-014`/`US-016` (voice-path stories), so the requirement-level count read as covered while the owning module had no work item. Re-open if `MOD-05` ever moves onto the turn path. |
 | `BRD-04` (endpointing reconciliation) has no story | PO | Deliberate. The 600 ms floor is a **measured config value owned by requirement**, not an optimisation target. Reducing it is Class C and belongs to `US-014`'s decision. `TRD-02` (MOD-01) specifies the single-live-decision contract; a separate story would manufacture an optimisation the evidence does not support. |
 | `BRD-12` (CPU/RAM budget) has no story | TPO | Deliberate. It is a **verification** requirement, not a build item: `US-002`'s harness measures CPU/RAM at N=1 and N=2 and its TAC carries the 80% ceilings. Recorded as a measurement inside `US-002` rather than a standalone change. |
 | `BRD-20` (background-load priority) | TPO | **Resolved** — `US-017` owns the enforcement mechanism (a work gate that defers background requests rather than interleaving them) and the measurable priority invariant. |

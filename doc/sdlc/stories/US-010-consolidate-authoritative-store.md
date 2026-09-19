@@ -2,6 +2,8 @@
 
 # US-010 — One authoritative knowledge store [Lens: PO]
 
+- **Status:** **BLOCKED - `DG-03` (changes answers)**
+
 - **Story:** As a **caller**, I want **the same question to get the same answer regardless of which internal path serves it**, so that **a failover does not silently change what the assistant tells me about a fee or a deadline**.
 - **Business value:** Two divergent stores hold different chunks of the same knowledge base, so a failover changes the **answer text** and not merely its packaging. `DG-01`/`REC-03` classify this as a **correctness** problem, not redundancy: two stores returning different chunks for one question is a defect.
 - **Priority:** **Must** — TPO ordering note: this is the **highest-effort item in the plan** (`BRD-07`'s module note records it), and it is deliberately sequenced **independently of the streaming work** so a data-verification change cannot confound a latency experiment.

@@ -14,20 +14,33 @@
 
 **Class** is from `01-brd.md` §5. **Class A** changes no behaviour and needs no quality gate. **Class B** changes what the model sees or says — gated by `DG-03`. **Class C** changes user-perceivable behaviour — needs PO sign-off.
 
+## How many are done — two counts, 2026-09-19
+
+Every story file in `doc/sdlc/stories/` now carries a `**Status:**` line and a ticked Definition of Done. The counts differ, and reporting only the first is how a program claims progress it does not have:
+
+| | Count |
+|---|---|
+| Stories written (planning artifact) | **18 / 18** |
+| Implemented with a passing acceptance suite | **4 / 18** — US-001 17/17, US-006 11/11, US-007 30/30, US-011 16/16 |
+| Implemented, measured, **no acceptance test** | **1 / 18** — US-008 |
+| **Fully Definition-of-Done complete** | **0 / 18** — best is US-007 at 5/8 |
+
+**"DONE" in the table below means implemented and AC-verified. It does not mean the story's Definition of Done is met.** Four items recur and none is a coding task: LLD test mapping (T-1…Tn), the story-specific load/soak tests, a demonstrated `BRD-15` rollback, and module-doc reconciliation — `MOD-06:101` still describes the pre-fix stage set, and `MOD-01` has no `perf_trace` call sites.
+
 ## Dependency order and status
 
 | # | Story | Module | Class | Depends on | Status | Evidence |
 |---|---|---|---|---|---|---|
-| **US-001** | Turn tracing marks + records | MOD-06 | **A** | — | **DONE** | `doc/perf/tools/test_us001_tracer.py` → **15 passed, 0 failed**. Files: `app/perf_trace.py` (re-based per `REC-12`), `app/voice_handler.py`, `app/main.py`, `app/rag.py`, `app/llm_backend.py` |
+| **US-001** | Turn tracing marks + records | MOD-06 | **A** | — | **DONE** | `doc/perf/tools/test_us001_tracer.py` → **17 passed, 0 failed**. Files: `app/perf_trace.py` (re-based per `REC-12`), `app/voice_handler.py`, `app/main.py`, `app/rag.py`, `app/llm_backend.py` |
 | **US-011** | Single config source of truth | MOD-07 | **A** | — | **DONE** | `doc/perf/tools/test_us011_config_truth.py` → **16 passed, 0 failed**. New: `app/config_truth.py`. **Found 3 inert keys the plan did not know about** |
-| **US-007** | Boot warm state verifiable | MOD-07 | A | — | NOT STARTED | — |
+| **US-007** | Boot warm state verifiable | MOD-07 | **A** | — | **DONE** | `doc/perf/tools/test_us007_readiness.py` → **30 passed, 0 failed**. New: `app/boot_readiness.py`; changed: `start_services.ps1` Step 6 + a final readiness-gate step. **Live run: 3 of 4 clauses pass; clause 4 fails on 4 real config lies** |
 | **US-006** | Hold model residency (serving path) | MOD-03 | **A** | — | **DONE** | `doc/perf/tools/test_us006_residency.py` → **11 passed, 0 failed**. External evidence: `ollama ps` shows `Forever`, not the 5-min default. **Test caught a bug that would have broken every call** |
 | **US-002** | N=1/N=2 load harness | MOD-06 | A | US-001 | **IN PROGRESS — runs, 2 gaps** | `doc/perf/tools/load_harness.py` drives the live `/ws/twilio` and measured first audio at **1,875 ms**. Gaps: **TAC-1 framing FAILS** on this box; **synthetic fixtures transcribe to empty**, so the LLM path is not exercised |
 | **US-013** | Bounded calls + half-open probe | MOD-02 | A | — | NOT STARTED | — |
 | **US-016** | Two-caller admission control | MOD-01 | A/B | US-002 | NOT STARTED | — |
 | **US-017** | Background-load priority | MOD-01 | A/B | US-002 | NOT STARTED | — |
 | **US-012** | TTS cache isolation | MOD-04 | B | US-002 | NOT STARTED | — |
-| **US-008** | De-serialize retrieval | MOD-02 | **A/B** | US-002 | **DONE** | Both ERC legs off-loaded from the event loop (`chroma_vector.py`, `bm25_memory.py`). Retrieval mean 7,164 → ~2,227 ms measured. **Also exposed `llm_queue_ms` as the true N=2 bottleneck** |
+| **US-008** | De-serialize retrieval | MOD-02 | **A/B** | US-002 | **IMPLEMENTED — measured, NO acceptance test** | Both ERC legs off-loaded from the event loop (`chroma_vector.py`, `bm25_memory.py`). Retrieval mean 7,164 → ~2,227 ms measured. **Also exposed `llm_queue_ms` as the true N=2 bottleneck.** ⚠ **No suite covers its ACs or TACs** — weaker evidence than the four stories above it; DoD 1/7 |
 | **US-009** | Relevance floor, one round trip | MOD-02 | **B** | US-002, `DG-03` | **BLOCKED** | `DG-03` — changes retrieved context |
 | **US-010** | Consolidate to one store | MOD-02 | **B** | `DG-03` | **BLOCKED** | `DG-03` — changes answers |
 | **US-018** | RAG baseline + optimized | MOD-02 | **B** | `DG-03` | **BLOCKED** | `DG-03`; baseline characterisation can start |
@@ -39,8 +52,10 @@
 
 ## Unblocked work queue (Class A, no `DG-03` dependency)
 
-US-001 ✅ → **US-011** → **US-007** → **US-006** → **US-002** → **US-013** → US-016, US-017 → US-012.
+US-001 ✅ → US-011 ✅ → US-007 ✅ → US-006 ✅ → **US-002** → **US-013** → US-016, US-017 → US-012.
 Everything from US-009 onward is quality-gated or PO-gated.
+
+**Four of the five Class A stories are done.** The remaining unblocked work is `US-002` (harness gaps), `US-013` (bounded calls), `US-016`, `US-017`, `US-012`.
 
 ## What is blocked and why
 
@@ -549,3 +564,49 @@ Under load the app logs `MCP retrieval failed (timed out) — falling back to lo
 | TTS synthesis | ~6,000 ms |
 
 Both turns exceed the 3,000 ms cap, so the harness correctly **DISCARDED** the run. The 411 ms prefill in `us015-benchmark-results.md` assumed the static prefix stayed cached; the server log says it does not. **The benchmark's prefill figure is therefore optimistic relative to the live path, and that discrepancy is the open question above.**
+
+---
+
+## US-007 — evidence detail
+
+`doc/perf/tools/test_us007_readiness.py` → **30 passed, 0 failed**. Live run against the warm stack: **3 of 4 clauses pass, exit 2**, with `first_prefill 2001.4 ms → confirm 29.4 ms (68×)` and the GPU awake at **13,801 of 14,001 MHz**.
+
+**What was wrong.** `start_services.ps1:692` warmed with the literal prompt `"ping"`. That loads weights and nothing else — the voice prompt prefix, which is what makes a first turn fast, stayed cold. And an unreachable engine at `:668` produced `Write-Warn "skip pre-warming"`: a warning an operator scrolls past, after which the first caller pays the measured **32,919 ms** cold load.
+
+**What replaced it.** `app/boot_readiness.py` (new) + two changes to `start_services.ps1`.
+
+| Clause | Check | Confirmed by |
+|---|---|---|
+| 1 | Turn-path services listening | TCP connect, bounded 1 s |
+| 2 | Model resident | `/api/ps` — the engine's own statement |
+| 3 | Prompt prefix warm | the engine's `prompt_eval_duration`, twice |
+| 4 | Every managed key has a reader | `US-011`'s `config_truth` |
+
+Clause 3 is the one that matters and the one that is easy to fake. It submits the **real voice prompt** — built by the same `build_voice_system_prompt` the serving path calls, with the same `num_ctx`, temperature and `keep_alive` — twice, and compares the engine's own prefill counters. A placeholder warm cannot pass it, because a placeholder produces a different token sequence and a cold prefill.
+
+**Live evidence (2026-09-19, warm stack):**
+
+| | |
+|---|---|
+| `prompt_chars` | 17,597 — the real prompt, not `"ping"` |
+| first prefill | **252.9 ms** |
+| confirm prefill (identical repeat) | **30.1 ms** |
+| speedup | **8.4×** |
+| residency | `qwen2.5:14b`, confirmed via `/api/ps` |
+
+### Three things this found that were not the point of the story
+
+**1. Clause 4 fails, and it is naming four real lies.** `FASTAPI_WORKERS`, `KOKORO_SPEED`, `LOG_FILE`, `LOG_LEVEL` are set in `.env` and read by nothing. The gate reports the stack **NOT READY** until they are either implemented or removed. That is faithful to `TAC-1` clause 4 and it is the correct outcome — a settings file that lies is exactly what this story exists to surface. It is also the first time these four have ever produced a non-zero exit code.
+
+**2. `US-011`'s two-category split is load-bearing.** Seven other keys (`PYTHONHASHSEED`, `FASTAPI_PORT`, …) are inert *within `app/`* but read by the interpreter or by `start_services.ps1` itself. My first implementation counted them as unread, which failed clause 4 permanently on a stack that was working correctly. **A gate that always fails is a gate operators learn to ignore** — the same failure mode the pre-warm warning had. The split is now applied and asserted in the test.
+
+**3. `python -m app.<mod>` resolves from the CWD, and this script never sets one.** The first wiring worked when I ran it by hand (I had `cd`'d to the repo root) and would have raised `ModuleNotFoundError: No module named 'app'` for an operator launching from anywhere else. Caught by running it from `C:\` on purpose; fixed with `Push-Location $ProjectRoot`.
+
+**4. The GPU-clock clause is a real check, and it nearly produced a false alarm.** `AC-3` scenario 2 wants the card awake when a call arrives. Implemented as `nvidia-smi --query-gpu=clocks.mem`, evaluated **immediately after the warm call** — and the placement is the whole thing:
+
+| when sampled | memory clock | |
+|---|---|---|
+| right after the warm | **13,801 of 14,001 MHz** | awake — clause passes |
+| 30 min later, stack idle | **405 of 14,001 MHz (P8)** | parked — and *expected* |
+
+A card idling down between calls is normal power management, not a defect. Sampling the clock at any other moment would have reported NOT READY on a perfectly healthy stack — a false positive that would have made the whole gate untrustworthy. An unanswerable query (`nvidia-smi` missing, no NVIDIA GPU) reports **UNKNOWN and does not fail**, because failing there would block every non-NVIDIA box this repo supports.

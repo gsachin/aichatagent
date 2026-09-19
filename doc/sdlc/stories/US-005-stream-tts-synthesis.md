@@ -2,6 +2,8 @@
 
 # US-005 — Stream TTS synthesis onto the first-audio path [Lens: PO]
 
+- **Status:** **BLOCKED - `DG-03` (changes what the caller hears)**
+
 - **Story:** As a **caller listening for a reply**, I want **the assistant's voice to start as soon as the first sentence is ready**, so that **I hear an answer forming rather than a single long silence followed by a whole paragraph**.
 - **Business value:** The synthesis term is owned here and `06-architecture.md` §2 names it: "kokoro `create()` — batch API; the streaming variant exists in the installed library and is unused." The caller currently waits for a complete audio buffer before a single frame is written to the carrier.
 - **Priority:** **Must** — TPO ordering note: depends on US-004 landing first (there is nothing to synthesise incrementally until generation streams), and it is the second half of the same user-visible improvement. Behind a single setting, so the revert is one config change (`BRD-15`).

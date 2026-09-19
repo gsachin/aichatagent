@@ -2,6 +2,8 @@
 
 # US-013 — Bound every dependency call and probe for recovery [Lens: PO]
 
+- **Status:** **NOT STARTED**
+
 - **Story:** As a **caller during a retrieval outage**, I want **to wait once for the failure and not once every thirty seconds for as long as the outage lasts**, so that **a service that is already down does not keep taking my answer's time budget away from me**.
 - **Business value:** `BRD-14` requires every outbound dependency call to carry a timeout justified against the latency budget, and a tripped circuit to **probe for recovery** rather than paying the timeout on every subsequent request. Today a failed retrieval costs the caller the 2,500 ms read timeout **plus** a full re-retrieval from the local store — the caller pays twice for one failure — and the flat 30 s cooldown retries the dead service with the full timeout again and again for the duration of the outage.
 - **Priority:** **Must** — TPO ordering note: the bound is what makes `US-008`'s "abandon rather than await" achievable, and it is the cheapest item in the plan: no model, no data, no dependency change, and the designed recovery is already specified in `06-architecture.md` §5. It ships with `US-008`'s client change because both live in the same place.

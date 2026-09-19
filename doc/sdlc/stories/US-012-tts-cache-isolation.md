@@ -2,6 +2,8 @@
 
 # US-012 — Prove the TTS cache safe for two callers, or make it per-call [Lens: PO]
 
+- **Status:** **NOT STARTED**
+
 - **Story:** As a **caller**, I want **the audio I hear to be mine and nobody else's**, so that **two people talking to the assistant at the same time never hear a fragment of each other's conversation**.
 - **Business value:** `BRD-06` requires caller isolation **demonstrated under concurrent load, not asserted**, and the TTS cache is the one piece of shared mutable state on the audio path. Today the safety argument is an assertion — "keys are content hashes, so identical text maps to identical audio" — and `DG-06` explicitly records that the assertion is not sufficient: the risk is not the key, it is a buffer that is returned and then mutated.
 - **Priority:** **Must** — TPO ordering note: this is a **test that can fail a design**, and it must run before any `BRD-06` compliance claim is made. The fallback is pre-decided (`DG-06`), so a failure is a design change, not a blocked program.
