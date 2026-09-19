@@ -1,0 +1,19 @@
+{
+  "fixture_id": "escalation-04",
+  "voice": "af_heart",
+  "turns": {
+    "0": {
+      "text": "I have been trying to reach someone about my application for two weeks.",
+      "ulaw_bytes": 28501,
+      "seconds": 3.56,
+      "sha256": "4becb91f4643bbd0abd556c7f7c5abd4df0f232a765e31f8435808587e9ff9aa"
+    },
+    "1": {
+      "text": "Can I please speak to a person instead?",
+      "ulaw_bytes": 16213,
+      "seconds": 2.03,
+      "sha256": "1ea66c37939d2a94539b4ac3077f74f645f8002d03694a49606f5c8d1eea54bb"
+    }
+  },
+  "source_sha256": "230713c049e90415204c4417be0e3f3ef26080b5902a5f2bf7b3f911780a1139"
+}

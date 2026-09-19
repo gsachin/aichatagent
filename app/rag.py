@@ -92,6 +92,28 @@ def retrieve_context_hybrid(query: str, top_k: int = MMR_K,
 
 def retrieve_context(query: str) -> str:
     """
+    US-001 wrapper: emits retrieval_done on EVERY return path — MCP-first,
+    legacy fallback, and empty result. A wrapper rather than a mark per return
+    because four marks is four chances to miss one, and the metric it feeds
+    (`retrieval_ms`) is the one BRD-01 names first (REC-12).
+
+    The mark is emitted from inside the worker thread running the blocking
+    RAG+LLM call. It reaches the right turn because asyncio.to_thread copies
+    the calling context, so the per-WebSocket ContextVar is visible here; two
+    concurrent callers get distinct copies (BRD-06).
+    """
+    result = _retrieve_context(query)
+    try:
+        from app.perf_trace import mark_current
+
+        mark_current("retrieval_done")
+    except Exception:
+        pass
+    return result
+
+
+def _retrieve_context(query: str) -> str:
+    """
     Returns the formatted context string: '[§ {section}]\\n{body}' chunks
     joined by '\\n\\n---\\n\\n'. MCP-first with legacy fallback per USE_MCP_RAG.
     Returns '' when nothing is retrieved.

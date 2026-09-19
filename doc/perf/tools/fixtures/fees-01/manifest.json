@@ -1,0 +1,25 @@
+{
+  "fixture_id": "fees-01",
+  "voice": "af_heart",
+  "turns": {
+    "0": {
+      "text": "How much are the tuition fees for the computer science programme?",
+      "ulaw_bytes": 26112,
+      "seconds": 3.26,
+      "sha256": "499d5e32e52776b7699db625085e059f764e31cd6c63029d74e8fdd4344748e3"
+    },
+    "1": {
+      "text": "And is there any difference for international students?",
+      "ulaw_bytes": 20480,
+      "seconds": 2.56,
+      "sha256": "2b4bea75a1b0e1125d7242c7b90dbd57be19442e647f384f941d3a5ed9e60103"
+    },
+    "2": {
+      "text": "Can I pay it in instalments?",
+      "ulaw_bytes": 12800,
+      "seconds": 1.6,
+      "sha256": "054af1e31a25a8fe702ac9a56572f8ffad024910c31bc946cbe4b4a3f987f943"
+    }
+  },
+  "source_sha256": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
+}

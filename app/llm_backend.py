@@ -132,8 +132,42 @@ def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None, temperature=None) -> str:
-    """ollama.chat with today's exact option semantics."""
+#: US-006 / REC-11. Ollama resets a model's keep-alive to the SERVER DEFAULT on
+#: any request that omits it, so a request that never sends one silently undoes
+#: the boot pre-warm on the first turn of the process's life. The pre-warm in
+#: start_services.ps1 Step 6 asks for 24h; `_chat_ollama` then asked for nothing
+#: and got 5 minutes — which is why a 32,919 ms cold load was measured WITH
+#: working pre-warm code in the repository.
+#:
+#: Residency is therefore held on the SERVING path, not the boot path. This is
+#: resolved once, here, and sent on every generation request (TAC-3: zero
+#: keep-alive resets).
+def _resolve_keep_alive(raw: str):
+    """Coerce the configured keep-alive into the type Ollama actually accepts.
+
+    A `.env` value is ALWAYS a string, and Ollama's Go duration parser rejects
+    `"-1"` with `time: missing unit in duration "-1"` — a 400 on every request.
+    So an integer (including a negative one) must be sent as an int, while a
+    duration such as "24h" stays a string. Getting this wrong does not degrade
+    residency, it breaks every call.
+    """
+    s = str(raw).strip()
+    try:
+        return int(s)
+    except ValueError:
+        return s
+
+
+KEEP_ALIVE = _resolve_keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", "-1"))
+
+#: Set when the installed ollama client rejects the keep_alive kwarg, so the
+#: condition is visible rather than silently degrading residency to 5 minutes.
+_keep_alive_unsupported = False
+
+
+def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None,
+                 temperature=None, keep_alive=None) -> str:
+    """ollama.chat with explicit keep-alive so residency survives the first call."""
     import ollama
 
     if model is None:
@@ -142,7 +176,47 @@ def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None, temperat
     options = {"num_ctx": int(num_ctx)}
     if temperature is not None:
         options["temperature"] = float(temperature)
-    response = ollama.chat(model=model, messages=messages, options=options)
+    ka = KEEP_ALIVE if keep_alive is None else keep_alive
+    try:
+        response = ollama.chat(model=model, messages=messages, options=options,
+                               keep_alive=ka)
+    except TypeError:
+        # Client predates the keep_alive kwarg. Degrade LOUDLY: residency will
+        # fall back to the server default and BRD-17 is unmet.
+        global _keep_alive_unsupported
+        if not _keep_alive_unsupported:
+            _keep_alive_unsupported = True
+            logger.warning(
+                "Ollama client does not accept keep_alive; residency will fall "
+                "back to the server default (%s). BRD-17 is NOT met. Upgrade the "
+                "ollama client or set OLLAMA_KEEP_ALIVE on the server.",
+                os.environ.get("OLLAMA_KEEP_ALIVE", "server default"),
+            )
+        response = ollama.chat(model=model, messages=messages, options=options)
+    # US-001 / REC-12: capture the engine's own counters so prefill and
+    # generation are separable from the single llm_sent..llm_done block.
+    # This is what makes retrieval_ms derivable in app/perf_trace.py — the
+    # draft tracer could not compute the metric BRD-01 names first.
+    # note_current is a no-op when no trace is active.
+    try:
+        from app.perf_trace import note_current
+
+        note_current(
+            model_used=model,
+            prompt_eval_count=response.get("prompt_eval_count"),
+            eval_count=response.get("eval_count"),
+            prefill_ms=round(response.get("prompt_eval_duration", 0) / 1e6, 1),
+            generation_ms=round(response.get("eval_duration", 0) / 1e6, 1),
+            load_ms=round(response.get("load_duration", 0) / 1e6, 1),
+            keep_alive=ka,
+            # A non-trivial load_duration means the model was NOT resident and
+            # had to be read from disk. This is the residency-lapse signal
+            # US-006 requires: an eviction that happened anyway is visible on
+            # the trace rather than silent.
+            residency_lapse=bool(response.get("load_duration", 0) / 1e6 > 500),
+        )
+    except Exception:
+        pass
     return response["message"]["content"]
 
 

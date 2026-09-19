@@ -81,19 +81,46 @@ def _get_stt_model():
 
 
 def _get_tts_engine():
-    """Load Kokoro ONNX once and cache — GPU-accelerated via CUDA."""
+    """Load Kokoro ONNX once and cache.
+
+    Requests the CUDA execution provider, then reports which provider the
+    session ACTUALLY got.
+
+    The original version logged "CUDA GPU enabled" whenever
+    `ort.get_available_providers()` listed CUDA — that lists providers compiled
+    into the wheel, not providers that instantiate. On this box the CUDA
+    provider fails ("Require cuDNN 9.* and CUDA 13.*"; torch ships CUDA 12.8)
+    and ONNX Runtime silently falls back to CPU, so the log claimed a 5-10x
+    speedup that was never happening while the CPU did all the work.
+
+    Measured consequence: RTF ~0.6 on CPU, which is the ~6 s single-session
+    synthesis and the 12-16 s N=2 bottleneck. The claim is now read from the
+    session itself, so it cannot be true-by-accident again.
+    """
     global _tts_engine
     if _tts_engine is not None:
         return _tts_engine
 
-    # Force CUDA execution provider for 5-10x faster TTS
+    # Ask for CUDA. Whether we GET it is checked below, from the session.
     import onnxruntime as ort
-    available = ort.get_available_providers()
-    if "CUDAExecutionProvider" in available:
-        os.environ["ONNX_PROVIDER"] = "CUDAExecutionProvider"
-        logger.info("Kokoro TTS: CUDA GPU enabled")
-    else:
-        logger.warning("Kokoro TTS: CUDA not available, using CPU (slow)")
+    requested = "CUDAExecutionProvider" if "CUDAExecutionProvider" in \
+        ort.get_available_providers() else None
+    if requested:
+        os.environ["ONNX_PROVIDER"] = requested
+
+    # Make CUDA/cuDNN actually resolvable. On Windows the ORT wheel does NOT
+    # bundle them, so the provider fails to instantiate and ONNX Runtime
+    # silently falls back to CPU. torch ships CUDA 12.8 + cuDNN 9 and registers
+    # its own lib dir on import; preload_dlls() reuses those.
+    #
+    # This is the difference between RTF 0.63 and RTF 0.06 on this box — the
+    # ~6 s single-session synthesis and the 12-16 s two-caller bottleneck.
+    # Order matters: torch first, then preload_dlls(), then the session.
+    try:
+        import torch  # noqa: F401  (registers torch's bundled CUDA/cuDNN dirs)
+        ort.preload_dlls()
+    except Exception as exc:
+        logger.warning("Kokoro TTS: CUDA DLL preload skipped (%s)", exc)
 
     from kokoro_onnx import Kokoro
 
@@ -102,7 +129,24 @@ def _get_tts_engine():
         os.path.join(cache_dir, "kokoro-v1.0.onnx"),
         os.path.join(cache_dir, "voices-v1.0.bin"),
     )
-    logger.info("Kokoro TTS engine ready")
+
+    # The truth, read back from the session that was actually built.
+    try:
+        active = _tts_engine.sess.get_providers()
+        on_gpu = "CUDAExecutionProvider" in active
+    except Exception:
+        active, on_gpu = ["<unknown>"], False
+
+    if on_gpu:
+        logger.info("Kokoro TTS: running on CUDA (%s)", ",".join(active))
+    else:
+        logger.warning(
+            "Kokoro TTS: CPU ONLY — requested %s, session got %s. Synthesis is "
+            "~0.6x real-time and contends with everything else on the CPU; this "
+            "is the dominant cost of a two-caller turn. See doc/perf/"
+            "IMPLEMENTATION_STATUS.md.",
+            requested or "(nothing)", ",".join(active),
+        )
     return _tts_engine
 
 
@@ -300,6 +344,9 @@ class VoiceCallSession:
         # Conversation context (accumulated across utterances)
         self._conversation_history: list[str] = []
 
+        # US-001 turn tracing (app/perf_trace.py). Never raises; may be None.
+        self._trace = None
+
     def log_event(self, name: str, **fields) -> None:
         """Emit one structured event line for the call timeline."""
         extra = " ".join(f"{k}={v}" for k, v in fields.items())
@@ -368,6 +415,21 @@ class VoiceCallSession:
             or self._total_frames >= self._max_utterance
         ):
             self.log_event("USER_SPEECH_STOPPED", frames=self._total_frames)
+            # US-001: open a trace for this turn. vad_end is the zero point for
+            # processing_ms. The 600 ms the caller waited before this instant is
+            # endpointing_ms, which BRD-02 measures separately — do not conflate
+            # the two clocks. Guarded: tracing never breaks a call.
+            try:
+                from app.perf_trace import new_trace
+
+                self._trace = new_trace(self.call_id, self._turn)
+                self._trace.mark("vad_end")
+                self._trace.note(
+                    vad_frames=self._total_frames,
+                    endpoint_ms=self._silence_threshold * 20,
+                )
+            except Exception:
+                self._trace = None
             return True
         return False
 
@@ -590,6 +652,9 @@ class VoiceCallSession:
                 f"min_logprob={f'{min_logprob:.2f}' if min_logprob is not None else 'n/a'}, "
                 f"low_conf={low_conf})"
             )
+            if self._trace is not None:
+                self._trace.mark("stt_done")
+                self._trace.note(stt_chars=len(transcript), stt_low_conf=bool(low_conf))
             return transcript, low_conf
         except Exception:
             logger.exception("VoiceCall: STT failed")
@@ -646,7 +711,19 @@ class VoiceCallSession:
             else:
                 prompt = f"This is an {self.direction} call.\n{question}"
 
-            return await asyncio.to_thread(run_rag_query_sync, prompt) or ""
+            # US-001: llm_sent brackets retrieval + prefill + generation. The
+            # split between those three comes from the engine counters captured
+            # in app/llm_backend.py and the retrieval_done mark from app/rag.py.
+            # llm_first_token is deliberately NOT marked here: with a
+            # non-streaming call there is no first-token event, and marking this
+            # instant would fabricate a TTFT (TRD-21).
+            if self._trace is not None:
+                self._trace.mark("llm_sent")
+            answer = await asyncio.to_thread(run_rag_query_sync, prompt) or ""
+            if self._trace is not None:
+                self._trace.mark("llm_done")
+                self._trace.note(answer_chars=len(answer))
+            return answer
         except Exception:
             logger.exception("VoiceCall: LLM query failed")
             return ""
@@ -668,6 +745,14 @@ class VoiceCallSession:
                 cached_audio, cached_sr = self._tts_cache[cache_key]
                 logger.debug(f"TTS cache HIT: {tts_text[:60]}...")
                 self.log_event("TTS_COMPLETED", cached=1)
+                # US-001: mark on EVERY return path. This one was missed on the
+                # first pass — the cached path returned before the mark, so a
+                # cache hit produced a trace with tts_done absent and the
+                # llm_done->first_audio segment unaccounted for. Found by
+                # running a live call, not by inspection.
+                if self._trace is not None:
+                    self._trace.mark("tts_done")
+                    self._trace.note(tts_cache_hit=True)
                 return cached_audio.copy()
 
             audio, sr = await asyncio.to_thread(
@@ -681,6 +766,9 @@ class VoiceCallSession:
             self._tts_cache[cache_key] = (audio.copy(), sr)
 
             logger.info(f"VoiceCall: TTS generated ({len(audio)/sr:.1f}s at {sr} Hz)")
+            if self._trace is not None:
+                self._trace.mark("tts_done")
+                self._trace.note(tts_cache_hit=False, audio_s=round(len(audio) / sr, 2))
             return audio
         except Exception:
             logger.exception("VoiceCall: TTS failed")

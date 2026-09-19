@@ -69,7 +69,38 @@ def _parse(r: httpx.Response) -> dict | None:
 
 # ── HTTP choke point (single monkeypatch target for tests) ─────────────────
 
+#: US-008 follow-on. The original built a NEW httpx.Client per request, so every
+#: `tools/call` paid a fresh TCP connection (plus a session re-check) against a
+#: 2.5 s read budget. Under two-caller load that is enough to cross the timeout
+#: on a service whose own handler answers in milliseconds — and the cost is paid
+#: TWICE, because the timeout is followed by a full local re-retrieval.
+#:
+#: One client, reused. httpx.Client is thread-safe for requests, and _post runs
+#: on worker threads, so a module-level client is correct here.
+_client: "httpx.Client | None" = None
+
+
+def _get_client() -> httpx.Client:
+    """The shared client. Created once, with the configured timeout."""
+    global _client
+    if _client is None:
+        _client = httpx.Client(
+            timeout=_timeout(),
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+        )
+    return _client
+
+
 def _post(payload: dict, session_id: str | None = None) -> httpx.Response:
+    # REVERTED 2026-09-19 for a controlled test. The module-level client above
+    # was introduced to stop paying a fresh TCP connection per request, but it
+    # was never confirmed under load — and it shares one connection pool across
+    # every worker thread. With the read timeout raised to 6 s, a stalled call
+    # now holds a pool slot six times longer than before, and the pool has
+    # max_connections=8. The long-run failures (both sessions dropped at 28
+    # samples on a keepalive ping timeout) postdate both changes, so this
+    # restores the per-request client while KEEPING the 6 s timeout — isolating
+    # one variable at a time.
     with httpx.Client(timeout=_timeout()) as client:
         return client.post(
             _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),

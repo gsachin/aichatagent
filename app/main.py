@@ -663,6 +663,7 @@ async def websocket_twilio(websocket: WebSocket):
                     # Send TTS audio chunks back through the WebSocket
                     session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
                     tts_playing = True
+                    _marked_first_frame = False
                     try:
                         for chunk in tts_chunks:
                             out_payload = base64.b64encode(chunk).decode("ascii")
@@ -673,6 +674,15 @@ async def websocket_twilio(websocket: WebSocket):
                             })
                             if not await _ws_send(websocket, response):
                                 raise WebSocketDisconnect(code=1000)
+                            # US-001: first_audio_sent is taken at the socket
+                            # write, not at the end of synthesis — this is the
+                            # end of BRD-02's measured segment.
+                            if not _marked_first_frame:
+                                _marked_first_frame = True
+                                _t = getattr(session, "_trace", None)
+                                if _t is not None:
+                                    _t.mark("first_audio_sent")
+                                    _t.emit()
                     finally:
                         tts_playing = False
                     session.log_event("AGENT_SPEECH_STOPPED")

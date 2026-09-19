@@ -51,3 +51,7 @@ pendingtask*.md
 
 # Uploaded documents and generated offer letters (sensitive data)
 data/
+
+# Env backups (a plain .env pattern does NOT cover .env.bak-*) — these hold secrets
+.env.*
+*.env.bak*

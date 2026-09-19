@@ -1,0 +1,27 @@
+{
+  "schema": "us002.fixture/1",
+  "fixture_id": "eligibility-03",
+  "version": 1,
+  "intent": "Admission process / eligibility",
+  "description": "Two-turn eligibility conversation. Turn 2 is a 200 ms sub-300 ms burst: the app's min-burst filter drops it as noise (MIN_UTTERANCE_FRAMES=15), so the harness expects a turn with no response and records it as such rather than as a timeout fault (LLD T-6).",
+  "seed": 20260920,
+  "trailing_silence_ms": 800,
+  "turns": [
+    {
+      "turn_id": 0,
+      "text": "What marks do I need to get into the B.Tech computer science programme?",
+      "expect_keywords": ["marks", "eligib"],
+      "segments": [
+        {"kind": "speech", "ms": 2400}
+      ]
+    },
+    {
+      "turn_id": 1,
+      "text": "mm-hm",
+      "expect_keywords": [],
+      "segments": [
+        {"kind": "speech", "ms": 200}
+      ]
+    }
+  ]
+}

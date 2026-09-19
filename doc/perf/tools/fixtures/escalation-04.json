@@ -1,0 +1,27 @@
+{
+  "schema": "us002.fixture/1",
+  "fixture_id": "escalation-04",
+  "version": 1,
+  "intent": "Escalation / handoff to human",
+  "description": "Two-turn escalation conversation, the second turn arriving immediately after the first with no idle gap - the warm-bucket case. Fixture-level pre_gap_ms forces a cold turn when the operator wants one (AC-2).",
+  "seed": 20260921,
+  "trailing_silence_ms": 800,
+  "turns": [
+    {
+      "turn_id": 0,
+      "text": "I have been trying to reach someone about my application for two weeks.",
+      "expect_keywords": ["speak", "human"],
+      "segments": [
+        {"kind": "speech", "ms": 2800}
+      ]
+    },
+    {
+      "turn_id": 1,
+      "text": "Can I please speak to a person instead?",
+      "expect_keywords": ["person", "transfer"],
+      "segments": [
+        {"kind": "speech", "ms": 2000}
+      ]
+    }
+  ]
+}

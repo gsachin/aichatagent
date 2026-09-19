@@ -1,0 +1,19 @@
+{
+  "fixture_id": "deadlines-02",
+  "voice": "af_heart",
+  "turns": {
+    "0": {
+      "text": "When is the last date to apply for the undergraduate programme?",
+      "ulaw_bytes": 26794,
+      "seconds": 3.35,
+      "sha256": "17ab88abf5bf270627e44f9e901a5426bb5ff585bae031d60722d8341236583a"
+    },
+    "1": {
+      "text": "Sorry - and when do the entrance results come out?",
+      "ulaw_bytes": 20480,
+      "seconds": 2.56,
+      "sha256": "db944c26269c28339cf64f1f5a1f603f5829aef65913f34347442a3cad193b23"
+    }
+  },
+  "source_sha256": "d2ba439268f91da1946193ec820f0b8fe54cc21886d2828c4edb86fd9b187623"
+}

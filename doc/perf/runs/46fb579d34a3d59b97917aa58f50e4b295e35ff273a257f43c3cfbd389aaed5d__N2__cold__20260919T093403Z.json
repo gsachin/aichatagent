@@ -1,0 +1,314 @@
+{
+  "run_id": "20260919T093403Z",
+  "condition": "N=2",
+  "thermal_state": "cold",
+  "turn_count": 2,
+  "first_audio_n": 0,
+  "fixture_sha256": "46fb579d34a3d59b97917aa58f50e4b295e35ff273a257f43c3cfbd389aaed5d",
+  "fixtures": [
+    "fees-01"
+  ],
+  "fixture_hashes": {
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
+  },
+  "fixture_version": {
+    "fees-01": 1
+  },
+  "network_profile": "clean",
+  "profile_parameters": {
+    "frame_delay_ms": 0.0,
+    "jitter_ms": 0.0,
+    "loss_percent": 0.0,
+    "reorder_percent": 0.0,
+    "disconnect_at_turns": []
+  },
+  "profile_description": "carrier framing, no injection",
+  "injected_condition": false,
+  "first_audio_ms": {
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "n": 0,
+    "bucket": "cold"
+  },
+  "cold_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "warm_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "carrier_boundary_excluded": true,
+  "records_separated": null,
+  "separation": {
+    "records_separated": null,
+    "separation_basis": "absent",
+    "trace_rows_in_window": 0,
+    "trace_rows_unattributable": 0,
+    "distinct_call_ids": 0,
+    "reasons": [
+      "the app emitted no trace rows for this window (DAT-07 absent)"
+    ],
+    "detail": "Separation is a property of the app's trace stream and could not be checked. A figure from this run is harness-observed first-audio only; the app-side per-stage decomposition is NOT available and the N=2 separation assertion (TAC-3) is NOT evidenced by this run."
+  },
+  "turns_over_3000ms": 0,
+  "cap_exceeded": false,
+  "cap_basis": "first_audio_ms > 3000 (BRD-05 per-turn ceiling)",
+  "turns_without_response": 2,
+  "turns_timed_out": 2,
+  "partial": true,
+  "dropped_turns": 4,
+  "discarded": false,
+  "discard_reason": null,
+  "stack_readiness": "not checked (warm_gate=False)",
+  "readiness": {
+    "stack_readiness": "not checked (warm_gate=False)"
+  },
+  "frame_audit": {
+    "frames_emitted": 408,
+    "frames_dropped": 0,
+    "frames_reordered": 0,
+    "frames_late_gt_5ms": 3,
+    "frames_slot_clamped": 1,
+    "max_slot_deviation_ms": 32.777,
+    "worst_session_p95_slot_deviation_ms": 0.99,
+    "harness_fault": true,
+    "tac1_holds": false,
+    "per_session": {
+      "A": {
+        "frames_emitted": 204,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 1,
+        "frames_late_gt_5ms_from_clamp": 0,
+        "frames_late_gt_5ms_unexplained": 1,
+        "frames_slot_clamped": 0,
+        "max_slot_deviation_ms": 14.831,
+        "p50_slot_deviation_ms": 0.294,
+        "p95_slot_deviation_ms": 0.99,
+        "p99_slot_deviation_ms": 1.197,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 14.831,
+        "p95_harness_deviation_ms": 0.99,
+        "frames_harness_late_gt_5ms": 1,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": true,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      },
+      "B": {
+        "frames_emitted": 204,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 2,
+        "frames_late_gt_5ms_from_clamp": 1,
+        "frames_late_gt_5ms_unexplained": 1,
+        "frames_slot_clamped": 1,
+        "max_slot_deviation_ms": 32.777,
+        "p50_slot_deviation_ms": 0.263,
+        "p95_slot_deviation_ms": 0.689,
+        "p99_slot_deviation_ms": 1.234,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 32.777,
+        "p95_harness_deviation_ms": 0.684,
+        "frames_harness_late_gt_5ms": 1,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": false,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      }
+    },
+    "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
+  },
+  "per_session": [
+    {
+      "label": "A",
+      "turn_count": 1,
+      "planned_turns": 3,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZd52a047bb08872bc05d9ea6ca6ad39"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "turns_over_3000ms": 0,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 389
+      },
+      "turns": [
+        {
+          "session_label": "A",
+          "turn_index": 0,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "cold",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 233124.187,
+          "stream_sid": "MZd52a047bb08872bc05d9ea6ca6ad39",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    },
+    {
+      "label": "B",
+      "turn_count": 1,
+      "planned_turns": 3,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ29e073f4abd18e955a2af44195ccae"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "turns_over_3000ms": 0,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 389
+      },
+      "turns": [
+        {
+          "session_label": "B",
+          "turn_index": 0,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "cold",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 233124.64,
+          "stream_sid": "MZ29e073f4abd18e955a2af44195ccae",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    }
+  ],
+  "target_turns_per_session": 3,
+  "powered": false,
+  "url": "ws://127.0.0.1:8000/ws/twilio",
+  "started_at": "2026-09-19T09:34:03Z",
+  "ended_at": "2026-09-19T09:35:00Z",
+  "wall_seconds": 56.94,
+  "harness_version": "us002-harness/1.0.0",
+  "harness_sha256": "5fcd3d4d4c47d46d91960be807ed6ea9b4afca724979c1ddc76207bccd9b0c0c",
+  "app_contract_check": {
+    "checked": [
+      {
+        "file": "voice_handler.py",
+        "name": "silence_threshold_frames",
+        "harness": 30,
+        "app": 30,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "max_utterance_frames",
+        "harness": 300,
+        "app": 300,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "MIN_UTTERANCE_FRAMES",
+        "harness": 15,
+        "app": 15,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "RMS gate",
+        "harness": 80,
+        "app": 80,
+        "status": "ok"
+      }
+    ],
+    "drift": [],
+    "ok": true
+  },
+  "json_path": "",
+  "disclosures": {
+    "carrier_boundary": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
+    "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
+    "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (file absent at run start)"
+  },
+  "notes": [
+    "The app emitted no DAT-07 trace rows for this window, so the N=2 record-separation assertion (TAC-3) is NOT evidenced by this run. Harness-observed first-audio figures still stand.",
+    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+  ]
+}
