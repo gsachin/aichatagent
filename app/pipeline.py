@@ -21,6 +21,7 @@ Usage (from run_pipeline_test.py or FastAPI transport):
     runner, task = await create_local_voice_pipeline(transport)
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -356,7 +357,15 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
         prompt = build_rag_prompt(user_text)
         from app.llm_backend import chat as backend_chat
 
-        answer = backend_chat(
+        # `to_thread`, because `backend_chat` is SYNCHRONOUS and performs an
+        # HTTP call to the engine. Calling it directly from an `async def`
+        # blocks the event loop for the whole inference -- the same defect as
+        # using the synchronous gate here, one layer further in, and it was
+        # worth 3-5 s of frozen loop per admitted background unit. Fixing the
+        # acquisition alone took the 2+1 window from dying at turn 3-18 to
+        # dying at 68-70; this is the rest of it.
+        answer = await asyncio.to_thread(
+            backend_chat,
             messages=[{"role": "user", "content": prompt}],
             preferred=[DEFAULT_LLM_MODEL],
             num_ctx=NUM_CTX,
@@ -369,7 +378,12 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
         if work_class == VOICE:
             with GATE.voice_turn(label="text:voice"):
                 return await _run()
-        with GATE.background_unit(label="text", mode=mode):
+        # `background_unit_async`, NOT `background_unit`. This function is
+        # `async`, so it runs on the event loop; the synchronous gate blocks on
+        # a threading.Condition, which would freeze the loop -- and with it
+        # every live voice call -- for as long as the deferral lasted. Both
+        # callers died on keepalive timeout before this was changed.
+        async with GATE.background_unit_async(label="text", mode=mode):
             return await _run()
     except BackgroundDeferred:
         logger.info("text query refused: the line stayed busy past its budget")

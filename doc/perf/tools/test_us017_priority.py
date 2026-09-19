@@ -373,6 +373,107 @@ def lld_refusal_and_class() -> None:
           gate2.voice_active == 0 and gate2.background_active == 0)
 
 
+# ───────────────────── the event loop must keep turning ─────────────────────
+
+def event_loop_not_blocked() -> None:
+    """A deferred unit must not freeze the event loop.
+
+    This is the defect that killed both callers on the 2+1 window, twice, and
+    it looked like engine contention for as long as nobody followed the call
+    graph: `test_pipeline_with_text` is `async` and used the SYNCHRONOUS
+    `background_unit`, whose wait is a `threading.Condition.wait` -- on the loop
+    thread. A deferred text query stopped both live voice WebSockets, their VAD,
+    their media streams and their keepalives until the query got its slot.
+    Sessions died on `keepalive ping timeout` after 3-18 turns.
+
+    So the assertion is not "the gate works" -- the gate always worked. It is
+    that the loop keeps turning while a unit is deferred.
+    """
+    print("\n-- the event loop must keep turning during a deferral")
+
+    import asyncio
+    import inspect
+
+    import app.pipeline as pipeline
+    from app.work_priority import WorkGate
+
+    # The async path must use the async gate. Source-level, because the failure
+    # is a blocking call on the loop thread and there is no cheap runtime probe
+    # for "this coroutine did not yield when it should have".
+    src = inspect.getsource(pipeline.test_pipeline_with_text)
+    check("the async text path uses the ASYNC gate",
+          "background_unit_async" in src and "GATE.background_unit(" not in src,
+          "a synchronous gate on the event loop freezes every live call")
+
+    gate = WorkGate(defer_timeout_s=5.0)
+    ticks = [0]
+    stop = threading.Event()
+
+    async def scenario() -> None:
+        async def ticker() -> None:
+            while not stop.is_set():
+                ticks[0] += 1
+                await asyncio.sleep(0.01)
+
+        async def deferred_unit() -> None:
+            # The loop must keep running for this whole wait.
+            async with gate.background_unit_async(label="bg", mode="chat"):
+                pass
+
+        tick_task = asyncio.create_task(ticker())
+        # `voice_turn` is SYNCHRONOUS, and that is correct: it never waits, it
+        # only increments a counter under a briefly-held lock. Only the
+        # background acquisition blocks, which is why only it is async.
+        with gate.voice_turn(label="caller"):
+            # Hold the line so the background unit is forced to defer.
+            unit = asyncio.create_task(deferred_unit())
+            await asyncio.sleep(0.5)
+            during = ticks[0]
+            check("the loop turned while the unit was deferred", during > 5,
+                  f"{during} ticks in 500 ms -- near zero means the loop was blocked")
+            # A blocked loop could not have serviced the sleep above at all.
+        await unit
+        stop.set()
+        await tick_task
+
+    asyncio.run(scenario())
+    check("the deferred unit ran once the line cleared", gate.background_active == 0)
+    check("the gate recorded the deferral, not a spin",
+          gate.snapshot()["max_background_concurrent"] <= 1)
+
+    # NEGATIVE CONTROL. The check above is only worth anything if a blocking
+    # gate would fail it. The synchronous acquisition is called here ON THE LOOP
+    # THREAD on purpose, with a short budget so it cannot hang the suite: the
+    # ticker must stop dead, which is the defect that killed both callers.
+    gate2 = WorkGate(defer_timeout_s=0.4)
+    stalled = [None]
+
+    async def negative() -> None:
+        async def ticker() -> None:
+            while True:
+                ticks_neg[0] += 1
+                await asyncio.sleep(0.01)
+
+        ticks_neg = [0]
+        t = asyncio.create_task(ticker())
+        with gate2.voice_turn(label="caller"):
+            await asyncio.sleep(0.2)
+            before = ticks_neg[0]
+            try:
+                # BLOCKS THE LOOP. That is the point of the control.
+                gate2._acquire_background("sync-on-loop")
+            except Exception:                         # noqa: BLE001
+                pass
+            stalled[0] = ticks_neg[0] - before
+        t.cancel()
+
+    asyncio.run(negative())
+    check("NEGATIVE CONTROL: the synchronous gate on the loop DOES stall it",
+          stalled[0] is not None and stalled[0] <= 2,
+          f"{stalled[0]} ticks during a blocking wait -- if this is large, the "
+          f"positive check above proves nothing")
+
+
 def main() -> int:
     print("=" * 74)
     print("US-017 -- background work yields to the caller (BRD-20)")
@@ -387,6 +488,7 @@ def main() -> int:
     tac6_records()
     tac7_no_spin()
     lld_refusal_and_class()
+    event_loop_not_blocked()
     ac5_revert()
 
     print()

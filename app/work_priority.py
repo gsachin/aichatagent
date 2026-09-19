@@ -32,10 +32,11 @@ a core would breach `BRD-12` while doing no useful work.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 #: The two classes of work that enter retrieval or inference. There is
@@ -155,28 +156,23 @@ class WorkGate:
                     # Wake the waiters exactly when the reason to wait is gone.
                     self._cv.notify_all()
 
-    @contextmanager
-    def background_unit(self, label: str = "", mode: str | None = None):
-        """A unit of work nobody is waiting to hear.
+    def _acquire_background(self, label: str) -> None:
+        """Wait for the background slot. BLOCKS THE CALLING THREAD.
 
-        Defers until no voice turn is in flight and the background slot is
-        free, and records how long it waited. `TAC-2` is the invariant this
-        enforces; the recorded timestamp is the evidence for it.
+        **Never call this on the event loop.** The wait is a
+        `threading.Condition.wait`, so a caller on the loop thread freezes the
+        loop -- and with it every voice WebSocket, its VAD, its media stream and
+        its keepalive. That is not a slow caller, it is a dead one.
+
+        That is exactly what happened: `test_pipeline_with_text` is `async` and
+        used the synchronous `background_unit`, so a deferred text query stopped
+        both live calls until the query got its slot. Both sessions died on
+        `keepalive ping timeout` after 3-18 turns, and the cause read as engine
+        contention for as long as nobody followed the call graph into the loop.
+
+        Async callers use `background_unit_async`, which runs this on a worker
+        thread so the loop keeps turning.
         """
-        work_class, defect = classify(mode) if mode is not None else (BACKGROUND, None)
-        if defect is not None:
-            with self._cv:
-                self.records.classification_defects.append(
-                    {"label": label, "mode": mode, "reason": defect, "ts": time.time()})
-            with self.voice_turn(label=f"unclassified:{label}"):
-                yield
-            return
-
-        if work_class == VOICE:
-            with self.voice_turn(label=label):
-                yield
-            return
-
         started_wait = time.monotonic()
         deadline = started_wait + self._defer_timeout_s
         with self._cv:
@@ -191,15 +187,10 @@ class WorkGate:
             waited_ms = (time.monotonic() - started_wait) * 1000.0
 
             # The budget expired and the line is still busy. The unit is
-            # REFUSED, not admitted.
-            #
-            # This used to fall through and start anyway, recording the breach
-            # after the fact. That made TAC-2's invariant advisory: "zero
-            # background starts during a voice turn" was true only while
-            # nothing waited long enough to time out, and a caller on a long
-            # turn would eventually have background work running inside it.
-            # A refusal keeps the invariant absolute, and TAC-6 requires the
-            # refusal to name its reason rather than be silently dropped.
+            # REFUSED, not admitted: falling through and starting anyway would
+            # make TAC-2's invariant advisory, true only while nothing waited
+            # long enough to time out. TAC-6 requires the refusal to name its
+            # reason rather than be silently dropped.
             if self._voice_active > 0:
                 self.records.background_starts_during_voice.append(
                     {"label": label, "voice_active": self._voice_active,
@@ -218,12 +209,69 @@ class WorkGate:
             if waited_ms >= 1.0:
                 self.records.deferrals.append(
                     {"label": label, "waited_ms": round(waited_ms, 1), "ts": time.time()})
+
+    def _release_background(self) -> None:
+        with self._cv:
+            self._background_active -= 1
+            self._cv.notify_all()
+
+    def _note_classification_defect(self, label: str, mode: str | None, defect: str) -> None:
+        with self._cv:
+            self.records.classification_defects.append(
+                {"label": label, "mode": mode, "reason": defect, "ts": time.time()})
+
+    @contextmanager
+    def background_unit(self, label: str = "", mode: str | None = None):
+        """A unit of work nobody is waiting to hear. SYNCHRONOUS CALLERS ONLY.
+
+        Safe from a worker thread -- `run_rag_query_sync` runs under
+        `asyncio.to_thread`. From async code use `background_unit_async`; using
+        this there blocks the event loop and kills live calls.
+        """
+        work_class, defect = classify(mode) if mode is not None else (BACKGROUND, None)
+        if defect is not None:
+            self._note_classification_defect(label, mode, defect)
+            with self.voice_turn(label=f"unclassified:{label}"):
+                yield
+            return
+
+        if work_class == VOICE:
+            with self.voice_turn(label=label):
+                yield
+            return
+
+        self._acquire_background(label)
         try:
             yield
         finally:
-            with self._cv:
-                self._background_active -= 1
-                self._cv.notify_all()
+            self._release_background()
+
+    @asynccontextmanager
+    async def background_unit_async(self, label: str = "", mode: str | None = None):
+        """The async variant: the wait runs on a WORKER thread, never the loop.
+
+        Same gate, same records, same refusal. The only difference is that a
+        deferred unit no longer stops the process it is deferring to.
+        """
+        work_class, defect = classify(mode) if mode is not None else (BACKGROUND, None)
+        if defect is not None:
+            self._note_classification_defect(label, mode, defect)
+            with self.voice_turn(label=f"unclassified:{label}"):
+                yield
+            return
+
+        if work_class == VOICE:
+            with self.voice_turn(label=label):
+                yield
+            return
+
+        # The blocking wait goes to a worker thread. to_thread yields the event
+        # loop for its whole duration, which is the entire point.
+        await asyncio.to_thread(self._acquire_background, label)
+        try:
+            yield
+        finally:
+            self._release_background()
 
 
 #: Process-wide gate. One box, one event loop, one admission decision point
