@@ -752,7 +752,11 @@ class VoiceCallSession:
         no_speech_prob exceeds STT_MAX_NO_SPEECH_PROB.
         """
         try:
-            model = _get_stt_model()
+            # `to_thread`, because this LOADS faster-whisper when cold -- the
+            # boot warmup normally makes it a cache hit, but a warmup that
+            # failed (or a model that was evicted) would otherwise load it on
+            # the event loop, mid-call, for every live call at once.
+            model = await asyncio.to_thread(_get_stt_model)
             # Convert int16 → float32 for faster-whisper
             audio_float = audio_16k_int16.astype(np.float32) / 32768.0
 
@@ -938,7 +942,14 @@ class VoiceCallSession:
             # Only a miss needs the model. Loading it inside the hit path meant a
             # cache hit still touched the engine, which kept the isolation tests
             # from running without a GPU.
-            kokoro = _get_tts_engine()
+            #
+            # `to_thread` because this LOADS the Kokoro ONNX model when cold --
+            # and it was never pre-warmed at boot, so the first synthesis of the
+            # first call did exactly that, on the event loop, freezing every
+            # other live call for the duration. The boot warmup now loads it, so
+            # this is normally a cache hit; the thread hop is what makes a cold
+            # path survivable rather than fatal.
+            kokoro = await asyncio.to_thread(_get_tts_engine)
             audio, sr = await asyncio.to_thread(
                 kokoro.create, tts_text, voice=voice, speed=speed
             )

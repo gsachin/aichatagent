@@ -298,6 +298,20 @@ async def lifespan(app_instance):
             _get_stt_model()
             logger.info("Whisper model pre-warmed")
 
+            # Pre-load Kokoro too (C4 / Class A). Whisper was warmed here and
+            # Kokoro was not, so the FIRST synthesis of the FIRST call loaded
+            # the ONNX model -- from inside an `async def`, on the event loop,
+            # while every other live call, media stream and keepalive waited.
+            # A caller's first answer is the turn they are most likely to be
+            # timing, and it was the one paying a model load.
+            try:
+                from app.voice_handler import _get_tts_engine
+
+                _get_tts_engine()
+                logger.info("Kokoro TTS pre-warmed")
+            except Exception as tts_exc:                # noqa: BLE001
+                logger.warning(f"Kokoro pre-warm skipped: {tts_exc}")
+
         await _asyncio.to_thread(_warmup)
     except Exception as e:
         logger.warning(f"Warmup skipped: {e}")
@@ -723,7 +737,15 @@ async def websocket_twilio(websocket: WebSocket):
                         "Ask me anything about Meridian University programs, "
                         "tuition fees, or how to apply."
                     )
-                    chunks = generate_ulaw_greeting(greeting)
+                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
+                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
+                    # LOADS the model when cold. Called directly from an async
+                    # handler it froze the whole event loop for a model load on the
+                    # FIRST turn of the FIRST call, which is the worst possible
+                    # moment and the one a caller is most likely to notice. Every
+                    # other live call, every media stream and every keepalive waits
+                    # behind it. `to_thread` gives it a worker thread instead.
+                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
                     logger.info(f"AI greeting: {len(chunks)} chunks")
                     for chunk in chunks:
                         out_payload = base64.b64encode(chunk).decode("ascii")
@@ -995,7 +1017,15 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                         f"Admissions. Do you have a moment to talk about our "
                         f"programs, tuition fees, or how to apply?"
                     )
-                    chunks = generate_ulaw_greeting(greeting)
+                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
+                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
+                    # LOADS the model when cold. Called directly from an async
+                    # handler it froze the whole event loop for a model load on the
+                    # FIRST turn of the FIRST call, which is the worst possible
+                    # moment and the one a caller is most likely to notice. Every
+                    # other live call, every media stream and every keepalive waits
+                    # behind it. `to_thread` gives it a worker thread instead.
+                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
                     logger.info(
                         f"AI greeting: {len(chunks)} chunks"
                     )
@@ -1689,7 +1719,15 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     try:
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-        raw = backend_chat(
+        # US-017 C4 / Class A: `backend_chat` is a SYNCHRONOUS HTTP call to the
+        # engine. Called directly from this async handler it blocks the event
+        # loop for the whole inference -- so a WhatsApp message arriving while
+        # two calls are live would freeze both of them for the duration. The
+        # third instance of this defect found by the AST scan, and the one with
+        # the least excuse: it is on a path that only runs when a caller is
+        # also on the line.
+        raw = (await _asyncio.to_thread(
+            backend_chat,
             messages=[{
                 "role": "user",
                 "content": (
@@ -1707,7 +1745,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
             num_ctx=small_task_num_ctx(),
-        ).strip().lower()
+        )).strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
             return True, detected_program
