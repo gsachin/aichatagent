@@ -150,6 +150,46 @@ def _get_tts_engine():
     return _tts_engine
 
 
+#: Voice and speaking rate for the LIVE call path.
+#:
+#: Both keys shipped in .env and were ignored here: the call site hardcoded
+#: voice="af_heart", speed=1.0. KOKORO_VOICE was read by app/pipeline.py, so it
+#: looked alive in a grep while the Twilio path -- the one that actually serves
+#: callers -- never consulted it. Reading them here makes the live path agree
+#: with the rest of the stack.
+#:
+#: Speed is clamped to the range Kokoro renders cleanly; outside it the output
+#: degrades into artefacts, which is worse than ignoring the setting. A value
+#: that will not parse falls back to 1.0 with a warning rather than raising --
+#: a typo in .env must not stop the stack from answering calls.
+TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart").strip() or "af_heart"
+
+
+def _parse_tts_speed(raw: str) -> float:
+    try:
+        speed = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("KOKORO_SPEED=%r is not a number; using 1.0", raw)
+        return 1.0
+    clamped = min(max(speed, 0.5), 2.0)
+    if clamped != speed:
+        logger.warning(
+            "KOKORO_SPEED=%.2f is outside the clean-synthesis range 0.5-2.0; "
+            "using %.2f", speed, clamped)
+    return clamped
+
+
+TTS_SPEED = _parse_tts_speed(os.environ.get("KOKORO_SPEED", "1.0"))
+
+
+def _tts_voice() -> str:
+    return TTS_VOICE
+
+
+def _tts_speed() -> float:
+    return TTS_SPEED
+
+
 # ── u-law ↔ PCM conversion (stdlib audioop) ───────────────────────────
 
 def ulaw_to_pcm(ulaw_bytes: bytes) -> bytes:
@@ -756,7 +796,7 @@ class VoiceCallSession:
                 return cached_audio.copy()
 
             audio, sr = await asyncio.to_thread(
-                kokoro.create, tts_text, voice="af_heart", speed=1.0
+                kokoro.create, tts_text, voice=_tts_voice(), speed=_tts_speed()
             )
             # Store in cache
             if len(self._tts_cache) >= self._tts_cache_max:

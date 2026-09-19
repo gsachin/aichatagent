@@ -185,7 +185,7 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
             preferred=default_model(["qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(2048),
+            num_ctx=small_task_num_ctx(),
             json_mode=True,
         )
         logger.debug(f"LLM extraction raw: {raw}")

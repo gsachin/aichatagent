@@ -36,7 +36,12 @@ logger = logging.getLogger("llm_backend")
 
 # ── Ollama config (unchanged semantics) ────────────────────────────────
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#: Default host is the literal IPv4, NOT "localhost". On Windows "localhost"
+#: resolves to ::1 first and Ollama binds IPv4 only, so the refused IPv6
+#: connect burns ~2,066 ms in SYN retransmits before Python falls back --
+#: paid on every model-resolution and embedding call. 127.0.0.1 skips the
+#: doomed attempt (~15 ms). Class A: same server, same bytes.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
 # Single source of truth for the default context window (env: OLLAMA_NUM_CTX).
 # 8192 — the production voice system prompt (~3.5k tokens) plus RAG context
@@ -99,13 +104,25 @@ def default_model(preferred=None) -> list[str]:
     return [OLLAMA_MODEL] + [p for p in prefs if p != OLLAMA_MODEL]
 
 
-def small_task_num_ctx(fallback: int) -> int:
+def small_task_num_ctx() -> int:
     """
     Context window for small utility LLM calls (intent detection, lead
-    extraction, sentiment). Defaults preserve each call site's historical
-    value; SMALL_TASK_NUM_CTX overrides all of them from .env.
+    extraction, sentiment).
+
+    Defaults to DEFAULT_NUM_CTX -- the SAME value the serving path uses.
+    Ollama keeps one runner per model and tears it down whenever a request
+    arrives with a different num_ctx, paying a full cold reload (~6-11 s
+    measured on this box) on the next voice turn. Call sites having their
+    own historical values (512/1024/2048/4096) meant five context sizes
+    against one model, so the reload was paid constantly.
+
+    Agreement is therefore the only safe default, and it is enforced in
+    code rather than by a setting: SMALL_TASK_NUM_CTX is an escape hatch
+    for a deliberate, measured divergence -- never a required key. It also
+    means predeploy re-sizing OLLAMA_NUM_CTX for a different machine cannot
+    silently reintroduce the thrashing.
     """
-    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(fallback)))
+    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(DEFAULT_NUM_CTX)))
 
 
 def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:

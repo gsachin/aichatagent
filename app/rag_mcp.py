@@ -14,7 +14,12 @@ Contract (verified against the service's streamable-HTTP endpoint):
 
 Env (read lazily per call so tests can monkeypatch):
   RAG_MCP_URL       default http://127.0.0.1:8010/mcp
-  RAG_MCP_TIMEOUT   read timeout, default 2.5s (connect fixed at 1.0s)
+  RAG_MCP_TIMEOUT   read timeout, default 6.0s (connect fixed at 1.0s).
+                    Raised from 2.5s: under load ERC's embedding call queues
+                    behind Ollama generation, so a 2.5s read timeout fired on
+                    a service that answers in milliseconds -- and the fallback
+                    then paid for a SECOND embedding. Waiting is strictly
+                    cheaper than timing out and re-retrieving locally.
   RAG_MCP_COOLDOWN  circuit-breaker cooldown seconds, default 30
   USE_MCP_RAG       auto | on | off (dispatch lives in app/rag.py)
 """
@@ -35,7 +40,7 @@ def _env(name: str, default: str) -> str:
 def _timeout() -> httpx.Timeout:
     return httpx.Timeout(
         connect=1.0,
-        read=float(_env("RAG_MCP_TIMEOUT", "2.5")),
+        read=float(_env("RAG_MCP_TIMEOUT", "6.0")),
         write=2.5,
         pool=2.5,
     )

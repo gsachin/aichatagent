@@ -35,7 +35,8 @@ CHROMA_DB_PATH = Path(os.environ.get(
     str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
 ))
 DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
 TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 # Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).

@@ -61,7 +61,45 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-logging.basicConfig(level=logging.INFO)
+def _configure_logging() -> None:
+    """Apply LOG_LEVEL and LOG_FILE from the environment.
+
+    Both keys shipped in .env and were read by nothing: the level was pinned to
+    INFO and no file handler existed, so `logs/voice_assistant.log` was never
+    created and had never been written to. Found by US-011's reader sweep --
+    a key that is set and read by nothing is invisible until someone sweeps
+    for exactly that.
+    """
+    import os as _os
+
+    level_name = _os.environ.get("LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, None)
+    if not isinstance(level, int):
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger("voice_api").warning(
+            "LOG_LEVEL=%r is not a logging level; using INFO", level_name)
+        level = logging.INFO
+    else:
+        logging.basicConfig(level=level)
+
+    log_file = _os.environ.get("LOG_FILE", "").strip()
+    if not log_file:
+        return
+    try:
+        path = Path(log_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+    except OSError as exc:
+        # A bad LOG_FILE must not stop the stack from serving calls.
+        logging.getLogger("voice_api").warning(
+            "LOG_FILE=%r could not be opened (%s); file logging disabled",
+            log_file, exc)
+
+
+_configure_logging()
 logger = logging.getLogger("voice_api")
 
 
@@ -163,10 +201,50 @@ def _machine_profile_status() -> dict:
 
 
 @asynccontextmanager
+def _reconcile_workers() -> None:
+    """Report the configured FASTAPI_WORKERS against what is actually running.
+
+    FASTAPI_WORKERS is machine-sizing metadata written by scripts/predeploy.py.
+    No launcher passes it to uvicorn -- start_services.ps1, start_services.sh,
+    the Dockerfile and docker-compose all start a single process -- so a
+    configured value above 1 is a silent contradiction between .env and the
+    running stack. That mismatch is the exact defect class US-011 was written
+    to surface ("set != live"), and it had to be found by hand the first time:
+    the plan inherited a claim of 4 workers when there is one.
+
+    Reading it here does not change the worker count. It makes the difference
+    visible at boot instead of leaving it for someone to rediscover, and it is
+    deliberately NOT wired to `--workers`: this stack holds model residency
+    (whisper, Kokoro) and per-call session state in-process, so a second worker
+    would load a second copy of every model. On a 16 GB card already holding
+    ~13 GB, that is a crash, not a speedup.
+    """
+    import os as _os
+
+    raw = _os.environ.get("FASTAPI_WORKERS", "").strip()
+    if not raw:
+        return
+    try:
+        configured = int(raw)
+    except ValueError:
+        logger.warning("FASTAPI_WORKERS=%r is not an integer; ignoring", raw)
+        return
+    if configured > 1:
+        logger.warning(
+            "FASTAPI_WORKERS=%d is configured but this stack runs a single "
+            "uvicorn worker by design (in-process model residency and per-call "
+            "session state). No launcher honours the setting; the running "
+            "count is 1. Set FASTAPI_WORKERS=1 to make .env agree with the "
+            "stack, or see doc/sdlc/modules/MOD-07-config-boot.md.",
+            configured,
+        )
+
+
 async def lifespan(app_instance):
     """Initialize and cleanup resources."""
     global _db_available, _outbound_worker, _follow_up_scheduler
     # Startup
+    _reconcile_workers()
     try:
         from app.database import init_db
 
@@ -1533,7 +1611,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
                 ),
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(1024),
+            num_ctx=small_task_num_ctx(),
         ).strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")

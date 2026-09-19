@@ -207,7 +207,7 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
                 }
             ],
             preferred=default_model(["qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(512),
+            num_ctx=small_task_num_ctx(),
         ).strip()
         # Extract ISO-ish string
         match = re.search(
@@ -398,7 +398,7 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
                         }
                     ],
                     preferred=default_model(["qwen2.5:7b"]),
-                    num_ctx=small_task_num_ctx(2048),
+                    num_ctx=small_task_num_ctx(),
                 ).strip().lower()
                 if raw.startswith("yes"):
                     return True, kw
@@ -462,7 +462,7 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
                 ),
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(1024),
+            num_ctx=small_task_num_ctx(),
         ).strip().lower()
         if raw.startswith("yes"):
             return True, "llm_detected"

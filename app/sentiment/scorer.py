@@ -140,7 +140,7 @@ async def extract_sentiment(transcript: str) -> ScoreResult:
         raw = backend_chat(
             messages=[{"role": "user", "content": prompt}],
             model=model,
-            num_ctx=small_task_num_ctx(4096),
+            num_ctx=small_task_num_ctx(),
             temperature=0.1,
             json_mode=True,
         ).strip()

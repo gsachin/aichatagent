@@ -691,6 +691,41 @@ def ensure_venv() -> None:
     ok("dependencies installed")
 
 
+#: Settings whose STALE value costs latency for no benefit. Every one is a
+#: Class A (lossless) finding from the performance engagement: same server,
+#: same bytes, same answers. The code defaults are already correct, so an
+#: explicit stale value in .env is the only way left to still get the slow
+#: behaviour -- and nothing else in the stack would ever report it. That
+#: silence is exactly how these regressions hid the first time.
+PERF_ENV_TRAPS = (
+    ("OLLAMA_URL", ("http://localhost:11434", "localhost:11434"), "http://127.0.0.1:11434",
+     "'localhost' resolves to ::1 first, Ollama binds IPv4 only, so every "
+     "model-resolution call burns ~2,066 ms in SYN retransmits"),
+    ("RAG_MCP_TIMEOUT", ("2.5",), "6.0",
+     "2.5 s fires on ERC while it is queued behind generation, then the "
+     "fallback pays for a second embedding"),
+    ("OLLAMA_KEEP_ALIVE", ("300", "5m", "5min"), "-1",
+     "a 5-minute expiry unloads the model between calls; the next caller "
+     "pays a cold reload"),
+)
+
+
+def check_perf_env(env_text: str) -> list[str]:
+    """Report .env values that are known to cost turn latency.
+
+    Returns the list of offending keys so the caller can decide whether to
+    shout. Never edits .env -- an operator's explicit setting is theirs.
+    """
+    stale = []
+    for key, slow_values, fast, why in PERF_ENV_TRAPS:
+        m = re.search(rf"(?m)^\s*{key}\s*=\s*(\S+)", env_text)
+        if m and m.group(1).strip().strip("\"'") in slow_values:
+            stale.append(key)
+            warn(f".env sets {key}={m.group(1).strip()} — {why}")
+            warn(f"       fix: {key}={fast}  (Class A: no behaviour change)")
+    return stale
+
+
 def ensure_env_file() -> None:
     env = ROOT / ".env"
     if DRY_RUN:
@@ -705,9 +740,12 @@ def ensure_env_file() -> None:
         else:
             warn(".env.example missing — skipping .env creation")
         return
+    text = env.read_text(encoding="utf-8", errors="replace")
     for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER", "DATABASE_URL"):
-        if f"{key}=" not in env.read_text(encoding="utf-8", errors="replace"):
+        if f"{key}=" not in text:
             warn(f".env missing {key} — related features will degrade")
+    if not check_perf_env(text):
+        ok("no stale performance settings in .env")
 
 
 def ensure_llm_up() -> bool:

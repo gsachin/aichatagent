@@ -44,11 +44,30 @@ check("AC-1 every key reports a provenance",
 
 # --- TAC-2: inert keys found, by name --------------------------------------
 inert = ct.sweep_inert_keys(env)
-check("TAC-2 inert keys are found", len(inert) > 0, str(inert))
-check("TAC-2 FASTAPI_WORKERS is reported inert (REC-02)",
-      "FASTAPI_WORKERS" in inert)
-check("TAC-2 KOKORO_SPEED is reported inert",
-      "KOKORO_SPEED" in inert, "hardcoded speed=1.0 at voice_handler.py:131,707")
+# TAC-2 originally asserted that FASTAPI_WORKERS and KOKORO_SPEED were reported
+# inert. That was correct when written -- it is the finding that started US-011
+# -- but all four unread keys now have readers (LOG_LEVEL/LOG_FILE in
+# app/main.py, KOKORO_SPEED in app/voice_handler.py, FASTAPI_WORKERS
+# reconciled at startup). The assertion therefore inverts to the state the
+# story was reaching for: the sweep must still run and still name names, but
+# the set is empty. It stays a real gate -- adding any unread key to .env, or
+# removing a reader, fails it.
+check("TAC-2 the inert sweep returns a sequence of names",
+      isinstance(inert, (list, tuple)) and all(isinstance(k, str) for k in inert),
+      str(inert))
+check("TAC-2 no managed key is inert (REC-02, closed)",
+      len(inert) == 0, f"still inert: {inert}")
+check("TAC-2 the four previously-inert keys are no longer reported",
+      not {"FASTAPI_WORKERS", "KOKORO_SPEED", "LOG_FILE", "LOG_LEVEL"} & set(inert),
+      "a reader was removed")
+
+# Positive control: the sweep must still be *able* to find an unread key. Without
+# this, an empty result above could mean "clean" or could mean "detector broken".
+probe = dict(env)
+probe["US011_CANARY_UNREAD_KEY"] = "1"
+check("TAC-2 the sweep still detects a planted unread key",
+      "US011_CANARY_UNREAD_KEY" in ct.sweep_inert_keys(probe),
+      "detector is broken, not the config")
 check("TAC-2 every inert key appears in the rendered report",
       all(k in report for k in inert), str([k for k in inert if k not in report]))
 ext = [k for k in env if ct.is_externally_consumed(k) and k not in
