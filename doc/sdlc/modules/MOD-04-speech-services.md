@@ -101,6 +101,7 @@ The TTS cache shall be proven safe for two concurrent callers or made per-call; 
 - **Numbers:** cache capacity ≤ 50 entries (a class constant today); keys are `hash()` of the agent's own text, so the key space contains no caller data; the isolation test runs at N=2 with the harness and must show **zero** cross-call hits over ≥100 turns per condition.
 - **Failure mode this guards:** the leak is not the audio — identical text maps to identical audio — it is a *returned-then-mutated* buffer. The cache stores and returns `.copy()` (`app/voice_handler.py:675, 681`); the test exists to prove that discipline holds under concurrency, including the eviction path at `app/voice_handler.py:677–680`.
 - **Degradation:** if the test fails, the cache becomes per-call (bounded to one session's utterances) rather than being removed — the latency benefit is retained without the shared state (`BRD-15`: revertible by configuration).
+- **OUTCOME 2026-09-19 (US-012): the test FAILED and the fallback was applied.** 30 occurrences of caller B being served audio synthesised during caller A's session (`MOD-04` A.5.2's failure condition). `TTS_CACHE_SCOPE=per_call` is now the setting; a clean run shows **0 cross-call hits across 105 keys** against 3 under `shared`. The revert is the same one line. Note the key also changed: it is `(agent text, voice, speed)`, because voice and speed became configurable and a key without them would have kept serving audio rendered in the old voice.
 
 ### TRD-16 — Transcription contract: provenance, confidence, and rate discipline
 
@@ -183,7 +184,7 @@ erDiagram
 | Audio buffer (in) | µ-law frames, 8 kHz, 20 ms | One per turn while ACCUMULATING | `DAT-10` |
 | Transcript | text, confidence, `call_id`, `turn_id` | One per turn that reaches TRANSCRIBED | `DAT-05` lineage |
 | Audio buffer (out) | float32 PCM, 24 kHz, chunked to µ-law | One per turn that reaches SENDING | `DAT-10` |
-| TTS cache entry | `hash(text)` key, audio copy, sample rate | Process-wide, shared across sessions | `DAT-11` |
+| TTS cache entry | `(agent text, voice, speed)` key, audio copy, sample rate, owning call reference | **Scope is a setting:** `shared` (one process-wide dictionary) or `per_call` (one per session). **In force: `per_call`**, by measurement — see TRD-15's outcome. The owning call reference is not part of the key and never affects a lookup; it exists so a cross-call hit is measurable | `DAT-11` |
 
 ### B.5 Tech Stack Choices
 
@@ -211,7 +212,7 @@ erDiagram
 
 - **Accepted: batch `create()` on the live path until `TRD-13` lands.** Trade recorded by the TPO in `07-brownfield-reconciliation.md` §4 — the streaming variant is a same-library change, so the debt window is short and the reversibility is a single setting.
 - **Accepted: `pipecat-ai==1.6.0` remains a pinned, unused dependency.** Reason: removing or wiring it is a re-architecture; `REC-01` defers the call to `UC-10`. Revisit trigger: hand-rolled streaming under-delivers against the C2 prediction by more than 50% (`WF-03` step 5).
-- **Accepted: the TTS cache stays process-wide until `TRD-15`'s test runs.** `DG-06` records the conditional; the test is the exit condition, not a design argument.
+- **Closed 2026-09-19 (US-012): the TTS cache is per-call.** The `TRD-15` test ran and observed 30 cross-call hits under the shared scope, so `DG-06`'s conditional resolved to its documented fallback. Not debt: a decided design with a measured basis.
 - **Accepted: `WHISPER_NUM_THREADS` remains in `.env` while inert on the CUDA path.** Disposition belongs to `MOD-07`'s inert-key sweep (`TRD-25`); until then it is documented as inert here so no latency claim rests on it (`REC-05`).
 
 ### B.8 Reconciliation [Brownfield]
@@ -221,7 +222,7 @@ erDiagram
 | faster-whisper STT load + CUDA/int8 selection | `app/voice_handler.py:65–79`, `app/platform.py:114–120` | **Reusable** | Keep as-is; `TRD-16` only adds the contract around it |
 | Kokoro TTS engine singleton, CUDA execution provider | `app/voice_handler.py:83–106` (provider list at `:91`) | **Reusable** | Keep; the provider list is the `TRD-14` fallback lever |
 | TTS `create()` call site | `app/voice_handler.py:673` | **Refactor** | Replace with `create_stream()` consumption (`TRD-13`) |
-| TTS cache | `app/voice_handler.py:655–683` | **Debt** | Process-wide and shared across callers; `TRD-15` owns the `DG-06` isolation test and the per-call fallback |
+| TTS cache | `app/voice_handler.py` | **Resolved 2026-09-19 (US-012)** | `TRD-15`'s isolation test ran and FAILED; the pre-decided per-call fallback was applied rather than argued away. `DG-06`'s "use-as-is" decision is superseded by its own exit condition. Isolation is now a property of the design, not of the argument that content keys contain no PII |
 | Audio resample / µ-law framing | `app/voice_handler.py:111–143, 689` | **Reusable** | Unchanged; `TRD-13` only requires chunk boundaries to respect frame boundaries |
 | Greeting synthesis on the async handler | `app/main.py:593` | **Debt** | A synchronous synthesis call inside an async handler; recorded as C4 in `doc/perf/PLAN.md` §5. It is the one path where this module is invoked outside a turn — flagged here, owned by `MOD-01` |
 | `app/memory_budget.py` `"nvidia"` block | `app/memory_budget.py:22–33` | **Debt** | **Stale, and it is the table a VRAM check would naively trust.** It budgets `qwen_llm_gb: 4.0`, `recommended_gb: 6.0`, `peak_total_gb: 5.7` — the same 6 GB / small-model assumption `REC-06` flags as stale in `doc/model_vram_analysis.md`. It also reports `safe_threshold_percent: 95`, which is *above* the 90% ceiling `BRD-11` sets. `TRD-14` requires the boot budget to be computed from measured values instead |
@@ -237,5 +238,5 @@ Feasibility risks:
 
 1. **Streaming TTS may under-deliver against the 300–600 ms prediction.** The prediction came from `doc/perf/PLAN.md` §5, not from a run. *Mitigation:* the phase gate already exists — if the measured gain is under 50% of prediction, stop and debug before proceeding (`WF-03` step 5) rather than stacking the next change on an unverified one.
 2. **The VRAM budget may not close at N=2.** ~90% is a derived figure with the second KV sequence included; a tail spike breaches `BRD-11`. *Mitigation:* the budget is asserted at boot from measured values (`TRD-14`) and the CPU-execution fallback keeps speech available; the model/quantization lever stays gated behind `UC-10` with its quality gate.
-3. **The TTS isolation test may fail.** If it does, the outcome is a design change (per-call cache), not a blocked program — but it must be run before any claim of `BRD-06` compliance is made. *Mitigation:* `TRD-15` makes per-call the documented fallback, so the decision is pre-made.
+3. **The TTS isolation test may fail.** **RESOLVED 2026-09-19 (US-012): it failed, and the pre-decided fallback was applied.** Measured: 30 cross-call hits under `shared`, 0 across 105 keys under `per_call`. No `BRD-06` compliance claim is made without it, and the outcome is recorded rather than left as "may fail".
 4. **Stale memory tables could mislead the boot check.** `app/memory_budget.py` disagrees with the machine by more than 2× on the LLM term and sets its alert threshold above `BRD-11`'s ceiling. *Mitigation:* `TRD-14` forbids computing the budget from that table; the discrepancy is recorded in `B.8` so it is not rediscovered as a surprise.

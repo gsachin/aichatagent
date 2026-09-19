@@ -37,7 +37,7 @@ Extending `01-brd.md` §5; nothing here duplicates a `BRD-xx`:
 
 - **R1 — The caller hears something in every turn.** A turn that cannot produce a grounded answer produces a spoken clarification or a spoken apology instead. Silence is a defect, not a degradation mode. (Derives from `BRD-13`.)
 - **R2 — The caller is never told a dependency failed.** "Connection error" or "timeout" is internal vocabulary; the caller hears a normal sentence.
-- **R3 — A turn is admitted only when the line is free.** At the concurrency ceiling the third caller is refused with a spoken "all lines are busy" rather than admitted into a degraded call (`06-architecture.md` §5, MOD-01 degradation mode).
+- **R3 — A turn is admitted only when the line is free.** At the concurrency ceiling the third caller is refused with a spoken "all lines are busy" rather than admitted into a degraded call (`06-architecture.md` §5, MOD-01 degradation mode). **Built 2026-09-19 (US-016):** this is now a specified behaviour with a contract, not a sentence. The refusal is taken from the live session count at the carrier-facing endpoint, the busy message is a pre-synthesised asset read from disk, and no session is created — so `SM-01`'s state list is unchanged and there is no QUEUED, HOLDING or REFUSED state, because there is no queue.
 - **R4 — Nothing on the turn path is persisted mid-turn.** History (`DAT-04`) and audio (`DAT-10`) are per-call and in-memory; a crash costs one turn (`SM-02` halfway-stop) and that cost is accepted, not fixed here.
 - **R5 — The delay the caller experiences is the delay the trace records.** If a stage is not measured, the turn's decomposition must not silently absorb it.
 
@@ -147,16 +147,20 @@ p50 uses the same stages at their lower ends (600 / Assumed 200 / Assumed 250 / 
 
 | Name | Direction | Style | Contract | AuthN/Z |
 |---|---|---|---|---|
-| `/ws/twilio` (carrier media socket) | exposed | streaming WebSocket | 20 ms µ-law frames in; µ-law frames out; first outbound frame closes `BRD-02`'s segment | Carrier-asserted — no inbound auth; the PSTN line is the identity |
+| `/twilio/voice`, `/twilio/voice/connect` (carrier-facing endpoints) | exposed | HTTP GET → TwiML | **Admission decision point (US-016).** Returns the IVR/`<Connect>` TwiML when the line has capacity, or the busy TwiML — a `<Play>` of the pre-synthesised asset with **no `<Connect>`** — when both lines are live. Checked at both endpoints: the first spares a refused caller the IVR, the second is binding because a line can fill while a caller is still pressing a digit | Carrier-asserted; `From` is threaded into the stream as a `<Parameter>` |
+| `/ws/twilio` (carrier media socket) | exposed | streaming WebSocket | 20 ms µ-law frames in; µ-law frames out; first outbound frame closes `BRD-02`'s segment. **Registers/releases the live-session count** that the admission decision reads (US-016 TAC-1) — the count is the real lifecycle, so a refused call can never inflate the count it was refused by | Carrier-asserted — no inbound auth; the PSTN line is the identity |
 | `retrieve_context(question)` (`MOD-02`) | consumed | in-process call | ranked chunks, or an explicit not-relevant signal | n/a (in-process) |
 | `generate(prompt, stream=True)` (`MOD-03`) | consumed | in-process → HTTP to Ollama `:11434` | token deltas; engine counters on completion | n/a (loopback) |
 | `transcribe(pcm)`, `synthesise_stream(text)` (`MOD-04`) | consumed | in-process | transcript + low-confidence flag; audio chunks | n/a (in-process) |
 | `submit_transcript(...)` (`MOD-05`) | published | background task | fire-and-forget, strictly post-call | n/a |
 | `mark(stage, turn_id)` / `counter(...)` (`MOD-06`) | published | in-process marks | never raises, never blocks | n/a |
 | `voice_events` structured log | published | append-only log | `log_event(name, **fields)`; existing event names preserved | n/a |
-| `/ws/voice/text` | shared consumer | WebSocket | shares the retrieval + generation path; must not regress (`REC-09`) | none |
+| `/ws/voice/text` | shared consumer | WebSocket | shares the retrieval + generation path; must not regress (`REC-09`). **US-017: classified as background and admitted through the work gate** — it used to call the model directly, which was the one route into inference the priority policy could not see | none |
+| `GET /api/perf/policy` | published | HTTP GET → JSON | **Added by US-016/US-017.** The admission and work-priority counters, so the load harness can count an N=3 window and a 2+1 mix from the app's own records rather than from its own beliefs. Counts and reasons only — no phone number, no transcript, no caller text (`caller_ref` is a truncated digest) | none (loopback dev service, same as every other `/api` route) |
 
 Events are in-process method calls; there is no broker on the hot path (`06-architecture.md` §3, "Event-driven choreography — rejected on the hot path"). Turn lifecycle stays `SM-02`'s; the trace record is `MOD-06`'s contract.
+
+**Entry classification (US-017 TAC-1).** Every unit of work entering retrieval or inference carries a class — `voice` or `background` — derived from the `mode` argument the two callers already used (`app/pipeline.run_rag_query_sync`, `test_pipeline_with_text`). An unrecognised mode is admitted **as voice** and recorded as a classification defect: the failure that matters is a caller starved, not a background job let through. The class is stamped on every caller turn's trace, so the priority invariant is countable after the fact rather than only observable live.
 
 ### B.4 Data Model
 
@@ -210,12 +214,12 @@ Per failure class, with the `SM-02` state each leaves behind:
 | Endpoint never fires | ACCUMULATING | 300-frame (~6 s) max-utterance cap forces the turn (`voice_handler.py:283`); never a silent stall |
 | Empty/garbled transcript | TRANSCRIBED | Noise gate takes the fixed-reply branch; the model is never invoked; ladder advances one rung (one-shot, capped — `voice_system_prompt.py:305`) |
 | Retrieval times out | RETRIEVING | `MOD-02`'s bound applies; the turn continues on the local store or keyword-only, and the trace records the degraded path (`BRD-13`, `BRD-14`) |
-| Generation fails or returns empty | GENERATING | **Changed by TRD-04:** a spoken apology replaces today's empty reply (`WF-01` step 8 gap). The caller's line stays in history; the next turn carries it forward |
+| Generation fails or returns empty | GENERATING | **Built by US-016 (`BRD-13`'s "build item").** The caller hears the **pre-synthesised fixed response**, read from disk — not silence, and not an apology generated at request time. Deterministic: the same failure on two turns in two calls produces byte-identical audio. The caller's line stays in history; the next turn carries it forward. The turn is recorded as `degraded`, which is its own outcome and is never collapsed into `served`, `failed` or `refused` |
 | Synthesis fails | SYNTHESISING | Spoken fallback text; on repeated failure the turn ends and the session returns to LISTENING rather than hanging |
 | Socket write fails mid-turn | SENDING | Call ends (not resumable — `SM-01` timeout/cancel); post-call handling still runs if a transcript exists |
 | Caller hangs up mid-generation | any | Cancellation propagates to the generation stream and stops synthesis; no orphaned audio is queued to a closed socket. `SM-01` → ENDED from any state |
 | Caller speaks while the agent speaks | SPEAKING | Today: frames discarded and the partial buffer reset (`main.py:624–627`). After `UC-09`: whatever the PO decides, with the prompt edited to match (`CV-01`) |
-| Third caller arrives | — | Refused with a spoken "all lines busy" at the carrier (`06-architecture.md` §5); the two live sessions are not degraded |
+| Third caller arrives | — (no state is created) | **Built by US-016.** The rule was one sentence with no contract behind it; it now has one. The carrier answers the PSTN leg (an inbound call cannot be declined by the app); the app's lever is the TwiML it returns — the busy TwiML, a `<Play>` of the pre-synthesised asset with no `<Connect>`. **No session, no history and no KV allocation is created**, so the refused call leaves no state at all and a redial into a freed slot is a fresh session. The decision is single-valued from the live session count, and the two live sessions are not degraded. `06-architecture.md` §5's "refuse **or queue**" is closed to **refuse** — see below |
 | Stage mark missing | any | Trace records an absent stage; **never** a fabricated zero (TRD-03) |
 | Retry/idempotency | — | There is no retry inside a turn: a turn is single-use (`SM-02` Q5). Re-emission of a trace on a retried turn carries the same `turn_id` |
 

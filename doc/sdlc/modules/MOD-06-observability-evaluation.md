@@ -209,6 +209,8 @@ erDiagram
     int stages_seen "absent is not zero"
     int prompt_eval_count "BRD-01 engine counter"
     int eval_count "BRD-01 engine counter"
+    string work_class "voice or background (US-017 TAC-1)"
+    string outcome "served, degraded, failed or refused (US-016 AC-2)"
   }
   STAGE_MARK {
     string stage PK "endpoint, stt, retrieval, llm, tts, first_audio"
@@ -320,3 +322,28 @@ Feasibility risks:
 3. **The existing untracked `app/perf_trace.py` may create a false "done".** A reviewer could see a tracer in the tree and conclude `BRD-01` is satisfied. It is not: it has no retrieval stage and no engine counters wired, and its emission sites in the runtime modules are unverified. *Mitigation:* `TRD-21` states the gaps explicitly and the acceptance criteria are stated over live-call output, not over the file's existence.
 4. **Sampling may become necessary and change what is measurable.** If per-turn append cost becomes measurable, the designed response is sampling 1-in-N turns — which would make rare events (a cold start, a dependency failure) statistically invisible. *Mitigation:* sampling is a degradation mode with a defined recovery (`06-architecture.md` §5 MOD-06), and the conditions that matter most are measured in dedicated runs rather than in ambient tracing.
 5. **Net-new work with an existing asset can still fail the program's own rule.** "Measurement beats consensus" cuts both ways: this module's numbers become the evidence for every later decision, so an error here propagates. *Mitigation:* the reconciliation above forces the existing implementation to be reviewed against a stated contract rather than assumed correct.
+
+
+### B.9 Fields added by the performance program (as-built, 2026-09-19)
+
+The record above is the design. These are the fields the running system actually
+writes, added by the stories that needed them, and they are recorded here
+because a field a reader cannot find is a field nobody uses.
+
+| Field | Source | Why |
+|---|---|---|
+| `work_class` | `app/voice_handler.py`, at trace creation | `US-017` TAC-1. Every caller turn is stamped `voice`, so the priority invariant ("zero background starts during a voice turn") is countable from the records after the fact rather than only observable live. A rule that cannot be counted from the record can only be asserted. |
+| `outcome` | `app/voice_handler.py` / `app/admission.py` | `US-016` AC-2. `served`, `degraded`, `failed`, `refused` — four distinct counters that are never collapsed. A refusal is not a failed call, and a degraded turn is not a served one. |
+| `tts_cache_scope` | `app/voice_handler.py` | `US-012`. Which scope the turn ran under. Without it a figure measured under `shared` and one under `per_call` are indistinguishable in the log — which is how the first version of the isolation test reported the wrong scope. |
+| `tts_cache_cross_call` | `app/voice_handler.py` | `US-012`. True when the entry served was created during a different call. This is `MOD-04` A.5.2's failure condition, recorded at the moment it happens rather than reconstructed afterwards. |
+| `tts_cache_key_sha` | `app/voice_handler.py` | `US-012`. A 12-hex digest of the cache key, on **both** the hit and the miss path — the miss is what establishes a key's owner. One-way, so no agent text lands in the trace (`TAC-4`). |
+| `tts_cache_owner` | `app/voice_handler.py` | `US-012`. The call reference that created the entry, so a cross-call hit names both parties. |
+| `fixed_response_played` | `app/voice_handler.py` | `US-016` AC-5. True when the pre-synthesised asset was played instead of generated audio, with `degraded_reason` naming which failure caused it. |
+
+**The rule these follow.** Each was added because a claim could not otherwise be
+*measured* — and in three cases the attempt to measure without them produced a
+wrong number rather than no number, which is worse. `tts_cache_scope` exists
+because the isolation test read the scope off the oldest trace row and reported
+whichever scope ran first; `tts_cache_key_sha` exists on the miss path because
+its first version recorded it only on hits, so no key could be attributed to an
+owner and the analysis found nothing while the app's own flag found 30.

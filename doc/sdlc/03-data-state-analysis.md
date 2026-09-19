@@ -42,7 +42,7 @@ Peak instantaneous concurrency = 2             (the binding number, not the rate
 |---|---|---|---|---|---|
 | WF-01 Inbound turn | ~0.13 turns/s | **2 in-flight** | Unknown — seasonal (admissions calendar) | Unknown | Derived from AS-01; `T_cycle` is Assumed |
 | WF-02 Two concurrent calls | 2 calls | 2 sessions | Unknown | Unknown | User-provided peak |
-| **WF-02 + background (`BRD-20`)** | 2 calls + 1 chat request | **2 voice sessions + 1 background job** | Unknown — the realistic peak for this box | Unknown | **Assumed** — the background share is unquantified and is a Stage 5 validation target |
+| **WF-02 + background (`BRD-20`)** | 2 calls + 1 chat request | **2 voice sessions + 1 background job** | Unknown — the realistic peak for this box | Unknown | **Still Assumed, and now measurable.** US-017 built the policy and the harness gained `--background-units` on 2026-09-19, so the 2+1 mix can be driven; the figures are not yet in, so the row stays labelled Assumed rather than being quietly promoted. **Demonstration window measured:** 6 background units against a live call pair — 5 deferred, **0 started during a voice turn**, peak background concurrency 1 |
 | WF-03 Change adoption | n/a (developer-time) | 1 | n/a | n/a | Not a runtime flow |
 
 > **The binding constraint is concurrency, not rate.** 0.13 turns/s is trivial for any engine; **2 simultaneous in-flight generations on one GPU sharing 448 GB/s is not.** This is why the capacity model is expressed in concurrent requests.
@@ -189,6 +189,7 @@ stateDiagram-v2
 2. **States:** ACCUMULATING → ENDPOINTED → TRANSCRIBED → GATED → RETRIEVING → GENERATING → SYNTHESISING → SENDING → EMITTED.
 3. **Who transitions:** the app drives every transition; the caller only determines when ACCUMULATING ends.
 4. **Legal:** as drawn. **Illegal:** ACCUMULATING → TRANSCRIBED without ENDPOINTED; GENERATING → SENDING without SYNTHESISING; any transition back to ACCUMULATING within the same turn.
+   **AMENDED 2026-09-19 by US-016:** `GENERATING → fixed response → EMITTED` is a legal path, recorded here as an explicit amendment rather than left as a transition the machine calls illegal. A generation that fails or returns empty emits the pre-synthesised fixed response; the turn is recorded as `degraded`, which is its own outcome. `SM-01`'s state list is **unchanged** — there is no QUEUED, HOLDING or REFUSED state, because a refused call creates no session at all.
 5. **Repeatable:** no — a turn instance is single-use; a new turn is a new instance.
 6. **Concurrent:** with two callers, two independent SM-02 instances run; they share the inference engine and the retrieval service and must not share state (`BRD-06`).
 7. **Halfway stop:** crash during GENERATING → history already appended with the caller's line, answer never spoken; **the turn is lost and the transcript records a question with no answer** — recorded as a gap.
@@ -242,8 +243,8 @@ Per workflow, from `02-use-cases-workflows.md`:
 
 | Failure point | State after | Resumable? | Compensation | Retry |
 |---|---|---|---|---|
-| WF-01 step 8 — generation fails | SM-02 stuck at GENERATING; history has the question, no answer | Yes — next turn | None today (**gap**) | Caller repeats |
-| WF-01 step 9 — synthesis fails | SM-02 at SYNTHESISING; answer exists but unspoken | Yes | None today (**gap**) | Caller repeats |
+| WF-01 step 8 — generation fails | GENERATING → fixed response → EMITTED; history has the question, the caller hears the prepared sentence | Yes — next turn | **Built 2026-09-19 (US-016)**: the pre-synthesised fixed response, read from disk, byte-identical across failures. Deterministic, and needs no model or synthesiser | Caller repeats |
+| WF-01 step 9 — synthesis fails | SM-02 at SYNTHESISING; answer exists but unspoken | Yes | **Built 2026-09-19 (US-016)**: the same fixed response, which needs no synthesiser because it is read from disk — which is what makes it work when synthesis is the thing that failed | Caller repeats |
 | WF-01 step 10 — send fails | SM-02 at SENDING; partial audio delivered | No | Call ends | Carrier redial |
 | WF-02 step 3 — retrieval serialization | Caller B's SM-02 waits at RETRIEVING | Yes | None today (`BRD-07`) | None |
 | WF-02 step 5 — cross-session leak | **Correctness violation** | No | Must be prevented (`BRD-06`) | n/a |
