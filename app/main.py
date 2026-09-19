@@ -2662,6 +2662,30 @@ def _push_transcript_event(event_type: str, call_sid: str, data: dict | None = N
         _transcript_events[:] = _transcript_events[-200:]
 
 
+@app.get("/api/perf/policy")
+async def api_perf_policy():
+    """Admission and work-priority records, as counts (US-016, US-017).
+
+    The load harness runs in a separate process, so the invariants these two
+    stories own -- "an N=3 window produces exactly one refusal and zero new
+    sessions", "zero background starts during a voice turn" -- cannot be
+    counted from the harness's own side. They are properties of the app's
+    decision points, so the app has to report them.
+
+    Counts and reasons only: no phone number, no transcript, no caller text.
+    `caller_ref` is a truncated digest. This is the same surface an operator
+    reads to answer "why was that call refused", which is why it is a normal
+    endpoint rather than a test hook.
+    """
+    from app.admission import status as admission_status
+    from app.work_priority import policy_status
+
+    return JSONResponse({
+        "admission": admission_status(),
+        "work_priority": policy_status(),
+    })
+
+
 @app.get("/api/calls/live")
 async def api_calls_live(stream: bool = False):
     """

@@ -335,19 +335,25 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
         return None
 
 
-async def test_pipeline_with_text(user_text: str) -> str | None:
+async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | None:
     """
     Test the full RAG → LLM chain with a text query (no audio).
     Returns the LLM response string, or None on failure.
 
     This bypasses STT/TTS and tests only the RAG + LLM path.
     Useful for validating the pipeline without audio hardware.
+
+    US-017 TAC-1: this is inference with nobody waiting to hear it, so it goes
+    through the same admission gate as every other unit of work. It used to
+    call the backend directly, which made it the one path into the model that
+    the priority policy could not see -- a caller's turn and a text query could
+    interleave with nothing counting it. `mode` defaults to "chat" because the
+    callers of this function are text UIs; pass "voice" for a caller's turn.
     """
-    logger.info(f"Testing RAG + LLM with: \"{user_text}\"")
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
-    prompt = build_rag_prompt(user_text)
-
-    try:
+    async def _run() -> str | None:
+        prompt = build_rag_prompt(user_text)
         from app.llm_backend import chat as backend_chat
 
         answer = backend_chat(
@@ -358,6 +364,16 @@ async def test_pipeline_with_text(user_text: str) -> str | None:
         logger.info(f"LLM response: {answer[:100]}...")
         return answer
 
+    work_class, _ = classify(mode)
+    try:
+        if work_class == VOICE:
+            with GATE.voice_turn(label="text:voice"):
+                return await _run()
+        with GATE.background_unit(label="text", mode=mode):
+            return await _run()
+    except BackgroundDeferred:
+        logger.info("text query refused: the line stayed busy past its budget")
+        return None
     except Exception:
         logger.exception("RAG + LLM test failed")
         return None

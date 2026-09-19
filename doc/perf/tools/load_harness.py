@@ -1972,6 +1972,8 @@ class RunSummary:
     target_turns_per_session: int = 0
     harness_version: str = HARNESS_VERSION
     harness_sha256: str = ""
+    #: US-016 / US-017: the N=3 window and the 2+1 mix, when they were driven.
+    extra_load: dict[str, Any] = field(default_factory=dict)
     app_contract_check: dict[str, Any] = field(default_factory=dict)
     json_path: str = ""
     disclosures: dict[str, str] = field(default_factory=dict)
@@ -2042,6 +2044,7 @@ def build_summary(
     target_turns: int,
     app_contract: dict[str, Any],
     prior_rows: int,
+    extra_load: dict[str, Any] | None = None,
 ) -> RunSummary:
     turns: list[TurnObservation] = [t for r in results for t in r.turns]
     warm_values = [t.first_audio_ms for t in turns if t.thermal == "warm" and t.first_audio_ms is not None]
@@ -2121,6 +2124,7 @@ def build_summary(
         target_turns_per_session=target_turns,
         harness_sha256=_file_sha256(Path(__file__)),
         app_contract_check=app_contract,
+        extra_load=extra_load or {},
         disclosures={
             "carrier_boundary": DISCLOSURE_CARRIER,
             "fixture_fidelity": DISCLOSURE_FIXTURE,
@@ -2252,10 +2256,11 @@ def summary_to_dict(s: RunSummary) -> dict[str, Any]:
         "stack_readiness", "readiness", "frame_audit", "per_session",
         "target_turns_per_session", "powered",
         "url", "started_at", "ended_at", "wall_seconds",
-        "harness_version", "harness_sha256", "app_contract_check", "json_path",
+        "harness_version", "harness_sha256", "extra_load", "app_contract_check", "json_path",
         "disclosures", "notes",
     ]
     d = dict(s.__dict__)
+    d["extra_load"] = s.extra_load
     d["first_audio_ms"] = {"p50": s.p50_ms, "p95": s.p95_ms, "worst": s.worst_ms,
                            "n": s.first_audio_n, "bucket": s.thermal_state}
     d["cold_first_audio_ms"] = s.cold
@@ -2293,6 +2298,298 @@ def _file_sha256(path: Path) -> str:
 TIMER_ONE_MS = _TimerResolution()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Concurrent load: the N=3 window and the 2+1 mix (US-016, US-017)
+#
+# Neither is "more media streams". The app refuses a third call BEFORE a
+# stream exists (an inbound PSTN call cannot be declined; the app's only lever
+# is the TwiML it returns), so the third call is an HTTP call to the endpoint
+# the carrier would hit. And a background unit is text work with no caller
+# waiting on it. Both are driven alongside a normal run and counted from the
+# app's own records, because they are properties of its decision points rather
+# than of anything this process can see.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _http_base(ws_url: str) -> str:
+    """`ws://host:port/ws/twilio` -> `http://host:port`."""
+    return re.sub(r"^ws(s?)://", lambda m: f"http{m.group(1)}://", ws_url).split("/ws/")[0]
+
+
+def _text_ws_url(ws_url: str) -> str:
+    """The text-chat socket on the same host: the background path."""
+    return _http_base(ws_url).replace("http://", "ws://").replace("https://", "wss://") \
+        + "/ws/voice/text"
+
+
+async def _http_get_text(url: str, timeout: float = 15.0) -> str:
+    """GET a URL and return the body. Raw socket, like `_http_get_json`."""
+    import urllib.parse
+    p = urllib.parse.urlparse(url)
+    host = p.hostname or "127.0.0.1"
+    port = p.port or 80
+    path = p.path or "/"
+    if p.query:
+        path += "?" + p.query
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
+    try:
+        writer.write(f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                     f"Connection: close\r\n\r\n".encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(-1), timeout=timeout)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+    text = raw.decode("utf-8", "replace")
+    return text.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in text else text
+
+
+def classify_twiml(body: str) -> str:
+    """What the app did with an inbound call, read off the TwiML it returned.
+
+    `refused` requires BOTH signals: the busy asset is played AND no media
+    stream is connected. A body with a `<Play>` and a `<Connect>` would be an
+    admitted call that happened to play something, and counting it as a
+    refusal would be the harness agreeing with itself rather than reading the
+    app.
+    """
+    # `<Connect` rather than `<Connect>`: the element may be self-closing
+    # (`<Connect/>`) and matching the closed form would miss it. The fixture
+    # in the self-test used the self-closing spelling and this check called it
+    # admitted when it was not -- which is the same shape of error as reading
+    # the wrong number, so the detector is written to not care.
+    has_play = "<Play" in body
+    has_connect = "<Connect" in body
+    if has_play and has_connect:
+        # Both signals: a call that was admitted AND played something. Calling
+        # this "refused" would inflate the refusal count and call it evidence;
+        # calling it "admitted" would hide it. Naming it is the only honest
+        # option, and the verdicts treat a non-zero count as a failure to read.
+        return "ambiguous"
+    if has_play:
+        return "refused"
+    if has_connect:
+        return "admitted"
+    return "unrecognised"
+
+
+async def drive_admission_probes(base_url: str, count: int, *, start_delay_s: float,
+                                 spacing_s: float, quiet: bool = False) -> dict:
+    """Call the carrier-facing voice endpoint `count` times while the run is live.
+
+    The live-session count is sampled AT EACH PROBE, not at the end. Reading it
+    afterwards measures an empty stack -- both driven sessions have hung up by
+    then -- and comparing that against the driven count reports a failure on a
+    window that behaved correctly. The invariant is about what was live when
+    the call was refused, so that is when it is read.
+    """
+    outcomes: list[dict] = []
+    live_samples: list[int] = []
+    await asyncio.sleep(start_delay_s)
+    for i in range(count):
+        body, err = "", None
+        try:
+            body = await _http_get_text(f"{base_url}/twilio/voice?From=%2B1555000{i:04d}")
+        except Exception as exc:                      # noqa: BLE001
+            err = f"{type(exc).__name__}: {exc}"
+        outcome = "error" if err else classify_twiml(body)
+        live = None
+        try:
+            snap = await _policy_snapshot(base_url)
+            live = ((snap.get("admission") or {}).get("live_sessions"))
+        except Exception:                             # noqa: BLE001
+            pass
+        if isinstance(live, int):
+            live_samples.append(live)
+        outcomes.append({"outcome": outcome, "error": err,
+                         "has_play": "<Play" in body, "has_connect": "<Connect" in body,
+                         "live_sessions_at_probe": live})
+        if not quiet:
+            print(f"   admission probe {i + 1}/{count}: {outcome}"
+                  + (f" (live={live})" if live is not None else "")
+                  + (f" ({err})" if err else ""))
+        if i + 1 < count:
+            await asyncio.sleep(spacing_s)
+    counts: dict[str, int] = {}
+    for o in outcomes:
+        counts[o["outcome"]] = counts.get(o["outcome"], 0) + 1
+    return {"probes": count, "outcomes": counts, "records": outcomes,
+            "live_sessions_samples": live_samples,
+            "max_live_sessions_at_probe": max(live_samples) if live_samples else None,
+            "basis": "TwiML returned by the carrier-facing voice endpoint while the "
+                     "run was live; a refusal is a <Play> with no <Connect>. The live "
+                     "count is sampled at each probe, while the calls are up"}
+
+
+async def drive_background_units(ws_url: str, count: int, *, start_delay_s: float,
+                                 spacing_s: float, quiet: bool = False) -> dict:
+    """Submit text queries through the chat path while the callers are live.
+
+    This is the `+1` of BRD-20's 2-voice + 1-background scenario: inference with
+    nobody waiting to hear it, entering the same pipeline a caller's turn does.
+    """
+    import websockets
+
+    sent = answered = refused_or_empty = 0
+    errors: list[str] = []
+    await asyncio.sleep(start_delay_s)
+    try:
+        async with websockets.connect(ws_url) as ws:
+            for i in range(count):
+                try:
+                    await ws.send(json.dumps({"query": f"what are the fees? ({i})"}))
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
+                    sent += 1
+                    msg = json.loads(raw) if raw.strip().startswith("{") else {}
+                    if msg.get("answer"):
+                        answered += 1
+                    else:
+                        # A unit refused because the line stayed busy answers
+                        # nothing, by design. Counted apart from an error.
+                        refused_or_empty += 1
+                except Exception as exc:              # noqa: BLE001
+                    errors.append(f"{type(exc).__name__}: {exc}")
+                if not quiet and (i + 1) % max(1, count // 5) == 0:
+                    print(f"   background unit {i + 1}/{count}: "
+                          f"{answered} answered, {refused_or_empty} refused/empty")
+                if i + 1 < count:
+                    await asyncio.sleep(spacing_s)
+    except Exception as exc:                          # noqa: BLE001
+        errors.append(f"connect: {type(exc).__name__}: {exc}")
+    return {"submitted": sent, "answered": answered,
+            "refused_or_empty": refused_or_empty, "errors": errors[:10],
+            "error_count": len(errors),
+            "basis": "text queries driven through /ws/voice/text during a live "
+                     "call pair; the app classifies them as background"}
+
+
+async def _policy_snapshot(http_base: str) -> dict:
+    """The app's own admission/priority records, or an empty dict."""
+    try:
+        return await _http_get_json(f"{http_base}/api/perf/policy")
+    except Exception:                                 # noqa: BLE001
+        return {}
+
+
+def _policy_delta(before: dict, after: dict) -> dict:
+    """What the window added, from the app's records rather than from guesses."""
+    def dig(d, *path, default=0):
+        cur: Any = d
+        for key in path:
+            if not isinstance(cur, dict):
+                return default
+            cur = cur.get(key)
+        return cur if cur is not None else default
+
+    return {
+        "refusals": dig(after, "admission", "outcomes", "refused")
+        - dig(before, "admission", "outcomes", "refused"),
+        # The DECISION count, not the turn outcome `served`. A call is admitted
+        # or refused; a turn is served, degraded or failed. Reading `served`
+        # here reported voice turns under a key named "admitted", which is the
+        # same collapse AC-2 forbids in a summary -- the harness doing it to
+        # itself.
+        "admitted": dig(after, "admission", "admitted")
+        - dig(before, "admission", "admitted"),
+        "asset_plays": dig(after, "admission", "asset_plays")
+        - dig(before, "admission", "asset_plays"),
+        "live_sessions_after": dig(after, "admission", "live_sessions"),
+        "bg_units": dig(after, "work_priority", "background_units")
+        - dig(before, "work_priority", "background_units"),
+        "bg_deferrals": dig(after, "work_priority", "deferrals")
+        - dig(before, "work_priority", "deferrals"),
+        "bg_refusals": dig(after, "work_priority", "refusals")
+        - dig(before, "work_priority", "refusals"),
+        "bg_started_during_voice": dig(after, "work_priority",
+                                       "background_starts_during_voice")
+        - dig(before, "work_priority", "background_starts_during_voice"),
+        "bg_max_concurrent": dig(after, "work_priority", "max_background_concurrent"),
+        "voice_turns": dig(after, "work_priority", "voice_turns")
+        - dig(before, "work_priority", "voice_turns"),
+        "classification_defects": dig(after, "work_priority", "classification_defects")
+        - dig(before, "work_priority", "classification_defects"),
+    }
+
+
+def _print_extra_load(summary: "RunSummary") -> None:
+    """The story invariants, in the run output where they are read."""
+    el = summary.extra_load or {}
+    verdicts = el.get("verdicts") or {}
+    if not verdicts:
+        return
+    print("\n-- extra load (US-016 / US-017) -------------------------------")
+    for name, v in verdicts.items():
+        print(f"  [{'HOLDS' if v.get('holds') else 'FAILS'}] {name}")
+        print(f"           {v.get('detail')}")
+
+
+def extra_load_verdicts(extra_load: dict, sessions: int) -> dict:
+    """The story TACs a window exists to settle, as pass/fail rather than counts.
+
+    A count with no verdict is a number someone has to interpret later, and the
+    interpretation is exactly where a program talks itself into a pass. These
+    are the invariants US-016 and US-017 actually claim, evaluated here.
+    """
+    probes = extra_load.get("admission_probes")
+    bg = extra_load.get("background_units")
+    rec = extra_load.get("app_records") or {}
+    out: dict[str, Any] = {}
+
+    if probes:
+        observed = probes.get("outcomes", {})
+        refused = observed.get("refused", 0)
+        asked = probes.get("probes", 0)
+        out["US-016 TAC-1 one refusal per third call"] = {
+            "holds": refused == asked and asked > 0,
+            "detail": f"{refused} refusal(s) for {asked} call(s) made at capacity",
+        }
+        peak = probes.get("max_live_sessions_at_probe")
+        out["US-016 TAC-1 zero new sessions from a refusal"] = {
+            "holds": peak is not None and peak == sessions,
+            "detail": (f"peak live sessions while the third call was being refused: "
+                       f"{peak} (the {sessions} driven). A refusal that created a "
+                       f"session would read {sessions + 1}."
+                       if peak is not None else
+                       "no live-session sample was taken; the check cannot be judged"),
+        }
+        out["US-016 AC-6 no engine or synthesis call per refusal"] = {
+            "holds": (rec.get("bg_units", 0) == 0),
+            "detail": "a refusal creates no work for the model; the busy asset is read "
+                      "from disk",
+        }
+        out["US-016 AC-3 every refusal played the prepared asset"] = {
+            "holds": rec.get("asset_plays", 0) >= refused,
+            "detail": f"{rec.get('asset_plays', 0)} asset play(s) for {refused} refusal(s)",
+        }
+
+    if bg:
+        out["US-017 TAC-2 zero background starts during a voice turn"] = {
+            "holds": rec.get("bg_started_during_voice", 0) == 0,
+            "detail": f"{rec.get('bg_started_during_voice', 0)} violation(s), "
+                      f"{rec.get('voice_turns', 0)} voice turn(s) in the window",
+        }
+        out["US-017 TAC-3 background concurrency never exceeds one"] = {
+            "holds": rec.get("bg_max_concurrent", 0) <= 1,
+            "detail": f"peak background concurrency {rec.get('bg_max_concurrent', 0)}",
+        }
+        out["US-017 TAC-6 deferral is recorded, not silent"] = {
+            "holds": (rec.get("bg_deferrals", 0) + rec.get("bg_refusals", 0)
+                      + bg.get("answered", 0)) >= bg.get("submitted", 0),
+            "detail": f"{bg.get('submitted', 0)} submitted, "
+                      f"{rec.get('bg_deferrals', 0)} deferred, "
+                      f"{rec.get('bg_refusals', 0)} refused, "
+                      f"{bg.get('answered', 0)} answered",
+        }
+        out["US-017 TAC-1 classification is total"] = {
+            "holds": rec.get("classification_defects", 0) == 0,
+            "detail": f"{rec.get('classification_defects', 0)} unclassified unit(s)",
+        }
+
+    return out
+
+
 async def run_condition(
     url: str,
     fixtures: Sequence[Fixture],
@@ -2310,6 +2607,9 @@ async def run_condition(
     wake_lead_ms: float = PACER_WAKE_LEAD_S * 1000.0,
     quiet: bool = False,
     check_contract: bool = True,
+    admission_probes: int = 0,
+    background_units: int = 0,
+    load_start_delay_s: float = 8.0,
 ) -> RunSummary:
     """
     One condition: N sessions, one fixture set, one network profile.
@@ -2355,8 +2655,46 @@ async def run_condition(
                       idle_gap_ms=idle_gap_ms, wake_lead_s=wake_lead_ms / 1000.0)
         for i in range(n)
     ]
-    results = await asyncio.gather(*(d.run() for d in drivers))
+    # US-016 / US-017: the extra load runs ALONGSIDE the call pair, started
+    # once the sessions are established, so it meets real callers rather than
+    # an idle stack. Counted from the app's own records at the end.
+    http_base = _http_base(url)
+    extra: list = []
+    if admission_probes or background_units:
+        policy_before = await _policy_snapshot(http_base)
+        if not quiet:
+            print(f"   extra load: {admission_probes} admission probe(s), "
+                  f"{background_units} background unit(s), first at "
+                  f"+{load_start_delay_s:.0f}s")
+        if admission_probes:
+            extra.append(drive_admission_probes(
+                http_base, admission_probes, start_delay_s=load_start_delay_s,
+                spacing_s=max(0.5, load_start_delay_s / max(1, admission_probes)),
+                quiet=quiet))
+        if background_units:
+            extra.append(drive_background_units(
+                _text_ws_url(url), background_units, start_delay_s=load_start_delay_s,
+                spacing_s=2.0, quiet=quiet))
+    else:
+        policy_before = {}
+
+    gathered = await asyncio.gather(*(d.run() for d in drivers), *extra)
+    results = list(gathered[:len(drivers)])
+    load_results = list(gathered[len(drivers):])
     ended = time.time()
+
+    extra_load: dict = {}
+    if admission_probes or background_units:
+        policy_after = await _policy_snapshot(http_base)
+        idx = 0
+        if admission_probes:
+            extra_load["admission_probes"] = load_results[idx]
+            idx += 1
+        if background_units:
+            extra_load["background_units"] = load_results[idx]
+        extra_load["app_records"] = _policy_delta(policy_before, policy_after)
+        extra_load["app_records_raw"] = policy_after
+        extra_load["verdicts"] = extra_load_verdicts(extra_load, len(drivers))
 
     for r in results:
         if r.error and not quiet:
@@ -2370,10 +2708,11 @@ async def run_condition(
                             profile=profile, url=url, started=started, ended=ended,
                             readiness=readiness, separation=separation,
                             target_turns=target_turns, app_contract=app_contract,
-                            prior_rows=len(rows_before))
+                            prior_rows=len(rows_before), extra_load=extra_load)
     write_summary(summary)
     if not quiet:
         print_summary(summary)
+        _print_extra_load(summary)
     return summary
 
 
@@ -2845,6 +3184,69 @@ def _st_separation_analysis() -> dict[str, Any]:
     return out
 
 
+def _st_twiml_classification() -> dict[str, Any]:
+    """`classify_twiml` reads the app's decision off the TwiML it returned.
+
+    The ambiguity case matters most: a body with both a `<Play>` and a
+    `<Connect>` is a call that was ADMITTED and happened to play something.
+    Counting it as a refusal would be the harness agreeing with itself, which
+    is the failure mode this whole file exists to avoid.
+    """
+    busy = ('<?xml version="1.0"?><Response>'
+            '<Play>https://h/static/audio/busy.wav</Play><Hangup/></Response>')
+    ivr = ('<?xml version="1.0"?><Response><Gather/>'
+           '<Connect><Stream url="wss://h/ws/twilio"/></Connect></Response>')
+    both = '<Response><Play>x</Play><Connect/></Response>'
+    neither = '<Response><Hangup/></Response>'
+    got = {
+        "busy_is_refused": classify_twiml(busy) == "refused",
+        "ivr_is_admitted": classify_twiml(ivr) == "admitted",
+        "play_AND_connect_is_ambiguous": classify_twiml(both) == "ambiguous",
+        "neither_is_unrecognised": classify_twiml(neither) == "unrecognised",
+    }
+    got["passed"] = all(bool(v) for v in got.values())
+    return got
+
+
+def _st_extra_load_verdicts() -> dict[str, Any]:
+    """The story invariants are evaluated, and can FAIL.
+
+    A verdict function that always returns `holds: True` is decoration. Each
+    one is checked in both directions here.
+    """
+    good = {
+        "admission_probes": {"probes": 3, "outcomes": {"refused": 3},
+                             "max_live_sessions_at_probe": 2},
+        "background_units": {"submitted": 4, "answered": 4},
+        "app_records": {"live_sessions_after": 2, "asset_plays": 3,
+                        "bg_started_during_voice": 0, "bg_max_concurrent": 1,
+                        "bg_deferrals": 3, "bg_refusals": 0, "voice_turns": 20,
+                        "classification_defects": 0},
+    }
+    bad = {
+        "admission_probes": {"probes": 3, "outcomes": {"refused": 1},
+                             "max_live_sessions_at_probe": 3},
+        "background_units": {"submitted": 4, "answered": 4},
+        "app_records": {"live_sessions_after": 3, "asset_plays": 3,
+                        "bg_started_during_voice": 2, "bg_max_concurrent": 3,
+                        "bg_deferrals": 0, "bg_refusals": 0, "voice_turns": 20,
+                        "classification_defects": 1},
+    }
+    g = extra_load_verdicts(good, 2)
+    b = extra_load_verdicts(bad, 2)
+    got = {
+        "good_window_all_hold": all(v["holds"] for v in g.values()),
+        "bad_window_fails_the_refusal_count": not b["US-016 TAC-1 one refusal per third call"]["holds"],
+        "bad_window_fails_the_new_session_count": not b["US-016 TAC-1 zero new sessions from a refusal"]["holds"],
+        "bad_window_fails_the_priority_invariant": not b["US-017 TAC-2 zero background starts during a voice turn"]["holds"],
+        "bad_window_fails_the_concurrency_ceiling": not b["US-017 TAC-3 background concurrency never exceeds one"]["holds"],
+        "bad_window_fails_classification": not b["US-017 TAC-1 classification is total"]["holds"],
+        "no_extra_load_means_no_verdicts": extra_load_verdicts({}, 2) == {},
+    }
+    got["passed"] = all(bool(v) for v in got.values())
+    return got
+
+
 async def self_test(quick: bool = False) -> int:
     import tempfile
     print("US-002 harness self-test (offline; no stack required)")
@@ -2857,6 +3259,8 @@ async def self_test(quick: bool = False) -> int:
     print()
     results: list[tuple[str, bool, dict[str, Any]]] = []
 
+    results.append(("TwiML admission classification", True, _st_twiml_classification()))
+    results.append(("extra-load verdicts", True, _st_extra_load_verdicts()))
     results.append(("codec vs stdlib audioop", True, _st_ulaw_against_audioop()))
     results.append(("synthetic audio energy contract", True, _st_synthetic_audio()))
     with tempfile.TemporaryDirectory() as td:
@@ -2917,8 +3321,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--url", default=DEFAULT_URL)
-    p.add_argument("--n", type=int, default=1, choices=[1, 2],
-                   help="concurrent sessions (default 1)")
+    p.add_argument("--n", type=int, default=1, choices=[1, 2, 3],
+                   help="concurrent sessions (default 1). 3 is the N=3 WINDOW, not "
+                        "three media streams: the app refuses the third call before a "
+                        "stream exists, so it runs two sessions and drives a third call "
+                        "at the carrier-facing endpoint (US-016 TAC-1)")
+    p.add_argument("--admission-probes", type=int, default=0,
+                   help="inbound calls to drive at /twilio/voice while the run is live "
+                        "(US-016). Implied when --n 3")
+    p.add_argument("--background-units", type=int, default=0,
+                   help="text queries to drive through /ws/voice/text while the run is "
+                        "live -- the +1 of BRD-20's 2-voice+1 mix (US-017)")
+    p.add_argument("--load-start-delay-s", type=float, default=8.0,
+                   help="delay before the extra load starts, so it meets established "
+                        "sessions rather than an idle stack (default 8)")
     p.add_argument("--turns", type=int, default=100,
                    help="turns per session (TAC-2 wants >=100; default 100)")
     p.add_argument("--soak-minutes", type=float, default=0.0,
@@ -3064,8 +3480,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"note: could not raise the Windows timer to 1 ms "
                   f"({TIMER_ONE_MS.error}); frame pacing may exceed its 5 ms slot")
         try:
+            # --n 3 is the N=3 window: two sessions plus a third call.
+            sessions = 2 if args.n == 3 else args.n
+            probes = args.admission_probes or (1 if args.n == 3 else 0)
             summary = asyncio.run(run_condition(
-                args.url, fixtures, args.n,
+                args.url, fixtures, sessions,
                 warm_gate=not args.no_warm_gate,
                 profile=profile,
                 target_turns=target_turns,
@@ -3077,6 +3496,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 post_turn_quiet_ms=args.post_turn_quiet_ms,
                 wake_lead_ms=args.pacer_wake_lead_ms,
                 quiet=args.quiet,
+                admission_probes=probes,
+                background_units=args.background_units,
+                load_start_delay_s=args.load_start_delay_s,
             ))
         except ReadinessError as e:
             print(f"READINESS REFUSAL: {e}", file=sys.stderr)

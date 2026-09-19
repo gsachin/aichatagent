@@ -383,4 +383,23 @@ def on_generation_failure(turn: Turn, assets: AssetSet) -> Outcome:
 
 **The T-7 result is the one to read.** The first version of `Decision.as_record()` stored `call_sid` verbatim — and `call_sid` arrives as the carrier's `From`, which is the caller's **phone number**. A refused caller's number would have been written into the admission record. The scenario caught it; the record now stores a truncated one-way digest, and the test asserts the number does not appear.
 
-**Why the 6 remain open.** T-17 and T-18 need scripted callers with an engine kill mid-conversation; T-19…T-22 need an N=3 window, and the harness accepts `--n 1|2` only. Both are harness capabilities rather than admission work: the admission contract itself is covered by T-1…T-16.
+**The harness now drives the N=3 window** (2026-09-19). `--n 3` runs two sessions and drives a third call at the carrier-facing endpoint — it is not three media streams, because the app refuses the third call *before* a stream exists. One run:
+
+```powershell
+.venv/Scripts/python.exe doc/perf/tools/load_harness.py --n 3 --turns 100
+```
+
+The harness reads the app's own records through `/api/perf/policy` — a new endpoint, because the invariants are properties of the app's decision points and the harness is a separate process — and reports them as verdicts, not counts:
+
+```
+[HOLDS] US-016 TAC-1 one refusal per third call
+[HOLDS] US-016 TAC-1 zero new sessions from a refusal
+         peak live sessions while the third call was being refused: 2 (the 2 driven).
+         A refusal that created a session would read 3.
+[HOLDS] US-016 AC-6 no engine or synthesis call per refusal
+[HOLDS] US-016 AC-3 every refusal played the prepared asset
+```
+
+Two defects were found writing that verdict path, both caught by the self-test and both the same shape — a number read from the wrong place: the live-session count was sampled *after* the run (an empty stack) instead of at each probe, and the classifier's "ambiguous" branch was unreachable because the refusal test could never be true alongside a `<Connect>`.
+
+**What remains open.** T-19…T-22 are now *runnable* but not yet *run at power*: the demonstration windows were 5–10 turns, and these scenarios want ≥100. T-17 and T-18 still need scripted callers with an engine killed mid-conversation, which is a separate capability. The admission contract itself is covered by T-1…T-16.

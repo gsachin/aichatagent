@@ -331,4 +331,19 @@ def run_background(unit: WorkUnit, gate: WorkGate, *, budget_s: float) -> Backgr
 
 **The T-9 result is the one to read.** On defer-timeout the gate used to fall through and **start the unit anyway**, recording the breach after the fact. That made TAC-2's invariant advisory: "zero background starts during a voice turn" held only while nothing waited long enough to time out, so a caller on a long turn would eventually have had background work running inside it — the exact thing the story exists to prevent. The gate now **refuses** on timeout, raises `BackgroundDeferred` with its reason, and the pipeline returns `None` for that unit rather than interleaving it.
 
-**Why the 6 remain open.** T-13 and T-15…T-17 need a 2-voice + 1-background window, which the harness cannot yet drive (`--n 1|2`, no background feeder); T-11 needs an overlap counted against the unit's own bound. The policy's own contract — classification, the invariant, the ceiling, the records, no spin, the revert — is covered by T-1…T-10 and T-12.
+**The harness now drives the 2+1 window** (2026-09-19). `--background-units N` submits text queries through `/ws/voice/text` while the call pair is live — the `+1` of `BRD-20`'s scenario, which nothing could measure before. One run returned:
+
+```
+[Bg unit 6/6: 6 answered]   and, from the app's own records:
+  background units 6 · deferrals 5 · started-during-voice 0 · peak concurrency 1
+[HOLDS] US-017 TAC-2 zero background starts during a voice turn
+[HOLDS] US-017 TAC-3 background concurrency never exceeds one
+[HOLDS] US-017 TAC-6 deferral is recorded, not silent
+[HOLDS] US-017 TAC-1 classification is total
+```
+
+Five of the six units were **deferred** — they had to wait for a voice turn to finish — so the invariant held on a window that genuinely exercised the gate rather than one where the background work happened to land between turns. That distinction was worth checking: a clean count from a window that never contended is the vacuous pass this program keeps finding.
+
+Driving it also closed a gap in the wiring: `/ws/voice/text` called the model **directly**, bypassing the gate entirely — the one path into inference the priority policy could not see. It now classifies through the same gate as everything else.
+
+**What remains open.** T-13 and T-15…T-17 are now *runnable* but not yet *run at power*: the demonstration window was 10 turns, and these want ≥100. T-11 needs an overlap counted against the unit's own bound, which the records now support but no scenario asserts yet.
