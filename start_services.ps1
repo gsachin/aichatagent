@@ -39,14 +39,9 @@ param(
 # ---- Config ---------------------------------------------------------------
 $ProjectRoot = $PSScriptRoot
 $TunnelFile  = Join-Path $ProjectRoot ".whatsapp_tunnel"
-$FastAPIPort = 8000
-$StreamlitMainPort = 8501
 $StreamlitDashboardPort = 8502
-# The enterprise-rag-core MCP service (Step 6b). It is started in its own step,
-# but it belongs in the cleanup lists above with every other port: the MCP
-# server outlives the launcher that spawns it, so a previous run's copy still
-# owns the port -- and the launcher log file it inherited -- on the next run.
-$RagMcpPort = 8010
+# The FastAPI and Streamlit ports, and the enterprise-rag-core MCP port (Step
+# 6b), are resolved further down from .env -- see "Ports from .env".
 
 # The Salesforce admission API (see doc/salesforce/). A SEPARATE repo with its own
 # venv, started from its own directory: its config calls load_dotenv() with no
@@ -72,6 +67,49 @@ function Write-Step   { Write-Host ("{0}{1}{2}--- {3} ---{4}" -f "`n", $CYAN, $B
 function Write-OK     { Write-Host ("{0}  OK: {1}{2}" -f $GREEN, ($args -join ' '), $RESET) }
 function Write-Warn   { Write-Host ("{0}  WARN: {1}{2}" -f $YELLOW, ($args -join ' '), $RESET) }
 function Write-Err    { Write-Host ("{0}  ERROR: {1}{2}" -f $RED, ($args -join ' '), $RESET) }
+
+# ---- Ports from .env ------------------------------------------------------
+# start_services.sh loads .env (its lines 71-76) and takes its ports from
+# there; this script hardcoded them, so the same .env produced different
+# behaviour per platform. That was harmless only while the two happened to
+# agree -- and it stopped being harmless once the US-007 boot gate began
+# reading FASTAPI_PORT itself (app/boot_readiness.py). Edit the port in .env
+# and the Windows server would bind 8000 while the gate probed elsewhere,
+# reporting NOT READY on a stack that was working.
+#
+# Only the values THIS LAUNCHER needs are read. The Python services load .env
+# themselves via dotenv, so exporting the whole file here would duplicate the
+# authority without adding a second one.
+function Get-DotEnvValue {
+    param([string]$Key, [string]$Default)
+    $envFile = Join-Path $ProjectRoot ".env"
+    if (-not (Test-Path $envFile)) { return $Default }
+    foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
+        $s = $line.Trim()
+        if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
+        $i = $s.IndexOf('=')
+        if ($s.Substring(0, $i).Trim() -ne $Key) { continue }
+        $v = $s.Substring($i + 1).Trim().Trim('"').Trim("'")
+        if ($v) { return $v }
+        return $Default
+    }
+    return $Default
+}
+
+function Get-DotEnvPort {
+    param([string]$Key, [int]$Default)
+    $raw = Get-DotEnvValue -Key $Key -Default ""
+    $parsed = 0
+    if ([int]::TryParse($raw, [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+        return $parsed
+    }
+    if ($raw) { Write-Warn "$Key='$raw' is not a valid port; using $Default" }
+    return $Default
+}
+
+$FastAPIPort = Get-DotEnvPort -Key "FASTAPI_PORT" -Default 8000
+$StreamlitMainPort = Get-DotEnvPort -Key "STREAMLIT_PORT" -Default 8501
+$RagMcpPort = Get-DotEnvPort -Key "RAG_MCP_PORT" -Default 8010
 
 # ---- Port ownership -------------------------------------------------------
 function Stop-PortOwner {
