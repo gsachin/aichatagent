@@ -2,7 +2,7 @@
 
 # US-008 — De-serialize retrieval so no caller waits behind another [Lens: PO]
 
-- **Status:** **IMPLEMENTED - measured, but NO acceptance test exists · DoD 1/7**
+- **Status:** **PARTIAL - the app-side client was reverted; no acceptance suite** · DoD 1/7 · the ERC side is in a separate repository and the concurrency claim is unproven here
 
 - **Story:** As a **caller on the second line**, I want **my retrieval to run while Caller A's retrieval is still running**, so that **my answer does not start late because a stranger asked a slow question**.
 - **Business value:** Retrieval is the program's only **non-resource** bottleneck — one caller's slow query delays another caller's turn with no CPU, VRAM or bandwidth anywhere near saturation. `BRD-07` is a fairness requirement, and it is the one degradation a caller experiences for no physical reason at all.
@@ -231,7 +231,7 @@ class RetrievalResult:
 - [ ] Perf/load test passed against the story's TACs (TAC-1 1.5× overlap with the injected 2.5 s stall, TAC-2 retrieval p95 at N=1 and N=2, TAC-7 three consecutive N=2 runs)
 - [x] Schema migration applied — n/a (no durable store on this path)
 - [ ] Module docs updated if contracts changed — `MOD-02` B.3 (`retrieve_context` row) and B.6 (edge-case table) if the implementation differs from `TRD-07`; the ERC-side change is recorded against the ERC test gate
-- [ ] `BRD-15` rollback demonstrated: the concurrency change is revertible by configuration or a single revertable commit on each side (`app/` and `enterprise-rag-core`)
+- [ ] `BRD-15` rollback demonstrated: **spans two repositories.** The `app/`-side change is the shared `httpx.Client`, which was **deliberately reverted on 2026-09-19** pending load evidence — so the app side is already in its rolled-back state, and there is nothing left to demonstrate there. The ERC-side change lives in `enterprise-rag-core` and is not reachable from this tree. Recorded rather than claimed.
 - [ ] If the ERC change cannot land without altering the `retrieve_context` contract, the fallback design (bounded timeout + local store, meeting `BRD-07` by isolation) is recorded as the adopted outcome
 
 

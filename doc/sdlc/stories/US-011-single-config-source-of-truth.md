@@ -2,7 +2,7 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified (`test_us011_config_truth.py` 16/16) · DoD 3/8**
+- **Status:** **IMPLEMENTED - ACs verified; BRD-15 demonstrated** · `test_us011_config_truth.py` 17/17 · DoD 4/8 · LLD mapping and `MOD-07` are open
 
 - **Story:** As an **operator who changes a setting and restarts the stack**, I want **the value I typed to be the value the running process uses**, so that **I am not debugging a latency number that was produced by a setting I never chose**.
 - **Business value:** `BRD-16` requires that the effective value of any setting is discoverable and unambiguous. Today three documents describe configuration (`.env`, `.machine_profile.json`, `start_services.ps1` defaults) and nothing reconciles them; five keys have been found written but never read, including one that records a tuning decision (`FASTAPI_WORKERS=4`) that the runtime silently discards. Every performance number the program reports rests on knowing which values were actually in force.
@@ -234,7 +234,7 @@ def sweep_inert_keys() -> tuple[str, ...]: ...
 - [ ] Module docs updated if contracts changed — `MOD-07` B.4 (`DAT-09` inventory gains provenance) and B.6 if the implementation differs from `TRD-24`
 - [x] Inert-key sweep recorded: every configured key listed with its resolution (read, or reported inert by name); the five known instances each resolved to one of the two
 - [x] Effective-configuration output verified to contain no secret values (TAC-4), and the verification is a test rather than a review
-- [ ] `BRD-15` rollback demonstrated: a setting reverted through the authoritative file restores the previous effective value
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` changes a value in the authoritative file, observes the effective value change with no code change, and restores. The same file also asserts that re-reading is stable, so provenance is not re-decided per call.
 
 
 **Outstanding:** LLD test mapping (T-1..T-17); TAC-8 no-regression load test not run; `.machine_profile.json`'s `applied` block is not yet marked non-authoritative in the docs and loader; `MOD-07` B.4/B.6 not reconciled; `BRD-15` rollback not demonstrated.

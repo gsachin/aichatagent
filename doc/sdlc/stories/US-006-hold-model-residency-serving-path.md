@@ -2,7 +2,7 @@
 
 # US-006 — Hold model residency on the serving path [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified (`test_us006_residency.py` 11/11) · DoD 3/8**
+- **Status:** **IMPLEMENTED - ACs verified; BRD-15 demonstrated** · `test_us006_residency.py` 11/11 · DoD 4/8 · LLD mapping, the latency TACs and `MOD-03` are open
 
 - **Story:** As a **caller who dials after the service has been idle**, I want **the model to still be in VRAM when my call arrives**, so that **I am not the person who waits 33 seconds of silence for a load that the operator already paid for at boot**.
 - **Business value:** The cold load is the single largest stall in the system: a measured **32,919 ms** to load and **67,349 ms** to first token. It is long enough that a caller hangs up. `BRD-17` says the prompt prefix shall be resident before the first call is accepted; `BRD-03` says the first turn of a call shall fall within the same p95 as a warm turn.
@@ -217,7 +217,7 @@ OLLAMA_KEEP_ALIVE=<duration, resolved from configuration at import>
 - [ ] Schema migration applied — n/a for data; the `DAT-09` key addition is recorded and its reader demonstrated
 - [ ] Module docs updated if contracts changed — `MOD-03` B.3 (the Ollama `/api/chat` row gains "keep-alive applied on the serving path") and B.8; `06-architecture.md` §2 MOD-07 flow already describes the pre-warm as "exists but is undone" per `REC-11`
 - [x] Acceptance observed externally: the model resident in `nvidia-smi` at the moment a call arrives (TAC-4), never from a boot success line
-- [ ] `BRD-15` rollback demonstrated: removing the setting restores the measured 5-minute-default defect exactly
+- [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` sets `OLLAMA_KEEP_ALIVE=5m`, observes the request carrying a 5-minute expiry again, and restores. **The story's wording was wrong and is corrected here:** it said *removing* the setting restores the defect, but the code default is `-1`, so unsetting the key KEEPS the fix. The revert that works is to set the pre-fix value.
 - [x] No new inert key introduced — the keep-alive key has a demonstrated reader and is not written into the profile's `applied` block as configuration
 
 

@@ -29,9 +29,44 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | | Count | Means |
 |---|---|---|
 | **Written** | **18 / 18** | The planning artifact exists, is self-contained, and validates (`752/0`) |
-| **Implemented, ACs verified** | **4 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (16/16) |
-| **Implemented, no acceptance test** | **1 / 18** | US-008 — real change, measured, but no suite covers its ACs or TACs |
+| **Implemented, ACs verified** | **8 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36), US-013 (39/39), US-016 (56/56), US-017 (48/48) |
+| **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
 | **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 5/8 |
+| **DoD boxes ticked, all 18 stories** | **29 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass |
+
+### What the Task 3.1 pass closed, and what it found
+
+Four stories implemented (US-012, US-013, US-016, US-017) and the DoD gap worked
+on for nine. The pass found **six defects**, none of which the ACs would have
+caught — every one came from a scenario or a checklist that asks a question the
+acceptance criteria do not:
+
+| Found | By |
+|---|---|
+| The admission record stored the caller's **phone number** (`call_sid` is the carrier's `From`) | US-016 LLD T-7 |
+| On defer-timeout the work gate **started the unit anyway**, making US-017's TAC-2 invariant merely advisory | US-017 LLD T-9 |
+| `/ws/voice/text` called the model **directly**, bypassing the gate — the one route into inference the priority policy could not see | driving the 2+1 window |
+| The TTS cache key omitted **voice and speed**, so editing either would have kept serving audio in the old voice | US-012, while making them configurable |
+| The isolation test reported **PASS on zero keys** — a green tick from no data | running it |
+| The cache key was recorded only on the **hit** path, so no key could be attributed to its owner | same run |
+
+The pattern is the program's own: **the instrument lied more often than the
+system did.** Four of the six were in the code written to *measure* the thing,
+not in the thing itself.
+
+### `BRD-15` — demonstrated, not asserted
+
+`doc/perf/tools/test_brd15_rollback.py` (33/33) reverts six stories and watches
+the prior behaviour return: US-012, US-013, US-016, US-017, US-006, US-011. The
+program's audit had found the same gap in every story — each *asserted* its
+change was revertible and none had been demonstrated by reverting it.
+
+**Two entries could not be covered and are recorded as such rather than
+implied:** US-007's gate is a module plus a launcher call, so its revert is
+commit-level; US-008's change spans two repositories. And **US-006's DoD named
+the wrong revert** — it said *removing* the setting restores the defect, but the
+code default is `-1`, so unsetting the key keeps the fix. The revert that works
+is to set the pre-fix value, which is what the demonstration does.
 
 | Status | n | Stories |
 |---|---|---|

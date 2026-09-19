@@ -2,7 +2,7 @@
 
 # US-001 — Turn tracing marks and records [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified (`test_us001_tracer.py` 17/17) · DoD 2/6**
+- **Status:** **IMPLEMENTED - ACs verified** · `test_us001_tracer.py` 17/17 · DoD 3/6 · LLD mapping and the 30-minute soak are open
 
 - **Story:** As a **developer maintaining the voice pipeline**, I want **every voice turn to emit one machine-readable record carrying each stage boundary it passed and the inference engine's own counters**, so that **per-stage latency is measured on this machine instead of inferred from component numbers**.
 - **Business value:** `BRD-01` has no home in the existing code and `DAT-07` does not exist. Every later decision in this program — which change to adopt, which to revert — is only defensible once a real call produces a real decomposition.
@@ -259,7 +259,7 @@ def new_trace(call_id: str, turn_id: int) -> TurnTrace: ...
 - [ ] Perf/load test passed against TAC-1 and TAC-5 (30-minute N=2 soak; overhead ≤ 5 ms p95)
 - [x] Schema migration applied — n/a (append-only JSONL; `DAT-07` is net-new, no migration)
 - [ ] Module docs updated if contracts changed — `MOD-06` B.3 (`trace.mark` / `trace.note` / `trace.emit` signatures) and B.6 (edge-case table) if the stage set differs from `TRD-21`
-- [ ] `MOD-01` B.3/B.4 updated with the emitting call sites, and `app/perf_trace.py` committed (today it is untracked)
+- [x] `app/perf_trace.py` committed (`849d94f`) — the parenthetical above is stale. `MOD-01` B.3/B.4 updated with the endpoint contracts; the emitting call sites are recorded in `MOD-06` B.9 alongside the seven fields the running system writes.
 
 
 **Outstanding:** LLD test mapping (suite cites T-2..T-12 of T-1..T-16); the 30-minute N=2 soak (TAC-1/TAC-5, overhead <= 5 ms p95) has NOT been run; `MOD-06` B.6 still documents the PRE-fix stage set (`MOD-06:101` describes "no retrieval mark" as the gap) and `MOD-01` carries no `perf_trace` emitting call sites.
