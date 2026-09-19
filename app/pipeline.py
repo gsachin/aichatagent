@@ -166,25 +166,23 @@ async def create_local_voice_pipeline(transport=None):
     logger.info(f"  {_vram_info()}")
 
     # ---- 1. Voice Activity Detection ---------------------------------
-    # In Pipecat 1.6.0, SileroVADAnalyzer is configured at the transport
-    # level (e.g. FastAPIWebsocketTransport params) rather than as a
-    # pipeline processor. We construct it here for use by the transport.
-    vad_analyzer = None
-    try:
-        from pipecat.audio.vad.silero import SileroVADAnalyzer, VADParams
-
-        vad_params = VADParams(
-            confidence=0.7,
-            start_secs=0.3,
-            stop_secs=0.5,
-            min_volume=0.6,
-        )
-        vad_analyzer = SileroVADAnalyzer(sample_rate=16000, params=vad_params)
-        logger.info("  [OK] SileroVADAnalyzer initialized (for transport config)")
-    except ImportError:
-        logger.warning("  [SKIP] SileroVADAnalyzer not available — VAD disabled")
-    except Exception as e:
-        logger.warning(f"  [SKIP] VAD init failed: {e}")
+    # REMOVED, deliberately -- BRD-04: "The system shall have exactly one live
+    # end-of-speech decision." This used to construct a SileroVADAnalyzer with
+    # `stop_secs=0.5` and log "[OK] SileroVADAnalyzer initialized (for
+    # transport config)". It was never attached to anything: the transport is
+    # passed in by the caller, so this function cannot reach it, and the
+    # analyzer was constructed, logged as live, and dropped on the floor.
+    #
+    # That left two problems. It cost a Silero model load per pipeline build.
+    # And it presented a SECOND end-of-speech delay -- 500 ms -- as the live
+    # setting while the one that actually closes a caller's turn is
+    # VoiceCallSession's 600 ms (`VAD_SILENCE_MS`). Two delays disagreeing
+    # about when a caller stopped talking is exactly what BRD-04 forbids, and
+    # the log line made it look reconciled.
+    #
+    # The live decision is `VAD_SILENCE_MS` in app/voice_handler.py. If a
+    # pipecat transport is ever given a VAD again, it must take its delay from
+    # that setting rather than declaring a second one here.
 
     # ---- 2. Speech-to-Text (Faster-Whisper) --------------------------
     try:
@@ -227,8 +225,10 @@ async def create_local_voice_pipeline(transport=None):
     from pipecat.pipeline.pipeline import Pipeline
 
     # Build the processor list.
-    # Note: VAD is not a pipeline processor in Pipecat 1.6.0;
-    # it is configured on the transport via params.vad_analyzer.
+    # Note: VAD is deliberately NOT here. In Pipecat 1.6.0 it would live on the
+    # transport, but this function is handed a transport it cannot configure,
+    # and the end-of-speech decision belongs to VAD_SILENCE_MS (BRD-04) -- see
+    # the removal note above.
     processors = []
     if stt is not None:
         processors.append(stt)

@@ -330,6 +330,66 @@ STT_MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "3"))
 # Utterances shorter than this are treated as noise bursts (15 × 20 ms = 300 ms).
 MIN_UTTERANCE_FRAMES = int(os.environ.get("MIN_UTTERANCE_FRAMES", "15"))
 
+# ── BRD-04: the ONE live end-of-speech decision ─────────────────────────
+# "The system shall have exactly one live end-of-speech decision, its delay
+#  documented, and its value reconciled explicitly against BRD-02."
+#
+# This is it. `is_silent()` gates the audio and `feed_audio()` counts trailing
+# silence; when the count reaches VAD_SILENCE_FRAMES the turn is closed. There
+# is no second decision on this path, and there must never be one -- a second
+# VAD with a different delay is two systems disagreeing about when a caller
+# stopped talking, which is how a caller gets talked over.
+#
+# Reconciled against BRD-02 (p50 <= 700 ms for TURN_E2E_MS): this delay is
+# measured at 600 ms, i.e. 86% of that budget before STT has run (`AS-04`).
+# BRD-02's 700 ms is therefore NOT reachable by tuning this number -- see
+# doc/perf/us015-model-decision.md for the measured chain. The value is kept
+# because 600 ms is the pause tolerance callers are given, and the fixtures
+# encode a 240 ms mid-turn hesitation as a real caller behaviour that must
+# survive. Lowering it is not a free win: it splits callers who pause.
+VAD_SILENCE_MS = int(os.environ.get("VAD_SILENCE_MS", "600"))
+VAD_SILENCE_FRAMES = max(1, round(VAD_SILENCE_MS / 20))
+
+
+def _vad_silence_frames() -> int:
+    """Read the live end-of-speech delay at SESSION construction.
+
+    Read per call rather than once at import so a deployment can change the
+    delay without a rebuild, and so a test can construct a session with a
+    different delay without reloading the module. BRD-04's "configuration that
+    does not execute shall not be presented as the live setting" cuts both
+    ways: a value nobody can reach is not a setting.
+    """
+    raw = os.environ.get("VAD_SILENCE_MS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return max(1, round(int(raw) / 20))
+    return VAD_SILENCE_FRAMES
+
+
+#: BRD-04 does not forbid closing a turn EARLY if the work has already been
+#: done -- it forbids a second *decision*. Speculative STT keeps the single
+#: decision and its single 600 ms delay; it merely transcribes the audio the
+#: caller has already produced while the remaining silence is still being
+#: counted. The result is used only if the audio did not change, so the
+#: transcript is identical to the non-speculative one by construction. Set to
+#: 0 to disable. Default: start STT 220 ms before the endpoint fires, which is
+#: the measured STT p50 (203 ms) rounded up -- starting earlier would usually
+#: finish before the window closed and waste a GPU pass on resumed callers.
+VAD_SPECULATIVE_ADVANCE_MS = int(os.environ.get("VAD_SPECULATIVE_ADVANCE_MS", "220"))
+
+
+def _speculative_advance_ms() -> int:
+    """Read the speculative lead at SESSION construction.
+
+    Same reasoning as `_vad_silence_frames`: a value read once at import is a
+    value a deployment cannot change and a test cannot vary, which is the
+    defect BRD-04 names. Read per session so both can.
+    """
+    raw = os.environ.get("VAD_SPECULATIVE_ADVANCE_MS", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return VAD_SPECULATIVE_ADVANCE_MS
+
 _NOISE_WORDS = {"is", "uh", "um", "oh", "ah", "hmm", "hm", "mhm", "eh", "huh"}
 
 #: Fixed reply for gated/noisy input — deliberately bypasses the LLM.
@@ -440,13 +500,27 @@ class VoiceCallSession:
 
     def __init__(
         self,
-        silence_threshold_frames: int = 30,  # ~600 ms at 20 ms/frame
+        silence_threshold_frames: int | None = None,  # None -> the live BRD-04 value
         max_utterance_frames: int = 300,     # ~6 seconds max
         sample_rate: int = 8000,             # Twilio uses 8 kHz
         direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
     ):
-        self._silence_threshold = silence_threshold_frames
+        # BRD-04: one decision, and `None` resolves to the setting rather than
+        # to a literal. The parameter used to default to the number 30 while no
+        # caller ever passed it, so the documented "configuration" was a
+        # constant that nothing could reach.
+        self._silence_threshold = (_vad_silence_frames()
+                                   if silence_threshold_frames is None
+                                   else silence_threshold_frames)
         self._max_utterance = max_utterance_frames
+        # Speculative-STT state. `_spec_epoch` invalidates a result whose
+        # utterance has already been reset, so a slow transcription can never
+        # be mistaken for the next caller turn's audio.
+        self._spec_task = None
+        self._spec_result = None
+        self._spec_epoch = 0
+        self._spec_started = False
+        self._spec_advance_ms = _speculative_advance_ms()
         self._sample_rate = sample_rate
         self.direction = direction
         self._noise_streak = 0  # consecutive noise-gated turns
@@ -482,6 +556,81 @@ class VoiceCallSession:
         self._audio_buffer.clear()
         self._silence_count = 0
         self._total_frames = 0
+        # Invalidate any in-flight speculation. The epoch, not the snapshot
+        # alone, is what makes this safe: the harness loops a four-fixture set,
+        # so two turns genuinely can carry byte-identical audio, and a stale
+        # result would otherwise be indistinguishable from a fresh one.
+        self._spec_epoch += 1
+        self._spec_started = False
+        self._spec_result = None
+        self._spec_task = None
+
+    def _maybe_start_speculative_stt(self) -> None:
+        """Transcribe the audio-so-far while the pause is still being measured.
+
+        This does NOT close the turn early and does NOT change the delay: the
+        caller is still given the full silence window. It only moves the STT
+        pass inside that window, so the ~200 ms it costs is no longer added to
+        the caller's wait.
+
+        Skipped when there is no running loop (a synchronous caller, e.g. a
+        unit test driving feed_audio directly), because there is nothing to
+        schedule the transcription onto.
+        """
+        if self._spec_advance_ms <= 0 or self._spec_started:
+            return
+        trigger = self._silence_threshold - round(self._spec_advance_ms / 20)
+        if self._silence_count < trigger:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._spec_started = True
+        snapshot = b"".join(self._audio_buffer)
+        epoch = self._spec_epoch
+        self._spec_task = loop.create_task(self._speculative_stt(snapshot, epoch))
+
+    async def _speculative_stt(self, snapshot: bytes, epoch: int) -> None:
+        """Background transcription of a snapshot. Never raises into the caller."""
+        try:
+            audio = self._prepare_audio(snapshot)
+            self._spec_result = (epoch, snapshot) + await self._transcribe(audio)
+        except Exception:                       # noqa: BLE001
+            # A failed speculation is not an error -- the real pass still runs.
+            self.log_event("SPECULATIVE_STT_FAILED")
+            self._spec_result = None
+
+    def _consume_speculative(self) -> tuple[str, bool] | None:
+        """The speculative transcript, if it exists and is still this audio."""
+        res = self._spec_result
+        if res is None:
+            return None
+        epoch, snapshot, text, low_conf = res
+        if epoch != self._spec_epoch:
+            return None                          # a later utterance; stale
+        if snapshot != b"".join(self._audio_buffer):
+            return None                          # caller resumed; different audio
+        self.log_event("STT_FROM_SPECULATIVE", chars=len(text or ""))
+        return text, low_conf
+
+    def _prepare_audio(self, ulaw: bytes) -> np.ndarray:
+        """µ-law -> resampled 16 kHz int16, for Whisper.
+
+        Extracted so the speculative and the real pass preprocess IDENTICALLY.
+        Two copies of this would be two chances to transcribe the same audio
+        two different ways, and the bug would show up as an intermittent
+        transcript difference on a call.
+        """
+        pcm_bytes = ulaw_to_pcm(ulaw)
+        audio_8k = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        try:
+            from scipy.signal import resample
+
+            audio_16k = resample(audio_8k, int(len(audio_8k) * 16000 / 8000))
+        except Exception:
+            audio_16k = np.repeat(audio_8k, 2)
+        return (audio_16k * 32767).clip(-32768, 32767).astype(np.int16)
 
     def _noise_reply(self) -> str:
         """
@@ -528,9 +677,15 @@ class VoiceCallSession:
             self._audio_buffer.append(ulaw_chunk)
             self._silence_count = 0
             self._total_frames += 1
+            # The caller resumed: whatever was speculated is now the wrong
+            # audio, and a later pause in this same utterance may speculate
+            # again on the longer buffer.
+            self._spec_started = False
+            self._spec_result = None
         elif self._audio_buffer:
             # Silence AFTER speech — count trailing silence
             self._silence_count += 1
+            self._maybe_start_speculative_stt()
 
         # Trigger on trailing silence OR max utterance length
         if self._audio_buffer and (
@@ -590,33 +745,37 @@ class VoiceCallSession:
             self.reset_utterance()
             return [], "", False
 
-        # ── Step 1: Decode µ-law → PCM WAV bytes ─────────────────
+        # ── Step 1: Decode µ-law → 16 kHz mono for Whisper ────────
         combined_ulaw = b"".join(self._audio_buffer)
-        pcm_bytes = ulaw_to_pcm(combined_ulaw)
-
-        # Convert to 16 kHz mono for Whisper (resample from 8 kHz)
-        audio_8k = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-
-        # Resample 8k → 16k using scipy
-        try:
-            from scipy.signal import resample
-
-            target_len = int(len(audio_8k) * 16000 / 8000)
-            audio_16k = resample(audio_8k, target_len)
-        except Exception:
-            # Fallback: simple repeat
-            audio_16k = np.repeat(audio_8k, 2)
-
-        audio_16k_int16 = (audio_16k * 32767).clip(-32768, 32767).astype(np.int16)
+        audio_16k_int16 = self._prepare_audio(combined_ulaw)
 
         logger.info(
             f"VoiceCall: processing utterance ({len(self._audio_buffer)} chunks, "
-            f"{len(audio_8k)/8000:.1f}s at 8 kHz)"
+            f"{len(audio_16k_int16)/16000:.1f}s at 16 kHz)"
         )
 
         # ── Step 2: Whisper STT ───────────────────────────────────
-        self.log_event("STT_STARTED")
-        transcript, low_conf = await self._transcribe(audio_16k_int16)
+        # Prefer the pass that already ran during the endpointing window. It is
+        # the same audio and the same preprocessing, so the transcript is the
+        # same one -- but it cost the caller nothing.
+        spec = self._consume_speculative()
+        if spec is not None:
+            transcript, low_conf = spec
+            # STT DID happen for this turn -- it happened during the endpointing
+            # window, which is the whole point. The stage must still be closed
+            # here, or the record loses it: `stt_done` is marked inside
+            # `_transcribe`, which this path never calls, and a 200-turn run
+            # then reports `stages_seen: 6` with no STT stage at all. The trace's
+            # only job is to say where the time went, and a stage that silently
+            # vanishes from it is worse than a slow one.
+            if self._trace is not None:
+                self._trace.mark("stt_done")
+                self._trace.note(stt_chars=len(transcript),
+                                 stt_low_conf=bool(low_conf),
+                                 stt_from_speculative=True)
+        else:
+            self.log_event("STT_STARTED")
+            transcript, low_conf = await self._transcribe(audio_16k_int16)
         self.log_event("STT_FINAL", chars=len(transcript), low_conf=low_conf)
         self.reset_utterance()
 
