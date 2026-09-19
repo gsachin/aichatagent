@@ -43,6 +43,32 @@ The benchmark called the chat model repeatedly at **one** context size, so the r
 
 So the 411 ms describes a cache that production did not have. The cause is fixed (`SMALL_TASK_NUM_CTX=8192`, see `doc/perf/IMPLEMENTATION_STATUS.md`), and once measured again on a warm turn the figure should be revisited. **Until re-measured, treat 411 ms as an isolated-benchmark figure, not a production one.** The decode, VRAM and N=2 concurrency results in §1 are unaffected — those did not depend on cache retention.
 
+### 2.3b CORRECTION (2026-09-19) — the live-path prefill figure, now measured
+
+§2.3a asked for the prefill numbers to be revisited *"once measured again on a
+warm turn"*. They now have been, from the per-turn trace of 198-turn live calls
+(`logs/perf_turns.jsonl`), which is the production path rather than the
+benchmark's isolated one:
+
+| Model | Isolated benchmark (§1) | **Live path, warm, p50** | Ratio |
+|---|---:|---:|---:|
+| `llama3.2:3b` | 100 ms | **183 ms** (N=1) · **201–208 ms** (N=2) | ~2× |
+| `qwen2.5:14b` | 411 ms | **not measured post-fix** — see below | — |
+
+So the 3B's live prefill is about **twice** its isolated figure, and the gap is
+**not** the runner-rebuild that §2.3a identified. That cause is fixed
+(`SMALL_TASK_NUM_CTX=8192`, all calls at one context size), and the residual 2×
+is the honest cost of the real prompt: the benchmark varies context per call but
+at a fixed size, while production carries the ~4.5k-token voice system prompt
+plus retrieved context, so prefill has genuinely more to do per turn.
+
+**The 14B's 2,490 ms figure is superseded and must not be quoted as current.**
+It was measured *before* the `SMALL_TASK_NUM_CTX` fix, i.e. it is the cost of the
+runner-rebuild bug, not of the model. The post-fix live prefill for the 14B was
+never measured — the model was switched to the 3B before that measurement was
+taken — so the figure is not merely stale, it is **unmeasurable in the current
+configuration** without switching back.
+
 ### 2.3 "Prefill 1,588–1,990 ms" — **was a cold-cache figure, not the per-turn cost**
 
 | Condition | 14B |
@@ -76,6 +102,25 @@ The wall-time ratio is the signal that distinguishes *batching* from *queueing* 
 
 **The honest statement is: on latency and resources the incumbent loses; on quality the incumbent is unmeasured-against. The decision waits for `DG-03`.**
 
+> **SUPERSEDED 2026-09-19.** The quality column is no longer empty and the
+> decision has been made — `llama3.2:3b` — recorded in
+> `doc/perf/us015-model-decision.md`. What changed is that the quality question
+> was made *askable* without `DG-03`: `check_answer` blocks 53 of 83 gradable
+> cases, but the **mechanical** sub-checks (forbidden claims, required facts,
+> spoken format) do not depend on the PO approving the *expected behaviour*, so
+> they can be counted as a **defect census** over all 83 rather than as verdicts
+> over 30. That comparison is decisive where the verdict comparison was not:
+> `fact_missing` is **28 for both models** (paired discordance 7–7, McNemar
+> p = 1.00) while `format_sentences` is **37 vs 16** (paired 26–5, p = 0.0002).
+>
+> This is a **screen**, not adoption. No case carries PO approval, and the
+> decision document says so in the same words. The claim here is narrower than
+> "the 3B is better": it is that the 3B is **not worse on facts** and is
+> **measurably better on spoken format**, while winning every latency and
+> resource axis in §1 — and that a decision resting on that is preferable to
+> keeping a model that loses every measured axis in exchange for an unmeasured
+> hope. The reversal condition is stated in the decision document.
+
 ## 5. Method — and the three flaws corrected to get here
 
 The first two runs of this benchmark produced **wrong numbers**, and the corrections are recorded because the same errors are easy to repeat:
@@ -92,7 +137,11 @@ The first two runs of this benchmark produced **wrong numbers**, and the correct
 |---|---|
 | Quantization × runtime matrix | **NOT STARTED** — only two models measured; no quantization sweep, no runtime comparison (llama.cpp server, vLLM) |
 | 7–9B class | **NOT MEASURED** — not installed on this box; would need a pull |
-| Quality screen | **BLOCKED** — `DG-03` |
-| Pareto selection | **CANNOT COMPLETE** — one axis is empty |
+| Quality screen | **DONE, SCREEN-GRADE** (2026-09-19) — not blocked after all; see §4's superseded note. The screen exists and separated the two candidates on mechanical defects. It does **not** satisfy the quality leg's original intent, which wanted PO-approved ground truth |
+| Pareto selection | **MADE, PROVISIONAL** — `llama3.2:3b`, in `doc/perf/us015-model-decision.md`, on screen-grade evidence with a stated reversal condition |
 
-`US-015` is **partially delivered**: the N=1/N=2 latency and resource legs are measured and have already falsified two plan assumptions. It cannot close until the golden set exists.
+`US-015` is **partially delivered**: the N=1/N=2 latency and resource legs are
+measured and have already falsified two plan assumptions, and a provisional
+selection now exists. It still cannot **close**, because the quality leg's
+original intent — PO-approved ground truth — remains blocked by `DG-03`, and the
+screen is explicitly not a substitute for it.
