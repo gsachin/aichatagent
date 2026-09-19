@@ -221,6 +221,39 @@ erDiagram
 | Operator aborts a start | No partial readiness is claimed; the report reflects what actually came up (`UC-06` cancellation scenario) |
 | A configured value is malformed | Start reports the parse failure rather than falling back silently — a malformed value that becomes a default is indistinguishable from an absent one (`UC-06` invalid-input scenario) |
 
+#### As-built, 2026-09-19 — the gate closes six of these, and three have nothing behind them
+
+This table was written prescriptively ("Today: … Required: …") before `US-007`'s
+gate existed. The gate is now implemented and passes 30/30 checks, so the
+"Required" column can be answered. **Six rows are implemented, one was already
+handled outside the gate, and three have no implementation at all** — the last
+group is the one worth acting on, because a table like this reads as a
+specification that has been met.
+
+**Implemented — verified by a named check in `test_us007_readiness.py`:**
+
+| Row | Evidence |
+|---|---|
+| Ollama not running at pre-warm time | *"AC-2 engine absent → NOT READY"*, *"the error is surfaced, not swallowed"* |
+| Model evicted between boot and the first call | *"TAC-1 not resident per `/api/ps` → NOT READY"*, *"residency failure names the model"* |
+| A managed key has no reader | *"TAC-1 an unread key → NOT READY"*, plus *"US-011 keys read by ANOTHER PROCESS do not fail the clause"* — the exemption matters, or the check would fire on every correct cross-process key |
+| Two writers disagree on a key | `hardware_profile.check_drift()` compares the live machine against the profile snapshot `.env` was sized for and returns `ok / drifted / no_profile / skipped_container / disabled` — reported, never resolved silently (`TRD-24`, `DG-05`). A second, unrelated drift check (`admission.asset_drift()`) covers the call assets and degrades rather than blocks |
+| Half-started stack | *"a down Postgres degrades but does not block"*, *"a down ERC MCP degrades but does not block"* — degraded is named while ready is still declared, which is the distinction the row asks for |
+| Repeated start | *"AC-4 a second start against a warm stack is still READY"*, *"the warm path records `load_ms` so a second load is visible"* |
+| Port held by an orphaned process | Handled in `start_services.ps1` (port probes, and `Stop-PortOwner` walks to the orphan holding an inherited socket). Unchanged; not the gate's to own |
+
+**No implementation found — open, and named rather than implied:**
+
+| Row | Status |
+|---|---|
+| **A dependency starts but never listens** | **OPEN.** `boot_readiness.py` contains no such check (0 matches). The script has start-up deadlines per `UC-06`, but the *readiness gate* does not verify that a dependency which reported started is actually listening |
+| **A configured value is malformed** | **OPEN.** No parse-failure reporting (0 matches). This is the row that would have caught `OLLAMA_KEEP_ALIVE="-1"` — a `.env` value that is always a string and that Ollama's Go duration parser rejects with `time: missing unit in duration`, a 400 on *every* request. That instance is handled by coercion in `_resolve_keep_alive`, but by hand at the call site, not by a gate that would catch the next one |
+| **Operator aborts a start** | **OPEN.** Nothing implements it (0 matches). Low severity — an abort is visible to the operator who caused it — but the row claims a behaviour nothing provides |
+
+The three open rows are **not** this module's DoD box; they are recorded here so
+the box can be ticked honestly for the six that are real, without the table
+implying three more are done than are.
+
 ### B.7 Tech Debt Accepted
 
 - **Accepted: the `.machine_profile.json` file is retained rather than deleted.** Trade: a second file continues to exist that a careless reader could mistake for configuration. Rationale: the drift check is legitimate, and the fix is to make its role explicit where it is read, not to remove a working detection feature.

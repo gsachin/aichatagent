@@ -42,12 +42,12 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | **Written** | **18 / 18** | The planning artifact exists, is self-contained, and validates (`752/0`) |
 | **Implemented, ACs verified** | **8 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36), US-013 (39/39), US-016 (56/56), US-017 (48/48) |
 | **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
-| **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 5/8 |
-| **DoD boxes ticked, all 18 stories** | **32 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass, 30/147 before the 2026-09-19 module reconciliation |
+| **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 6/8 |
+| **DoD boxes ticked, all 18 stories** | **33 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass, 30/147 before the 2026-09-19 module reconciliation |
 
 **Recount as of 2026-09-19** (mechanical, `\[( |x)\]` over each story's DoD
 section): US-001 4/6 · US-002 0/7 · US-003 0/7 · US-004 0/7 · US-005 0/7 ·
-US-006 5/8 · US-007 5/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8 ·
+US-006 5/8 · US-007 6/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8 ·
 US-012 4/8 · US-013 2/8 · US-014 0/9 · US-015 0/12 · US-016 3/10 · US-017 4/10 ·
 US-018 0/10.
 
@@ -63,8 +63,9 @@ US-018 0/10.
 3. **`BRD-15` rollback** — demonstrated for six stories by
    `test_brd15_rollback.py` (33/33); still *asserted* rather than demonstrated
    for the rest.
-4. **Module-doc reconciliation** — `MOD-01`, `MOD-06` and the `US-015`
-   benchmark reconciled 2026-09-19. `MOD-03`, `MOD-07`, `MOD-04` remain.
+4. **Module-doc reconciliation** — `MOD-01`, `MOD-03`, `MOD-06`, `MOD-07` and
+   the `US-015` benchmark reconciled 2026-09-19. **`MOD-04` remains** (US-012's
+   TTS cache scope and voice/speed key), and it is the last one.
 
 ### What the Task 3.1 pass closed, and what it found
 
@@ -102,19 +103,19 @@ is to set the pre-fix value, which is what the demonstration does.
 
 | Status | n | Stories |
 |---|---|---|
-| IMPLEMENTED (ACs verified) | 4 | US-001, US-006, US-007, US-011 |
+| IMPLEMENTED (ACs verified) | 8 | US-001, US-006, US-007, US-011, US-012, US-013, US-016, US-017 |
 | IMPLEMENTED (no test) | 1 | US-008 |
 | IN PROGRESS | 1 | US-002 |
 | AWAITING SIGN-OFF | 2 | US-003, US-014 |
 | PARTIAL | 1 | US-015 |
 | BLOCKED (`DG-03`) | 5 | US-004, US-005, US-009, US-010, US-018 |
-| NOT STARTED | 4 | US-012, US-013, US-016, US-017 |
+| NOT STARTED | 0 | — *(this table was the pre-Task-3.1 count and contradicted the summary above it; corrected 2026-09-19)* |
 
 ### What actually stands between "implemented" and "done"
 
 The same four items recur across the implemented stories, and none of them is a coding task:
 
-1. **LLD test mapping (T-1…Tn) — unmet in all five.** The suites pass, but they are not tagged to the story's own LLD scenario IDs. `US-001` is closest: it cites T-2…T-12 of T-1…T-16.
+1. **LLD test mapping (T-1…Tn) — unmet in all five.** The suites pass, but they are not tagged to the story's own LLD scenario IDs. `US-001` is done (2026-09-19) and the pass found the tags were not merely missing but **wrong** — nine checks wore a `T-n` belonging to a different scenario, and `T-10`/`T-11` read as covered while nothing tests them. US-002/003/006/007 remain unmapped.
 2. **The load/soak tests.** `US-001`'s 30-minute N=2 soak, `US-006`'s TAC-1/TAC-2/TAC-5 thresholds, `US-008`'s three consecutive N=2 runs. The ≥100-sample baseline now exists (p50 3,609 / p95 6,044 ms) but none of these story-specific gates has been run against it.
 3. **`BRD-15` rollback demonstration — unmet in all five.** Every story asserts its change is revertible; none has been demonstrated *by reverting it*.
 4. **Module-doc reconciliation.** The module docs are the *design*, not the as-built record. Concretely: `MOD-06:101` still documents the **pre-fix** stage set (it describes "no retrieval mark" as the gap US-001 closed), and `MOD-01` contains no `perf_trace` emitting call sites at all.
