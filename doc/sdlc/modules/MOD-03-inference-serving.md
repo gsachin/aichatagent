@@ -209,6 +209,36 @@ REC notes that apply: **`REC-01`** (Pipecat is not adopted; its `KokoroTTSServic
 - `keep_alive` is passed **only** in the boot ping. `_chat_ollama` sets `num_ctx` and `temperature` and nothing else, and `OLLAMA_KEEP_ALIVE` is not set in `.env` or read anywhere in `app/`. So residency is protected at boot and unprotected for the rest of the process's life — which is precisely the window `BRD-17` and the 32,919 ms measurement are about.
 - **Consequence for this module:** TRD-12's requirement is not "add a preload" but "make residency hold on the serving path and make the warm state verifiable". `MOD-07` owns the boot sequence; this module owns the serving-path keep-alive and the verification criterion in A.5 criterion 2.
 
+#### As-built, 2026-09-19 — this section contradicted B.3, and B.3 was right
+
+The two rows disagreed: B.3 asserts "keep-alive applied on the serving path", while
+the flag above recorded that it was not. **The gap is now closed, and B.3 has
+been true since the fix; the flag above was the stale half.**
+
+| Claim in the flag | As built | Evidence |
+|---|---|---|
+| `keep_alive` passed only in the boot ping | **CLOSED** — sent on every generation. `_chat_ollama` resolves `ka = KEEP_ALIVE if keep_alive is None else keep_alive` and passes it to `ollama.chat` | `app/llm_backend.py:204–207` |
+| `OLLAMA_KEEP_ALIVE` not set in `.env`, not read in `app/` | **STALE** — it is set, and it is read | `.env:235` (`-1`); `app/llm_backend.py:178` |
+| `_chat_ollama` sets `num_ctx` and `temperature` and nothing else | **STALE** — `options` gained `num_predict` (the spoken-answer tail guard, `OLLAMA_NUM_PREDICT`, default 192, voice path only) | `app/llm_backend.py:186`; `app/rag.py` |
+| `pick_model()` is an uncached per-utterance `/api/tags` round trip | **STILL OPEN** — verified uncached. This is the one claim in the flag that remains true, and it remains a real per-turn cost | `app/llm_backend.py:271` |
+
+Two consequences worth carrying forward. First, `_resolve_keep_alive` exists
+because a `.env` value is always a string and Ollama's Go duration parser
+rejects `"-1"` with `time: missing unit in duration` — a 400 on **every**
+request. A setting that is present but malformed does not degrade residency, it
+breaks every call, so the coercion is load-bearing rather than defensive.
+Second, if the installed client rejects the `keep_alive` kwarg the code degrades
+**loudly** (`_keep_alive_unsupported`, a warning naming `BRD-17` as unmet)
+rather than silently reverting to the server default.
+
+**The "set ≠ live" list above is one item shorter.** It named four instances —
+`FASTAPI_WORKERS`, the Pipecat VAD, `.machine_profile.json`, and the pre-warm
+list. The **Pipecat VAD has since been removed** rather than fixed: it was
+constructing a `SileroVADAnalyzer` with `stop_secs=0.5` that nothing read, and
+it has been deleted from `app/pipeline.py` under `BRD-04` ("exactly one live
+end-of-speech decision"). `FASTAPI_WORKERS` remains wrong in the
+`hardware_profile.py` tier tables and still warns at every boot.
+
 ## TPO Buildability Sign-off [Lens: TPO]
 
 **TPO sign-off: this TRD is buildable against the BRD above.** Both levers are measured on this box before being proposed — the prefix cache was proved to work (2,909 ms → 50 ms) and decode was proved to be bandwidth-bound at 77% of ceiling, so neither change rests on a projection. Feasibility risks:
