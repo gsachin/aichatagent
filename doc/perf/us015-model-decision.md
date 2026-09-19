@@ -78,10 +78,46 @@ From `us015_model_benchmark.py` and this screen:
 | N=2 batching | PARTIAL (38.6 vs 39.2 tok/s) | **BATCHED** (131.2 tok/s) |
 | VRAM | 69% | **26%** |
 
-Expected effect on the measured N=2 warm turn (4,684 ms): the LLM leg
-(queue 768 + prefill 773 + generation 1,202 = 2,743 ms) falls to roughly
-350–400 ms. **Turn latency ≈ 4,684 → ≈ 2,300 ms.** Endpointing (600), STT (329)
-and retrieval (990) are model-independent and unchanged.
+**Measured, not predicted** — N=2 warm, 100 turns × 2 sessions, 2026-09-19T20:10:44Z:
+
+| | 17:10:42Z | 18:53:50Z | **20:10:44Z** |
+|---|---:|---:|---:|
+| first-audio p50 | 4,828.5 ms | 4,461.5 ms | **2,953.5 ms** |
+| first-audio p95 | 9,866.2 ms | 10,934.0 ms | **8,593.3 ms** |
+| turns over 3,000 ms | 198/198 | 146/198 | **95/198** |
+
+p50 **−34%**, p95 **−21%**, over-cap turns 74% → 48%. The run is nevertheless
+**DISCARDED**: 95 turns still breach BRD-05's 3,000 ms ceiling, so no latency
+claim may be taken from it (a discarded run is not a passing run). The
+improvement is real; the acceptance criterion is still not met.
+
+The stage decomposition (`logs/perf_turns.jsonl`, 200 rows, all
+`model_used=llama3.2:3b`, `residency_lapse=0`) shows the LLM leg is no longer
+the bottleneck:
+
+| stage | before | now (p50) |
+|---|---:|---:|
+| endpointing (fixed) | 600 ms | 600 ms |
+| VAD-end → STT done | 329 ms | 203 ms |
+| retrieval | 990 ms | 750 ms |
+| LLM queue | 768 ms | **51 ms** |
+| prefill | 773 ms | **208 ms** |
+| generation | 1,202 ms | **392 ms** |
+| TTS synthesis | *(not isolated)* | **790 ms** |
+| TTS done → first audio | 23 ms | 16 ms |
+| app-side total | — | **2,484 ms** |
+
+LLM leg: **2,743 → 651 ms (−76%)**, as predicted. The remaining time is now
+retrieval (750), TTS synthesis (790) and the fixed 600 ms endpointing — the
+last three to attack, and none of them is the model.
+
+Caveat on attribution: the model change, `num_predict`, the prompt scoping fix
+and the event-loop fixes all went live in one restart, so the LLM-leg reduction
+is clearly the model but the STT and retrieval gains cannot be split between the
+loop fixes and the freed VRAM (the 14B's 10 GB is no longer resident).
+
+**Do not quote the 2,300 ms figure this document previously predicted.** The
+measured p50 is 2,953.5 ms; the arithmetic was optimistic by ~650 ms.
 
 ---
 
