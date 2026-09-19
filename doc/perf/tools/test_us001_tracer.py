@@ -181,5 +181,50 @@ check("T-12 retrieval_ms is unaffected by the bad counters (it is measured)",
       isinstance(r3.get("retrieval_ms"), (int, float)) and r3["retrieval_ms"] >= 0,
       f"retrieval_ms={r3.get('retrieval_ms')}")
 
+# --- T-1: a stage marked twice keeps its FIRST timestamp ---
+# The behaviour is `setdefault` in `mark()`, and until 2026-09-19 nothing tested
+# it. The reason it matters is not tidiness: a re-marked stage would move the
+# boundary it represents, silently re-attributing time between two segments,
+# and every derived figure downstream (retrieval_ms, llm_queue_ms) would move
+# with it. The record is only trustworthy if a boundary cannot be rewritten.
+t4 = pt.new_trace("CA4", 4)
+t4.mark("vad_end")
+first = t4._marks["vad_end"]
+t4.mark("vad_end")                      # second call must be ignored
+t4.mark("stt_done")
+t4.emit()
+r4 = emitted()[-1]
+check("T-1 marking one stage twice keeps the FIRST timestamp",
+      t4._marks["vad_end"] == first,
+      f"{t4._marks['vad_end']!r} != {first!r}")
+check("T-1 and the duplicate does not inflate stages_seen",
+      r4["stages_seen"] == 2, f"stages_seen={r4['stages_seen']}, expected 2")
+check("T-1 the duplicated stage still contributes exactly one segment",
+      "seg_vad_end__stt_done_ms" in r4 and r4["seg_vad_end__stt_done_ms"] >= 0,
+      str({k: v for k, v in r4.items() if k.startswith("seg_")}))
+
+# --- T-13: a turn aborted mid-generation emits the marks it had ---
+# Cancellation is the case the stage list is least able to describe and most
+# likely to lie about: marks after `llm_sent` never arrive, and a record that
+# fabricated them (or reported the shortfall as a zero) would describe a turn
+# that did not happen. `llm_first_token` is deliberately NOT marked here for the
+# same reason it is absent in production -- non-streaming has no TTFT (TAC-6).
+t5 = pt.new_trace("CA5", 5)
+for s in ("vad_end", "stt_done", "llm_sent"):
+    t5.mark(s)
+t5.emit()                               # caller hung up mid-generation
+r5 = emitted()[-1]
+check("T-13 an aborted turn still emits a record",
+      r5.get("call_id") == "CA5" and r5.get("turn_id") == 5)
+check("T-13 it carries the marks it had",
+      all(r5.get(k) is not None for k in ("vad_end_ms", "stt_done_ms", "llm_sent_ms")),
+      str({k: r5.get(k) for k in ("vad_end_ms", "stt_done_ms", "llm_sent_ms")}))
+check("T-13 and invents none of the marks it never reached",
+      all(k not in r5 for k in ("llm_done_ms", "tts_done_ms", "first_audio_sent_ms")),
+      str({k: r5.get(k) for k in ("llm_done_ms", "tts_done_ms", "first_audio_sent_ms")}))
+check("T-13 stages_seen states the shortfall rather than hiding it",
+      r5["stages_seen"] < r5["stages_expected"],
+      f"{r5['stages_seen']} of {r5['stages_expected']}")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

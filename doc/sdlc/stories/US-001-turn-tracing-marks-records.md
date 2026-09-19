@@ -253,6 +253,57 @@ def new_trace(call_id: str, turn_id: int) -> TurnTrace: ...
 - Reconciliation: **`REC-12`** (the untracked tracing draft exists and cannot compute the metric `BRD-01` names first — its `STAGES` tuple has no retrieval mark and it captures no engine counters, so `retrieval_ms` is uncomputable from it and the measured prefill/decode cannot be separated; the draft is a usable skeleton, re-based and completed rather than trusted); `REC-10` (no explicit state machine exists in code — the marks are an analytical instrument mapped onto `SM-02`, not a mandate to introduce an enum); `REC-01` is adjacent: Pipecat is **not** adopted, and none of these marks are emitted from `app/pipeline.py`
 - Related workflow: `WF-01` (steps 3–10 are the boundaries marked), `WF-02` step 6 (traces must not merge at N=2)
 
+## LLD test mapping — T-1 … T-16, reconciled 2026-09-19
+
+Mapped by reading every `check()` in `doc/perf/tools/test_us001_tracer.py`
+against the scenario table above. **The suite's own T-tags are wrong**, and that
+is the finding — see below the matrix.
+
+| LLD | What it requires | Test that satisfies it | Status |
+|---|---|---|---|
+| T-1 | `mark` twice keeps the first timestamp; `stages_seen` counts once | *"marking one stage twice keeps the FIRST timestamp"* (+2) | **COVERED** — added 2026-09-19; the behaviour (`setdefault`) was implemented and untested |
+| T-2 | `emit()` into a missing directory creates it and appends one valid line | *"one record emitted"* | **PARTIAL** — emits, but the missing-directory case is not asserted |
+| T-3 | `PERF_TRACE=0` writes no file (by mtime and patched `open`) | *"PERF_TRACE=0 emits nothing"* — **tagged `T-9`** | **COVERED, MIS-TAGGED** |
+| T-4 | unwritable path returns normally, raises nothing | *"misuse never raises"* ×2 — **tagged `T-11`** | **COVERED, MIS-TAGGED** |
+| T-5 | absent `retrieval_done` → no key, no `0` | *"retrieval_ms OMITTED when the retrieval mark is absent"*, *"record still emitted"* — **tagged `T-8`** | **COVERED, MIS-TAGGED** |
+| T-6 | `note(prompt_eval_count=None)` records absence, not `0` | — | **GAP** |
+| T-7 | imports **only** `json`, `os`, `time`, `pathlib` | *"no app.\* imports"* — **tagged `TAC-3`** | **PARTIAL** — the suite asserts a *denylist* (`app.*` excluded); the scenario specifies an *allowlist* |
+| T-8 | a scripted turn through the **live** path, ≥6 stages, segments reconcile | *"consecutive segments reconcile"*, *"≥6 stages recorded"* — **tagged `T-2`** | **PARTIAL** — reconciliation is asserted on a synthetic trace, not through the live path |
+| T-9 | an early-exit noise-gated turn: lower `stages_seen`, no fabricated zeros | *"record still emitted (absent is not zero)"* — **tagged `T-8`** | **PARTIAL, MIS-TAGGED** — asserts absence-honesty but not the noise-gated early exit |
+| T-10 | `first_audio_sent_ms` stamped **at the socket write** | *"concurrent traces stay isolated"* bears this tag but tests something else | **GAP** — nothing tests socket-write stamping |
+| T-11 | re-emission for the same `(call_id, turn_id)` appears twice with identical identity | — | **GAP** |
+| T-12 | no fixture phrase, no dialled number in the record | *"no PII / caller-supplied strings"* — **tagged `TAC-4`** | **COVERED, MIS-TAGGED** |
+| T-13 | a turn aborted mid-generation emits the marks it had | *"an aborted turn still emits a record"* (+3) | **COVERED** — added 2026-09-19 |
+| T-14 | one real call → exactly one record, reconciles within 5 ms | — | **GAP** — needs a real call |
+| T-15 | 30-minute N=2 soak: ≈240 rows, no merged records, no tracer exceptions | — | **GAP** — the load gate |
+| T-16 | `PERF_TRACE=0` vs `=1`, p95 turn-total delta ≤ 5 ms (TAC-1) | — | **GAP** — the load gate |
+
+**Coverage: 4 covered correctly, 4 covered but mis-tagged, 3 partial, 5 gaps.**
+
+### The finding: the suite's T-tags are systematically wrong
+
+The tags are not merely incomplete — **they point at the wrong scenarios, which
+is worse than having none.** Nine checks wear a `T-n` that belongs to a
+different scenario, and because T-10 and T-11 are *gaps*, a reviewer scanning
+the suite for those IDs finds green ticks against tests that do not cover them:
+
+- The check tagged **`T-9`** is the `PERF_TRACE=0` test — that is **T-3**.
+- The checks tagged **`T-8`** are the absent-retrieval-key tests — that is **T-5**.
+- The checks tagged **`T-11`** are "misuse never raises" — that is **T-4**.
+- The check tagged **`T-10`** is trace isolation — which is not T-10 at all.
+- The check tagged **`TAC-4`** implements **T-12**.
+- The checks tagged **`T-2`** that assert reconciliation are **T-8**.
+
+A tag is a claim about coverage. Reusing one for a different scenario converts
+the mapping from evidence into noise, and it is exactly the failure the DoD's
+"tests from the LLD test scenarios pass" box is meant to prevent — the box was
+unticked, but nothing said *why*, and the suite looked tagged.
+
+**Not renumbered here, deliberately.** Re-assigning nine IDs without the story
+author confirming which scenario each test was *intended* for risks replacing
+one set of wrong tags with another, and the tests' own intent is not recoverable
+from the code. The matrix above is the authority until that pass is done.
+
 ## Definition of Done
 - [x] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-6)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-16)
