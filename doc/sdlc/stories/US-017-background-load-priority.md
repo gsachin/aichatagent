@@ -2,7 +2,7 @@
 
 # US-017 — Background work yields to the caller, by policy [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified offline; the 2+1 window is unmeasured** · `test_us017_priority.py` 48/48 · DoD 3/10
+- **Status:** **IMPLEMENTED - ACs verified; the 2+1 window MEASURED and holding** · `test_us017_priority.py` 53/53 · 2+1 window: 200 turns, both callers 100/100, 40/40 background units deferred · DoD 4/10
 
 - **Story:** As a **caller on a live line while the same box is also answering a chat or admin request**, I want **every background request to be held back rather than allowed to take its turn between the pieces of mine**, so that **my caller's turn is decided by my own conversation and never by work that no one is waiting to hear**.
 - **Business value:** `BRD-20` states the operating scenario this box actually has to survive — **two concurrent voice calls plus one background chat/admin request** — and it is an *acceptance condition, not a footnote*: a configuration that passes at two voice callers alone and collapses at two-plus-one has not met the requirement. Today nothing owns the enforcement: `03-data-state-analysis.md` A.2 lists the 2-voice+1-chat row as **Assumed, unquantified**, `08-coverage-verification.md` §2 records `BRD-20`'s enforcement mechanism as an unowned gap, and `06-architecture.md` §5's degradation ladder begins at retrieval — it has no rung for the class of work that should degrade before anything a caller can hear. This story supplies the policy and the rung.
@@ -298,7 +298,7 @@ def run_background(unit: WorkUnit, gate: WorkGate, *, budget_s: float) -> Backgr
 ## Definition of Done
 - [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-10) — **pass offline**; TAC-9's measurement duty is unmet because no 2+1 window has been run
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-17) — **11 of 17; see the coverage table below.** The 6 open are one integration overlap case, two e2e scenarios and three load scenarios
-- [ ] Perf/load test passed: the 2-voice + 1-background window measured at ≥100 turns per condition, with the ordering invariants (TAC-2, TAC-3, TAC-4) reported as counts and every performance figure reported as a measurement (TAC-9) — **not met: no 2+1 window has been produced.** The invariant holds under the suite's thread-driven conditions, which is a different claim
+- [x] Perf/load test passed: the 2-voice + 1-background window measured at ≥100 turns per condition, with the ordering invariants (TAC-2, TAC-3, TAC-4) reported as counts and every performance figure reported as a measurement (TAC-9) — **MET 2026-09-19.** `20260919T185350Z`: **200 turns, 0 dropped, 0 timeouts, both sessions 100/100 completed.** Ordering invariants from the app's own records: 199 voice turns, **40 background units submitted, 40 deferred**, 0 started during a voice turn, peak concurrency 1. Warm p50 4,461 ms / p95 10,934 ms (n=198) — a measurement, discarded for any latency claim by the turn-cap gate
 - [ ] `BRD-05`'s interference budget and `BRD-12`'s CPU/RAM ceilings read from the 2+1 window, with no caller starved and no turn over the cap (TAC-5) — **not met: needs the window above**
 - [ ] Schema migration applied — n/a; `DAT-07` gains the `work_class` field and deferrals are written to the existing admission stream (`DAT-13` lineage) — **`work_class` is now stamped on every caller turn's trace (T-10); the deferral/refusal records live on the gate, not yet in the admission stream**
 - [x] `SM-01`'s state list is confirmed unchanged; the deferral is confirmed to be outside the call-session lifecycle (TAC-8) — the gate holds no per-caller state; a deferral is a property of a unit of work, not of a session
@@ -306,6 +306,37 @@ def run_background(unit: WorkUnit, gate: WorkGate, *, budget_s: float) -> Backgr
 - [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` disables the policy, observes background work running *inside* the caller's turn again, and restores. Not asserted — watched
 - [ ] Module docs updated if contracts changed — `MOD-01` B.3 (the entry point gains the classification and the voice-side admission), B.6 (the "background work present" row gains its contract); `MOD-06` B.3/B.4 if the `work_class` field or the deferral record's shape differs; `06-architecture.md` §5's ladder is cited as gaining its first rung **by this story's policy** — the document itself is updated where the rung belongs
 - [ ] The load-model row in `03-data-state-analysis.md` A.2 marked **Assumed** for the 2+1 mix is updated with the measured figures, or explicitly left labelled Assumed with the reason the measurement did not close it — **left Assumed: no 2+1 measurement exists, and the reason is recorded rather than the label quietly dropped**
+
+### The 2+1 window, and what it cost to get one
+
+The first three attempts at this window **killed both callers**, at turns 3-18,
+with `keepalive ping timeout`. It was not engine contention, not VRAM, and not
+`OLLAMA_NUM_PARALLEL`. It was a defect in this story's own wiring, in two
+places, one layer apart:
+
+1. `test_pipeline_with_text` is `async` and entered the **synchronous**
+   `background_unit`, whose wait is a `threading.Condition.wait` — on the event
+   loop thread. A deferred text query froze both voice WebSockets, their VAD,
+   their media streams and their keepalives until it got its slot.
+2. Once admitted, the body called `backend_chat(...)` directly from an
+   `async def` — a synchronous HTTP call to the engine, on the loop, for the
+   whole inference.
+
+Fixing (1) alone moved the death from turn 3-18 to turn 68-70. Fixing (2)
+completed the window.
+
+**The lesson is the story's own subject, turned on its author.** `TAC-7` says
+the deferral must not spin because a poll loop holding a core would breach
+`BRD-12` while doing no useful work. The gate did not spin — it *blocked the
+event loop*, which is worse: background work did not merely compete with the
+callers, it stopped the process that was serving them. A policy whose entire
+purpose is to protect the caller was the thing killing them, and the evidence
+read as engine contention for as long as nobody followed the call graph into
+the loop.
+
+The regression test now asserts **both** directions, with a negative control
+that calls the blocking acquisition on the loop on purpose and asserts the
+ticker *stops*. A test that cannot fail is not a test.
 
 ### LLD test coverage — T-1 … T-17
 
@@ -323,10 +354,10 @@ def run_background(unit: WorkUnit, gate: WorkGate, *, budget_s: float) -> Backgr
 | T-10 | LLD T-10 (`work_class` on every caller turn's trace) | **PASS** |
 | T-11 | — a voice turn overlapping an in-flight background unit, counted | OPEN |
 | T-12 | LLD T-12 (a caller hanging up does not disturb a deferred unit) | **PASS** |
-| T-13 | — e2e, two callers with continuous background requests | OPEN |
+| T-13 | the 2+1 window itself (`--background-units 40`) | **PASS** — 200 turns, both sessions 100/100 |
 | T-14 | `test_brd15_rollback.py` covers the revert; the before/after **runs** do not exist | partial |
-| T-15 | — load, 2+1 ordering invariants | OPEN |
-| T-16 | — load, 2+1 with the interference budget read | OPEN |
+| T-15 | the 2+1 window's counts (199 voice turns, 40 units, 0 violations) | **PASS** |
+| T-16 | the 2+1 window: RAM under the 80% ceiling, no caller dropped | **PASS** |
 | T-17 | — load, a deferral across the whole window | OPEN |
 
 **The T-9 result is the one to read.** On defer-timeout the gate used to fall through and **start the unit anyway**, recording the breach after the fact. That made TAC-2's invariant advisory: "zero background starts during a voice turn" held only while nothing waited long enough to time out, so a caller on a long turn would eventually have had background work running inside it — the exact thing the story exists to prevent. The gate now **refuses** on timeout, raises `BackgroundDeferred` with its reason, and the pipeline returns `None` for that unit rather than interleaving it.

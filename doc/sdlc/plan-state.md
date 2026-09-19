@@ -32,7 +32,7 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | **Implemented, ACs verified** | **8 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36), US-013 (39/39), US-016 (56/56), US-017 (48/48) |
 | **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
 | **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 5/8 |
-| **DoD boxes ticked, all 18 stories** | **29 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass |
+| **DoD boxes ticked, all 18 stories** | **30 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass |
 
 ### What the Task 3.1 pass closed, and what it found
 
