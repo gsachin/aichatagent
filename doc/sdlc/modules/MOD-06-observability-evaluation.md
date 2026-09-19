@@ -284,6 +284,7 @@ erDiagram
 | Failure class | Strategy |
 |---|---|
 | A stage mark never fires | Recorded as **absent**; the record carries a count of stages seen and every consumer treats a missing key as "did not happen" (`UC-07` E1). Never a fabricated zero |
+| A stage is declared in `STAGES` that **nothing can emit** | **Distinct from the row above, and worse.** An absent mark is a fact about one turn; a declared-but-unemittable stage makes `stages_seen` permanently short of `stages_expected` on **every** turn, so a consumer cannot tell "this feature has not shipped" from "a stage silently failed". The count that exists to make absence visible becomes noise. Measured 2026-09-19: `llm_first_token` is declared and emitted by nothing, so every full turn reads 7 of 8. The remedy is to emit it or remove it — until then no assertion may expect 8. This row exists because the condition was found in the field, not in design |
 | Engine counters unavailable | The record is emitted without them and is distinguishable from a genuine zero (`UC-07` E1). Counters come from the inference response, so their absence is a property of that response |
 | Two concurrent turns | Records carry distinct `call_id` values and no shared buffer exists between turns; the N=2 assertion tests this rather than assuming it (`UC-07` E2) |
 | Sink unwritable (directory missing, disk full, file locked) | The append raises, the exception is swallowed, the turn proceeds. The trace is lost; the call is not (`BRD-01`) |

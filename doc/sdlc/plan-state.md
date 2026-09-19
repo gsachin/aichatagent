@@ -43,7 +43,28 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | **Implemented, ACs verified** | **8 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36), US-013 (39/39), US-016 (56/56), US-017 (48/48) |
 | **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
 | **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 5/8 |
-| **DoD boxes ticked, all 18 stories** | **30 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass |
+| **DoD boxes ticked, all 18 stories** | **31 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass, 30/147 before the 2026-09-19 module reconciliation |
+
+**Recount as of 2026-09-19** (mechanical, `\[( |x)\]` over each story's DoD
+section): US-001 4/6 · US-002 0/7 · US-003 0/7 · US-004 0/7 · US-005 0/7 ·
+US-006 4/8 · US-007 5/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8 ·
+US-012 4/8 · US-013 2/8 · US-014 0/9 · US-015 0/12 · US-016 3/10 · US-017 4/10 ·
+US-018 0/10.
+
+**The four recurring blockers**, unchanged and none of them a coding task:
+
+1. **LLD test mapping (T-1…Tn)** — unmet in every implemented story. The suites
+   pass, but they are not tagged to the story's own LLD scenario IDs, so a
+   reviewer cannot see T-4 → which test.
+2. **The story-specific load/soak gates** — `US-001`'s 30-minute N=2 soak,
+   `US-006`'s TAC-1/TAC-2/TAC-5, `US-008`'s three consecutive N=2 runs. None has
+   been run as specified. Note the ≥100-sample baseline now exists but every
+   N=2 figure carries the `harness_fault` caveat (`doc/perf/runs/`).
+3. **`BRD-15` rollback** — demonstrated for six stories by
+   `test_brd15_rollback.py` (33/33); still *asserted* rather than demonstrated
+   for the rest.
+4. **Module-doc reconciliation** — `MOD-01`, `MOD-06` and the `US-015`
+   benchmark reconciled 2026-09-19. `MOD-03`, `MOD-07`, `MOD-04` remain.
 
 ### What the Task 3.1 pass closed, and what it found
 
