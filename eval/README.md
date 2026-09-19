@@ -14,6 +14,10 @@ delivered against `US-003` and `TRD-23`.
 > Product Owner verifies those ground truths.** `checks.py` therefore reports those intents as
 > **BLOCKED** — never as a pass, never as a score of zero (`US-003` AC-2, `BRD-08`, `BRD-09`).
 >
+> The decision is now recordable: `eval/signoff_packet.py` prepares the review and writes
+> `PO_APPROVED`. Start with `--summary` to see how the 137 pending cases divide into 40 KB
+> transcriptions you can clear in bulk and the policy decisions that actually need you.
+>
 > Until that sign-off happens, no number produced from this set is adoption-grade.
 
 ## Files
@@ -60,8 +64,8 @@ One JSON object per line, immutable once hashed. `US-003`'s LLD mapping is noted
 | `case_id` | Stable id. `"<intent-slug>-<nnn>"`; the id is an id space, the catalog's row numbering is **not**. |
 | `intent` | The intent **by name**, exactly as `doc/sdlc/09-intent-catalog.md` names it (one of 28). |
 | `critical` | True for the rows the catalog table marks Critical. |
-| `approved_by` | The PO approver. **`null` on every case in this build** — see the warning above. A critical case with `null` blocks rather than scores (`TAC-7`). |
-| `ground_truth_status` | `"verified"` or `"PENDING_PO_SIGNOFF"`. See the policy below. |
+| `approved_by` | The PO approver's name. **`null` on every case in this build** — see the warning above. Only a `PO_APPROVED` case may carry it; a critical case without it blocks rather than scores (`TAC-7`). |
+| `ground_truth_status` | `"verified"`, `"PO_APPROVED"` or `"PENDING_PO_SIGNOFF"`. See the policy below. |
 | `ground_truth_source` | The KB section (`§ <heading>`) or the code/prompt path the expectation comes from. Checked mechanically for `verified` cases. |
 | `split` | `"tuned"` or `"held_out"` — mirrors `heldout.txt`. |
 | `utterances` | The turn chain: `[{"role": "caller"\|"agent", "text": ...}]`. The last entry is always the caller turn being answered; `agent` turns record the conversation state the case is scored in. Single-turn cases have one entry. |
@@ -116,6 +120,37 @@ Everything else is `PENDING_PO_SIGNOFF` — including, deliberately:
 
 `verified` means **"transcribed from the knowledge base and mechanically checkable"**. It does
 **not** mean approved, reviewed, or safe to freeze. Nothing in this directory is approved.
+
+### `PO_APPROVED` — the third status, and why it exists
+
+`verified` deliberately claims no human judgement, so it can never express "a person read this
+and signed it". `PO_APPROVED` is that second thing, and it is the **only** status that may carry
+`approved_by`:
+
+| Status | Provenance | Clears a critical-intent block? |
+|---|---|---|
+| `verified` | mechanical transcription from the knowledge base | **no** — no human judgement is claimed |
+| `PO_APPROVED` | a named person reviewed and signed it | **yes** |
+| `PENDING_PO_SIGNOFF` | not yet decided | no — this is what blocks |
+
+To record a decision use `eval/signoff_packet.py`; do not hand-edit the JSONL:
+
+```powershell
+.venv/Scripts/python.exe eval/signoff_packet.py --summary
+.venv/Scripts/python.exe eval/signoff_packet.py --approve-intent "Fees structure" --by "Your Name"
+```
+
+`--by` is mandatory. An approval with no name on it is not a sign-off, and `checks.py` rejects
+one in either direction: a name on an unapproved case is a fixture error, and `PO_APPROVED`
+with no name is too.
+
+> **Why this matters historically.** `PO_APPROVED` was missing until 2026-09-19, and its absence
+> made DG-03 impossible to close. The schema offered only `verified` (which `checks.py` forbade
+> for the PO sign-off intents) and `PENDING_PO_SIGNOFF` (which is what blocks), while rejecting
+> any non-null `approved_by` — the field the schema defines as *the PO approver*. Every state
+> was therefore either valid-but-blocked or unblocked-but-invalid, and no action a Product Owner
+> could take would open the gate. Five stories sat frozen behind it, including `US-004` and
+> `US-009`, the two largest latency levers in the performance program.
 
 The knowledge base is the only factual source. A drafted ground truth that cannot be pointed at
 a KB section is a guess, and is marked `PENDING` rather than promoted. `checks.py` enforces

@@ -22,10 +22,12 @@ runs with the project venv and no stack:
 
 Two outcomes are deliberately *not* failures
 --------------------------------------------
-* `BLOCKED`  -- a critical case whose ground truth is not approved (`approved_by` is null).
-  The six critical intents the intent catalog marks "PO sign-off required" are all in this
-  state, so every one of them reports BLOCKED. That is the designed behaviour of DG-03, not
-  an error, and it is never reported as a pass and never as a score of zero (US-003 AC-2).
+* `BLOCKED`  -- a critical case whose ground truth is not approved. Until a PO signs a case it
+  sits at `PENDING_PO_SIGNOFF` and its intent reports BLOCKED; once signed it becomes
+  `PO_APPROVED` and the block clears. This is never a pass and never a score of zero
+  (US-003 AC-2). Note that `verified` does NOT clear a block: it records a mechanical
+  transcription from the knowledge base and claims no human judgement, so the two statuses
+  are deliberately not interchangeable.
 * `underpowered` -- an intent with too few cases to support a confidence interval, per
   BRD-09. Its result may not be used to justify adoption.
 
@@ -122,7 +124,23 @@ REQUIRED_KEYS = ("case_id", "intent", "critical", "approved_by", "ground_truth_s
                  "required_facts", "forbidden_claims", "forbidden_patterns", "spoken_format",
                  "tags")
 KINDS = ("answer", "clarify", "escalate", "refuse", "capture-lead")
-STATUSES = ("verified", "PENDING_PO_SIGNOFF")
+#: Three provenances, and keeping them distinct is the point.
+#:
+#:   verified            the ground truth is a mechanical transcription from the
+#:                       knowledge base. No human judgement is claimed.
+#:   PO_APPROVED         a human with authority read the case and signed it. The
+#:                       only status that may carry `approved_by`.
+#:   PENDING_PO_SIGNOFF  not yet decided. Counts toward `unapproved`, so it is
+#:                       what blocks a critical intent.
+#:
+#: `verified` and `PO_APPROVED` are NOT interchangeable, and merging them was a
+#: real defect: the schema previously offered only `verified` (meaning "copied
+#: from the KB") and `PENDING_PO_SIGNOFF` (meaning "not approved"), while the
+#: validator forbade `verified` for exactly the PO-sign-off intents and rejected
+#: any non-null `approved_by`. The result was that no state satisfied both the
+#: validator and the blocker, so DG-03 could not be closed by any action a PO
+#: took -- the gate was built to refuse and nothing was built to open it.
+STATUSES = ("verified", "PENDING_PO_SIGNOFF", "PO_APPROVED")
 SPLITS = ("tuned", "held_out")
 TAGS = ("multi_turn", "noisy_asr", "adversarial", "interruption")
 
@@ -578,12 +596,22 @@ def validate_fixture(cases: Sequence[dict[str, Any]], kb_loose: str,
                 problems.append(f"{cid}: unknown tag {tag!r}")
         if case["critical"] != (case["intent"] in known and case["intent"] in catalog_critical_cache):
             problems.append(f"{cid}: critical flag disagrees with the intent catalog")
-        if case["intent"] in po_signoff and case["ground_truth_status"] != "PENDING_PO_SIGNOFF":
-            problems.append(f"{cid}: {case['intent']} is a PO sign-off intent; its ground truth "
-                            f"cannot be marked {case['ground_truth_status']!r}")
-        if case["critical"] and case.get("approved_by"):
-            problems.append(f"{cid}: approved_by is set ({case['approved_by']!r}) -- this build "
-                            f"must not record an approval it does not have")
+        status = case["ground_truth_status"]
+        if case["intent"] in po_signoff and status not in ("PENDING_PO_SIGNOFF", "PO_APPROVED"):
+            problems.append(
+                f"{cid}: {case['intent']} is a PO sign-off intent; its ground truth must be "
+                f"PENDING_PO_SIGNOFF or PO_APPROVED, not {status!r} ('verified' means a "
+                f"mechanical KB transcription and claims no human judgement)")
+        # The approver field belongs only to a case that is actually approved.
+        # This still refuses a self-declared approval on a pending case, which was
+        # the original intent of this check -- it just no longer refuses the
+        # legitimate approval as well.
+        if case.get("approved_by") and status != "PO_APPROVED":
+            problems.append(f"{cid}: approved_by is set ({case['approved_by']!r}) but the status is "
+                            f"{status!r}; only PO_APPROVED may record an approver")
+        if status == "PO_APPROVED" and not (case.get("approved_by") or "").strip():
+            problems.append(f"{cid}: PO_APPROVED with no approved_by -- an approval with no name "
+                            f"on it is not a sign-off")
         turns = case["utterances"]
         if not turns or turns[-1]["role"] != "caller":
             problems.append(f"{cid}: the last utterance must be the caller's")
@@ -648,14 +676,14 @@ def report_fixture(cases, held, intents, po_signoff, crit_note, kb_problems) -> 
 
     print()
     print("-- per-intent coverage " + "-" * 55)
-    print(f"  {'intent':<38} {'n':>3} {'crit':>4} {'verif':>5} {'pend':>5} {'held':>4} {'CI+-':>6}  flags")
+    print(f"  {'intent':<38} {'n':>3} {'crit':>4} {'appr':>4} {'verif':>5} {'pend':>5} {'held':>4} {'CI+-':>6}  flags")
     cov = coverage(cases)
     underpowered: list[str] = []
     blocked: list[str] = []
     for intent in intents:
         c = cov.get(intent)
         if c is None:
-            print(f"  {intent:<38} {0:>3} {'':>4} {'':>5} {'':>5} {'':>4} {'':>6}  UNCOVERED")
+            print(f"  {intent:<38} {0:>3} {'':>4} {'':>4} {'':>5} {'':>5} {'':>4} {'':>6}  UNCOVERED")
             underpowered.append(intent)
             continue
         half = wilson_halfwidth(c.cases)
@@ -669,6 +697,7 @@ def report_fixture(cases, held, intents, po_signoff, crit_note, kb_problems) -> 
         if not c.critical:
             flags.append("coverage only")
         print(f"  {intent:<38} {c.cases:>3} {'yes' if c.critical else '-':>4} "
+              f"{c.statuses.get('PO_APPROVED', 0):>4} "
               f"{c.statuses.get('verified', 0):>5} {c.statuses.get('PENDING_PO_SIGNOFF', 0):>5} "
               f"{c.splits.get('held_out', 0):>4} {_fmt_pct(half):>6}  {'; '.join(flags)}")
 
@@ -689,10 +718,12 @@ def report_fixture(cases, held, intents, po_signoff, crit_note, kb_problems) -> 
     print()
     print("-- headline " + "-" * 65)
     verified = sum(1 for c in cases if c["ground_truth_status"] == "verified")
-    pending = len(cases) - verified
+    pending = sum(1 for c in cases if c["ground_truth_status"] == "PENDING_PO_SIGNOFF")
+    approved = sum(1 for c in cases if c["ground_truth_status"] == "PO_APPROVED")
     print(f"  cases                 : {len(cases)}")
-    print(f"  ground truth verified : {verified}  (mechanical transcription from the knowledge base)")
-    print(f"  ground truth pending  : {pending}  (NOT approved; nothing here is signed off)")
+    print(f"  PO approved           : {approved}  (a human signed these; carries approved_by)")
+    print(f"  KB verified           : {verified}  (mechanical transcription; no human judgement claimed)")
+    print(f"  pending sign-off      : {pending}  (NOT approved; nothing here is signed off)")
     print(f"  blocked intents       : {len(blocked)} of "
           f"{sum(1 for i in intents if i in set(catalog_critical_cache))} critical")
     print(f"  underpowered intents  : {len(underpowered)} of {len(intents)}")
@@ -856,16 +887,24 @@ def _report_scores(cases, verdicts: Sequence[Verdict], intents: Sequence[str]) -
 
 
 def _write_json(args, cases, held, intents, problems, verdicts) -> None:
+    _, po_signoff, _ = load_catalog()
+    still_blocked = sorted(k for k, v in coverage(cases).items() if _is_blocked(v, po_signoff))
     payload = {
         "golden_set": str(GOLDEN_PATH),
         "sha256": hashlib.sha256(GOLDEN_PATH.read_bytes()).hexdigest(),
-        "frozen": False,
-        "frozen_reason": "critical-intent ground truth is PENDING PO SIGN-OFF (DG-03)",
+        "frozen": not still_blocked,
+        "frozen_reason": ("all critical-intent ground truth is approved"
+                          if not still_blocked else
+                          "critical-intent ground truth is PENDING PO SIGN-OFF (DG-03): "
+                          + ", ".join(still_blocked)),
         "cases_total": len(cases),
         "held_out": len(held),
+        "po_approved": sum(1 for c in cases if c["ground_truth_status"] == "PO_APPROVED"),
         "problems": problems,
         "per_intent": {
-            k: {"cases": v.cases, "critical": v.critical, "verified": v.statuses.get("verified", 0),
+            k: {"cases": v.cases, "critical": v.critical,
+                "po_approved": v.statuses.get("PO_APPROVED", 0),
+                "verified": v.statuses.get("verified", 0),
                 "pending": v.statuses.get("PENDING_PO_SIGNOFF", 0),
                 "ci_half_width_worst_case": round(wilson_halfwidth(v.cases), 4)}
             for k, v in coverage(cases).items()
