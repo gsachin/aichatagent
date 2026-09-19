@@ -440,6 +440,53 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 </Response>"""
 
 
+# US-016: the refusal. A third caller hears a sentence produced ahead of time
+# and the call ends. There is deliberately NO <Connect> here -- no media stream
+# is established, so no session, no history and no KV allocation is created for
+# a call that has no capacity to run in. The carrier has already answered the
+# PSTN leg (an inbound call cannot be declined by the app); the only lever the
+# application has is which TwiML it returns, and this returns the refusal.
+TWIML_BUSY_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+
+# Used only when the pre-synthesised asset is absent. See `_busy_twiml`.
+TWIML_BUSY_SAY_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">{text}</Say>
+    <Hangup/>
+</Response>"""
+
+
+def _busy_twiml(host: str) -> str:
+    """TwiML that plays the busy message and connects nothing.
+
+    The pre-synthesised asset is the path: it is the assistant's own voice,
+    produced ahead of time, and playing it costs this box nothing (US-016
+    AC-3/AC-6). `app/static/` is gitignored, though, so a stack that has not
+    run `scripts/build_call_assets.py` has no asset -- and a refusal that
+    played a missing file would disconnect the caller in silence, which is a
+    worse outcome than the over-capacity call it exists to prevent.
+
+    So the fallback is the carrier's own `<Say>`: a different voice, but words
+    the caller can act on, and still zero cost to this box -- the synthesis
+    happens at Twilio, not here. The boot gate reports the missing asset
+    separately, so the degraded voice is visible rather than silent.
+    """
+    from app.admission import BUSY_ASSET, BUSY_TEXT, asset_available
+
+    if asset_available(BUSY_ASSET):
+        return TWIML_BUSY_TEMPLATE.format(
+            audio_url=f"https://{host}/static/audio/{BUSY_ASSET}")
+    logger.warning(
+        "/twilio: busy asset %s missing -- falling back to carrier <Say>. "
+        "Build it: .venv/Scripts/python.exe scripts/build_call_assets.py", BUSY_ASSET)
+    escaped = (BUSY_TEXT.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return TWIML_BUSY_SAY_TEMPLATE.format(text=escaped)
+
+
 # ── u-law conversion utilities ───────────────────────────────────────
 
 def ulaw_to_pcm(ulaw_bytes: bytes) -> bytes:
@@ -622,6 +669,14 @@ async def websocket_twilio(websocket: WebSocket):
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
                 }
+
+                # US-016: this is the moment a session becomes live, and the
+                # only moment. The admission counter is fed from the real
+                # lifecycle rather than from requests, so a refused call can
+                # never inflate the count it was refused by.
+                from app.admission import REGISTRY
+
+                REGISTRY.register(stream_sid)
                 session.call_id = stream_sid
                 # Mint the conversation id now, while the call is starting. The CRM
                 # needs it here — lookup-or-create is the only endpoint that returns
@@ -799,6 +854,15 @@ async def websocket_twilio(websocket: WebSocket):
             entry = _active_call_sids.pop(stream_sid, None)
             if entry and "ended_at" not in entry:
                 _push_transcript_event("call_ended", stream_sid)
+
+            # US-016: the slot is freed here, on every exit path from the
+            # handler. A refused caller dialling back finds a free slot and is
+            # admitted as a fresh session -- no state from the refusal is
+            # carried into it, because a refused call never had any.
+            if stream_sid:
+                from app.admission import REGISTRY
+
+                REGISTRY.release(stream_sid)
         # Close the session and recover its id before the registry drops it —
         # the post-call handler needs it to write the conversation.
         from app.crm import session as crm_session
@@ -1196,7 +1260,22 @@ async def twilio_voice_webhook(From: str = Query("")):
     `Form` would silently never bind. It is threaded into the TwiML as a
     `<Parameter>` because the media stream itself never carries it.
     """
+    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+
     host = _resolve_tunnel_host()
+
+    # US-016: the admission decision, taken from the live session count at the
+    # carrier-facing endpoint (TAC-1). Refusing here rather than at the media
+    # stream means a caller with no capacity to run in is not first walked
+    # through the IVR -- they hear the busy message immediately.
+    if admission_enabled():
+        d = REGISTRY.decide(call_sid=From or "")
+        if not d.admitted:
+            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            logger.info("/twilio/voice: REFUSED (outcome=refused, live=%d, limit=%d)",
+                        d.live, d.limit)
+            return Response(content=_busy_twiml(host), media_type="application/xml")
+
     twiml = TWIML_IVR_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
     logger.info(f"/twilio/voice: serving IVR menu with host={host}, caller={'set' if From else 'unknown'}")
     return Response(content=twiml, media_type="application/xml")
@@ -1212,7 +1291,23 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query("")):
     so `From` is still present here — which is why it is declared again rather
     than carried in a session.
     """
+    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+
     host = _resolve_tunnel_host()
+
+    # US-016: the binding decision. This endpoint is where <Connect><Stream>
+    # would go out, so it is the last point at which a call can be refused
+    # before a session exists. The check at /twilio/voice spares a caller the
+    # IVR; this one is what actually guarantees no session is created, because
+    # a line can fill while a caller is still pressing a digit.
+    if admission_enabled():
+        d = REGISTRY.decide(call_sid=From or "")
+        if not d.admitted:
+            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            logger.info("/twilio/voice/connect: REFUSED (outcome=refused, live=%d, limit=%d)",
+                        d.live, d.limit)
+            return Response(content=_busy_twiml(host), media_type="application/xml")
+
     logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}, caller={'set' if From else 'unknown'}")
     twiml = TWIML_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
     return Response(content=twiml, media_type="application/xml")

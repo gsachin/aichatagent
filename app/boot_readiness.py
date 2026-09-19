@@ -402,6 +402,22 @@ def assess(do_warm: bool = True) -> Readiness:
             "config keys with no reader: "
             + ", ".join(r.config["without_reader"][:8]))
 
+    # US-016 AC-3: the pre-synthesised call assets are the assistant's own
+    # voice, recorded once. If KOKORO_VOICE or KOKORO_SPEED changed afterwards,
+    # a caller would hear the recorded voice differ from the one answering
+    # them -- a third caller on the busy line, or anyone at all when the engine
+    # is lost. Reported here, before anyone is on the line, rather than
+    # discovered mid-call. Non-blocking: the stack works, two sentences are
+    # stale, and the fix is one command.
+    try:
+        from app.admission import asset_drift
+
+        drift = asset_drift()
+        if drift:
+            r.degraded.append(f"call assets: {drift}")
+    except Exception as exc:                          # noqa: BLE001
+        r.degraded.append(f"call assets: check failed ({type(exc).__name__}: {exc})")
+
     r.ready = all(r.clauses.values())
     return r
 

@@ -228,6 +228,60 @@ def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
 # ── Standalone helper for main.py greeting ────────────────────────────
 
 
+def _turn_outcome(chunks: list[bytes]) -> list[bytes]:
+    """Record a turn on the four-outcome axis, then pass the audio through.
+
+    US-016 AC-2: `served`, `degraded`, `failed` and `refused` are four different
+    things and are never collapsed. `degraded` is recorded where the fixed
+    response is played, `refused` where a call is turned away at admission, and
+    this covers the other two -- a turn that produced speech, and a turn that
+    produced none.
+    """
+    from app.admission import REGISTRY
+
+    if chunks:
+        REGISTRY.note_served()
+    else:
+        REGISTRY.note_failed()
+    return chunks
+
+
+def load_call_asset_ulaw(name: str) -> list[bytes] | None:
+    """Read a pre-synthesised call asset as µ-law chunks. No model, no synthesis.
+
+    US-016 AC-5: the fixed response and the busy message are the two sentences
+    a caller hears when the machinery is not available to say anything else.
+    Both are read from disk here -- this function touches no engine and no
+    synthesiser, which is precisely why it still works when one or both are
+    gone. Returns None if the asset is missing, and the caller decides what to
+    do rather than being handed silence.
+    """
+    from app.admission import asset_path
+
+    path = asset_path(name)
+    if not path.is_file():
+        return None
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                logger.warning("call asset %s is not mono 16-bit PCM", name)
+                return None
+            rate = w.getframerate()
+            pcm = w.readframes(w.getnframes())
+        if rate != 8000:
+            # Built at carrier rate, so this is a guard rather than a path.
+            logger.warning("call asset %s is %d Hz, expected 8000", name, rate)
+            return None
+    except Exception:
+        logger.exception("call asset %s could not be read", name)
+        return None
+
+    chunk = 320  # 20 ms at 8 kHz, the Media Streams frame size
+    return [pcm_to_ulaw(pcm[i:i + chunk]) for i in range(0, len(pcm), chunk)]
+
+
 def generate_ulaw_greeting(text: str) -> list[bytes]:
     """
     Quick TTS → µ-law chunker for use in WebSocket start handlers.
@@ -235,7 +289,7 @@ def generate_ulaw_greeting(text: str) -> list[bytes]:
     Returns a list of µ-law byte chunks ready for Twilio Media Streams.
     """
     kokoro = _get_tts_engine()
-    audio, sr = kokoro.create(text, voice="af_heart", speed=1.0)
+    audio, sr = kokoro.create(text, voice=_tts_voice(), speed=_tts_speed())
     from scipy.signal import resample
 
     target_len = int(len(audio) * 8000 / 24000)
@@ -570,7 +624,7 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
         logger.info(f"VoiceCall: transcript = \"{transcript[:120]}\"")
 
@@ -590,7 +644,7 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
         # Real speech decoded — reset the noise streak.
         self._noise_streak = 0
@@ -605,15 +659,23 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, True
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, True
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, True
 
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         self.log_event("LLM_STARTED")
         answer = await self._query_llm(transcript)
         self.log_event("LLM_COMPLETED", chars=len(answer or ""))
         if not answer:
-            # Return transcript even if LLM fails — still useful for logging
+            # US-016 AC-5: the engine returned nothing. This used to return []
+            # -- silence on a live line. The caller now hears the fixed
+            # response, played from the asset set, so the turn ends in a
+            # sentence rather than in nothing. The record names it as a
+            # degraded turn, which is a different outcome from served, failed
+            # and refused and is never collapsed into any of them.
             dialogue = f"Caller: {transcript}\nAssistant: (no response)"
+            chunks = self._speak_fixed_response(reason="empty generation")
+            if chunks:
+                return chunks, dialogue, False
             return [], dialogue, False
 
         # ── Step 3b: D1 output boundary — strip leaked reasoning/meta
@@ -635,10 +697,17 @@ class VoiceCallSession:
         # ── Step 4: Kokoro TTS → PCM ──────────────────────────────
         tts_pcm = await self._synthesise(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
+            # US-016 AC-5, second branch: the synthesiser is the thing that
+            # failed. The fixed response needs no synthesiser, so the caller
+            # still hears a sentence rather than the tail of a dead turn.
+            dialogue = f"Caller: {transcript}\nAssistant: {answer}"
+            chunks = self._speak_fixed_response(reason="synthesis failed")
+            if chunks:
+                return chunks, dialogue, False
             return [], dialogue, False  # Transcript saved even if TTS fails
 
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
-        return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+        return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
     # ── Domain dictionary for phone audio corrections ──────────────
 
@@ -894,6 +963,43 @@ class VoiceCallSession:
         except Exception:
             logger.exception("VoiceCall: TTS failed")
             return None
+
+    def _speak_fixed_response(self, reason: str) -> list[bytes]:
+        """Return the pre-synthesised fixed response as µ-law chunks.
+
+        US-016 / BRD-13: a lost inference engine must end in a deterministic
+        fixed response rather than silence. "Deterministic" is literal -- the
+        bytes come off disk, so the same failure on two turns in two calls
+        produces byte-identical audio, and no model generated any part of it.
+
+        Nothing is synthesised here. That is why this still works when the
+        synthesiser is down at the same time as the engine, which is the case
+        AC-5 calls out explicitly.
+
+        Returns [] when no asset applies, and the caller then terminates the
+        turn cleanly rather than hanging in silence.
+        """
+        from app.admission import FIXED_RESPONSE_ASSET, REGISTRY
+
+        chunks = load_call_asset_ulaw(FIXED_RESPONSE_ASSET)
+        if not chunks:
+            logger.error(
+                "VoiceCall: fixed response unavailable (%s) and no asset to play. "
+                "Build the call assets: .venv/Scripts/python.exe "
+                "scripts/build_call_assets.py", reason)
+            # No asset applies, so this turn is a genuine failure rather than a
+            # degraded one. The caller's turn terminates cleanly and the record
+            # says which of the two it was.
+            REGISTRY.note_failed()
+            return []
+        REGISTRY.note_asset_played(FIXED_RESPONSE_ASSET, call_sid=self.call_id)
+        self.log_event("FIXED_RESPONSE", reason=reason, chunks=len(chunks))
+        if self._trace is not None:
+            # A degraded turn is its own outcome. It is not a failure: the
+            # caller heard a sentence and the call continued.
+            self._trace.note(outcome="degraded", degraded_reason=reason,
+                             fixed_response_played=True)
+        return chunks
 
     def _pcm_to_ulaw_chunks(self, audio: np.ndarray) -> list[bytes]:
         """
