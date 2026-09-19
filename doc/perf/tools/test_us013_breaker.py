@@ -190,6 +190,46 @@ def ac3_single_flight() -> None:
           m._breaker["probes"] == 1, f"probes={m._breaker['probes']}")
 
 
+# ───────────────────── BRD-15: the revert is a setting ─────────────────────
+
+def breaker_mode_contract() -> None:
+    print("\n-- BRD-15  the revert is a setting, not a reconstruction")
+
+    import app.rag as rag
+
+    original = os.environ.get("RAG_BREAKER_MODE")
+    cooldown = float(os.environ.get("RAG_MCP_COOLDOWN", "30"))
+    try:
+        os.environ.pop("RAG_BREAKER_MODE", None)
+        check("BRD-15  the shipped default is 'probe'", m.breaker_mode() == "probe")
+
+        reset()
+        force_open(age_s=cooldown + 1)
+        check("BRD-15  shipped: an elapsed cooldown is half-open", m.breaker_state() == "half_open")
+
+        os.environ["RAG_BREAKER_MODE"] = "flat"
+        reset()
+        force_open(age_s=cooldown + 1)
+        check("BRD-15  flat: an elapsed cooldown reads as closed -- the old defect",
+              m.breaker_state() == "closed")
+        check("BRD-15  flat: no probe slot exists to claim", m.claim_probe() is False)
+        check("BRD-15  flat: every caller is admitted, at the full timeout",
+              all(rag._use_mcp() for _ in range(5)))
+
+        os.environ["RAG_BREAKER_MODE"] = "not-a-mode"
+        check("BRD-15  an unrecognised mode falls back to 'probe', not to flat",
+              m.breaker_mode() == "probe",
+              "the caller-safe direction: a typo must not silently remove the probe")
+    finally:
+        if original is None:
+            os.environ.pop("RAG_BREAKER_MODE", None)
+        else:
+            os.environ["RAG_BREAKER_MODE"] = original
+        reset()
+
+    check("BRD-15  restored: 'probe' is in force", m.breaker_mode() == "probe")
+
+
 # ───────────────────── AC-4: the rung is recorded ─────────────────────
 
 def ac4_recording() -> None:
@@ -280,6 +320,7 @@ def main() -> int:
     ac3_single_flight()
     ac4_recording()
     lld_record()
+    breaker_mode_contract()
     reset()
 
     print()

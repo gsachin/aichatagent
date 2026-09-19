@@ -104,53 +104,58 @@ def us012() -> None:
 # ───────────────────────── US-013 ─────────────────────────
 
 def us013() -> None:
-    banner("US-013  half-open probe", "the three-state breaker")
+    banner("US-013  half-open probe", "RAG_BREAKER_MODE")
+    import app.rag as rag
     import app.rag_mcp as m
 
-    original_claim = m.claim_probe
-    original_state = m.breaker_state
-    try:
+    original = os.environ.get("RAG_BREAKER_MODE")
+    cooldown = float(os.environ.get("RAG_MCP_COOLDOWN", "30"))
+
+    def trip_past_cooldown() -> None:
         m._breaker.update({"failed_at": None, "last_error": None, "probing": False,
                            "probe_claimed_at": None, "opens": 0, "probes": 0})
-        cooldown = float(os.environ.get("RAG_MCP_COOLDOWN", "30"))
-
-        # Shipped state: after the cooldown, ONE probe at a fraction of the budget.
         m._record_failure("service down")
         m._breaker["failed_at"] = time.monotonic() - cooldown - 1
+
+    try:
+        os.environ.pop("RAG_BREAKER_MODE", None)
+
+        # Shipped: after the cooldown, ONE probe at a fraction of the budget.
+        trip_past_cooldown()
+        check("US-013  shipped: the mode is 'probe'", m.breaker_mode() == "probe")
         check("US-013  shipped: the circuit goes half-open after the cooldown",
               m.breaker_state() == "half_open")
         probe_read = m._timeout(probe=True).read
         full_read = m._timeout(probe=False).read
         check("US-013  shipped: the probe costs a fraction of the serving budget",
               probe_read < full_read, f"{probe_read}s vs {full_read}s")
+        check("US-013  shipped: exactly one caller is admitted to the probe",
+              sum(rag._use_mcp() for _ in range(6)) == 1)
 
-        # REVERT: the pre-US-013 breaker had two states and no probe. With the
-        # old logic, an elapsed cooldown meant mcp_available() -> True, so the
-        # next caller sent a FULL-timeout request to a service still down.
-        def flat_breaker_state() -> str:
-            return "closed" if m._breaker["failed_at"] is None else "open"
-
-        def flat_available() -> bool:
-            if m._breaker["failed_at"] is None:
-                return True
-            return (time.monotonic() - m._breaker["failed_at"]) >= cooldown
-
-        m.breaker_state = flat_breaker_state
-        m._breaker["failed_at"] = time.monotonic() - cooldown - 1
+        # REVERT -- one setting, and the old behaviour is genuinely back.
+        os.environ["RAG_BREAKER_MODE"] = "flat"
+        trip_past_cooldown()
+        check("US-013  reverted: the mode is 'flat'", m.breaker_mode() == "flat")
         check("US-013  reverted: the state machine has two states, no half-open",
-              m.breaker_state() == "open")
-        check("US-013  reverted: an elapsed cooldown retries the dead service blind",
-              flat_available() is True,
-              "the caller pays the FULL timeout again, every window")
-        check("US-013  reverted: no probe exists, so no reduced-cost path",
-              not hasattr(m, "_probe_was_used")) and flat_available() is True
+              m.breaker_state() == "closed",
+              "an elapsed cooldown reads as closed, so the primary is attempted again")
+        check("US-013  reverted: EVERY caller is admitted, not one -- there is no probe",
+              all(rag._use_mcp() for _ in range(6)))
+        check("US-013  reverted: and they are admitted at the FULL read timeout, blind",
+              m.claim_probe() is False and m._timeout(probe=False).read == full_read,
+              "the dead service is retried at full cost, every cooldown window")
+        check("US-013  reverted: the probe counter stays at zero",
+              m._breaker["probes"] == 0)
     finally:
-        m.breaker_state = original_state
-        m.claim_probe = original_claim
+        if original is None:
+            os.environ.pop("RAG_BREAKER_MODE", None)
+        else:
+            os.environ["RAG_BREAKER_MODE"] = original
         m._breaker.update({"failed_at": None, "last_error": None, "probing": False,
                            "probe_claimed_at": None, "opens": 0, "probes": 0})
 
-    check("US-013  restored: the shipped breaker is three-state",
+    check("US-013  restored: the shipped mode is 'probe'", m.breaker_mode() == "probe")
+    check("US-013  restored: the breaker is three-state again",
           m.breaker_state() == "closed")
 
 

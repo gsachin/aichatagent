@@ -360,14 +360,42 @@ def _clear_failure() -> None:
     _breaker["probe_claimed_at"] = None
 
 
+def breaker_mode() -> str:
+    """`probe` (shipped) or `flat` (the pre-US-013 behaviour).
+
+    US-013's revert is a SETTING, not a code change (`BRD-15`). The first
+    version of the rollback demonstration reconstructed the old two-state logic
+    by hand, which proved the arithmetic of the defect but was my reconstruction
+    rather than the code — a weaker claim than the five stories whose reverts
+    are genuine setting flips. `RAG_BREAKER_MODE=flat` puts the old behaviour
+    back for real.
+
+    Read per call, like the cooldown, so the flip takes effect without an import
+    and a restart.
+
+      probe  closed / open / half_open — one cheap probe per cooldown window
+      flat   closed / open           — an elapsed cooldown serves the primary
+                                       again at the FULL timeout, blind
+    """
+    return "flat" if os.environ.get("RAG_BREAKER_MODE", "probe").strip().lower() == "flat" \
+        else "probe"
+
+
 def breaker_state() -> str:
-    """`closed`, `open` or `half_open` (US-013 AC-2)."""
+    """`closed`, `open` or `half_open` (US-013 AC-2).
+
+    In `flat` mode `half_open` is never returned: the cooldown elapsing reads as
+    `closed`, so the next caller is admitted to the primary at the full timeout.
+    That is precisely the defect US-013 removed, and it is reachable again by
+    configuration rather than by editing code.
+    """
     if _breaker["failed_at"] is None:
         return "closed"
     cooldown = float(_env("RAG_MCP_COOLDOWN", "30"))
-    if (time.monotonic() - _breaker["failed_at"]) < cooldown:
-        return "open"
-    return "half_open"
+    elapsed = (time.monotonic() - _breaker["failed_at"]) >= cooldown
+    if breaker_mode() == "flat":
+        return "closed" if elapsed else "open"
+    return "half_open" if elapsed else "open"
 
 
 def _probe_in_flight() -> bool:
@@ -401,6 +429,9 @@ def claim_probe() -> bool:
     recovered-or-not service produce one probe and one local-rung answer, not
     two probes competing for the same dead service.
     """
+    # There is no probe in `flat` mode -- that is what the mode removes.
+    if breaker_mode() != "probe":
+        return False
     if breaker_state() != "half_open" or _probe_in_flight():
         return False
     _breaker["probing"] = True
@@ -429,6 +460,7 @@ def mcp_rag_status() -> dict:
         "last_error": _breaker["last_error"],
         "cooldown_active": breaker_state() == "open",
         "breaker_state": breaker_state(),
+        "breaker_mode": breaker_mode(),
         "breaker_opens": _breaker["opens"],
         "breaker_probes": _breaker["probes"],
         "probe_read_timeout_s": round(_timeout(probe=True).read, 3),

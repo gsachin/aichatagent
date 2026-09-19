@@ -2465,16 +2465,41 @@ async def drive_background_units(ws_url: str, count: int, *, start_delay_s: floa
                      "call pair; the app classifies them as background"}
 
 
-async def _policy_snapshot(http_base: str) -> dict:
-    """The app's own admission/priority records, or an empty dict."""
-    try:
-        return await _http_get_json(f"{http_base}/api/perf/policy")
-    except Exception:                                 # noqa: BLE001
-        return {}
+async def _policy_snapshot(http_base: str, attempts: int = 3) -> dict:
+    """The app's own admission/priority records, or an empty dict.
+
+    Retried, because this read happens while the app is under the load the run
+    just applied — a saturated app is exactly when a single read fails, which is
+    exactly when the records matter. The caller still refuses to compute a delta
+    from an empty snapshot; the retry just makes that refusal rare.
+    """
+    for i in range(max(1, attempts)):
+        try:
+            snap = await _http_get_json(f"{http_base}/api/perf/policy")
+            if snap:
+                return snap
+        except Exception:                             # noqa: BLE001
+            pass
+        if i + 1 < attempts:
+            await asyncio.sleep(1.5 * (i + 1))
+    return {}
 
 
 def _policy_delta(before: dict, after: dict) -> dict:
     """What the window added, from the app's records rather than from guesses."""
+    # A delta needs BOTH ends. With an empty `after`, every subtraction becomes
+    # `0 - before`: a negative count that looks like a measurement and gets
+    # rendered as a FAIL. That happened on the first full-length N=3 window --
+    # two verdicts failed on a read that never returned, and nothing in the
+    # output said the numbers were missing rather than small. Refusing to
+    # compute is the only honest answer.
+    if not before or not after:
+        missing = "before the window" if not before else "after the window"
+        return {"computed": False,
+                "reason": f"the app's records could not be read {missing}; "
+                          f"no delta is reported (0 minus a real count is a negative "
+                          f"number, not a measurement)"}
+
     def dig(d, *path, default=0):
         cur: Any = d
         for key in path:
@@ -2484,6 +2509,7 @@ def _policy_delta(before: dict, after: dict) -> dict:
         return cur if cur is not None else default
 
     return {
+        "computed": True,
         "refusals": dig(after, "admission", "outcomes", "refused")
         - dig(before, "admission", "outcomes", "refused"),
         # The DECISION count, not the turn outcome `served`. A call is admitted
@@ -2521,7 +2547,8 @@ def _print_extra_load(summary: "RunSummary") -> None:
         return
     print("\n-- extra load (US-016 / US-017) -------------------------------")
     for name, v in verdicts.items():
-        print(f"  [{'HOLDS' if v.get('holds') else 'FAILS'}] {name}")
+        mark = "HOLDS" if v.get("holds") else ("?????" if v.get("holds") is None else "FAILS")
+        print(f"  [{mark}] {name}")
         print(f"           {v.get('detail')}")
 
 
@@ -2537,6 +2564,21 @@ def extra_load_verdicts(extra_load: dict, sessions: int) -> dict:
     rec = extra_load.get("app_records") or {}
     out: dict[str, Any] = {}
 
+    # Every verdict below except the probe's own live samples reads the app's
+    # records. If that read failed, they are INDETERMINATE -- `holds: None`,
+    # not False. Reporting a failed read as a failed invariant is how a harness
+    # manufactures defects, and it is worse than reporting nothing.
+    if (probes or bg) and not rec.get("computed", False):
+        reason = rec.get("reason", "the app's records were not readable")
+        for key in ("US-016 TAC-1 zero new sessions from a refusal",
+                    "US-016 AC-6 no engine or synthesis call per refusal",
+                    "US-016 AC-3 every refusal played the prepared asset",
+                    "US-017 TAC-2 zero background starts during a voice turn",
+                    "US-017 TAC-3 background concurrency never exceeds one",
+                    "US-017 TAC-6 deferral is recorded, not silent",
+                    "US-017 TAC-1 classification is total"):
+            out[key] = {"holds": None, "detail": f"INDETERMINATE - {reason}"}
+
     if probes:
         observed = probes.get("outcomes", {})
         refused = observed.get("refused", 0)
@@ -2546,7 +2588,10 @@ def extra_load_verdicts(extra_load: dict, sessions: int) -> dict:
             "detail": f"{refused} refusal(s) for {asked} call(s) made at capacity",
         }
         peak = probes.get("max_live_sessions_at_probe")
-        out["US-016 TAC-1 zero new sessions from a refusal"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-016 TAC-1 zero new sessions from a refusal"] = {
             "holds": peak is not None and peak == sessions,
             "detail": (f"peak live sessions while the third call was being refused: "
                        f"{peak} (the {sessions} driven). A refusal that created a "
@@ -2554,27 +2599,42 @@ def extra_load_verdicts(extra_load: dict, sessions: int) -> dict:
                        if peak is not None else
                        "no live-session sample was taken; the check cannot be judged"),
         }
-        out["US-016 AC-6 no engine or synthesis call per refusal"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-016 AC-6 no engine or synthesis call per refusal"] = {
             "holds": (rec.get("bg_units", 0) == 0),
             "detail": "a refusal creates no work for the model; the busy asset is read "
                       "from disk",
         }
-        out["US-016 AC-3 every refusal played the prepared asset"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-016 AC-3 every refusal played the prepared asset"] = {
             "holds": rec.get("asset_plays", 0) >= refused,
             "detail": f"{rec.get('asset_plays', 0)} asset play(s) for {refused} refusal(s)",
         }
 
     if bg:
-        out["US-017 TAC-2 zero background starts during a voice turn"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-017 TAC-2 zero background starts during a voice turn"] = {
             "holds": rec.get("bg_started_during_voice", 0) == 0,
             "detail": f"{rec.get('bg_started_during_voice', 0)} violation(s), "
                       f"{rec.get('voice_turns', 0)} voice turn(s) in the window",
         }
-        out["US-017 TAC-3 background concurrency never exceeds one"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-017 TAC-3 background concurrency never exceeds one"] = {
             "holds": rec.get("bg_max_concurrent", 0) <= 1,
             "detail": f"peak background concurrency {rec.get('bg_max_concurrent', 0)}",
         }
-        out["US-017 TAC-6 deferral is recorded, not silent"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-017 TAC-6 deferral is recorded, not silent"] = {
             "holds": (rec.get("bg_deferrals", 0) + rec.get("bg_refusals", 0)
                       + bg.get("answered", 0)) >= bg.get("submitted", 0),
             "detail": f"{bg.get('submitted', 0)} submitted, "
@@ -2582,7 +2642,10 @@ def extra_load_verdicts(extra_load: dict, sessions: int) -> dict:
                       f"{rec.get('bg_refusals', 0)} refused, "
                       f"{bg.get('answered', 0)} answered",
         }
-        out["US-017 TAC-1 classification is total"] = {
+        if (probes or bg) and not rec.get("computed", False):
+            pass
+        else:
+            out["US-017 TAC-1 classification is total"] = {
             "holds": rec.get("classification_defects", 0) == 0,
             "detail": f"{rec.get('classification_defects', 0)} unclassified unit(s)",
         }
@@ -3218,7 +3281,7 @@ def _st_extra_load_verdicts() -> dict[str, Any]:
         "admission_probes": {"probes": 3, "outcomes": {"refused": 3},
                              "max_live_sessions_at_probe": 2},
         "background_units": {"submitted": 4, "answered": 4},
-        "app_records": {"live_sessions_after": 2, "asset_plays": 3,
+        "app_records": {"computed": True, "live_sessions_after": 2, "asset_plays": 3,
                         "bg_started_during_voice": 0, "bg_max_concurrent": 1,
                         "bg_deferrals": 3, "bg_refusals": 0, "voice_turns": 20,
                         "classification_defects": 0},
@@ -3227,7 +3290,7 @@ def _st_extra_load_verdicts() -> dict[str, Any]:
         "admission_probes": {"probes": 3, "outcomes": {"refused": 1},
                              "max_live_sessions_at_probe": 3},
         "background_units": {"submitted": 4, "answered": 4},
-        "app_records": {"live_sessions_after": 3, "asset_plays": 3,
+        "app_records": {"computed": True, "live_sessions_after": 3, "asset_plays": 3,
                         "bg_started_during_voice": 2, "bg_max_concurrent": 3,
                         "bg_deferrals": 0, "bg_refusals": 0, "voice_turns": 20,
                         "classification_defects": 1},
@@ -3242,6 +3305,14 @@ def _st_extra_load_verdicts() -> dict[str, Any]:
         "bad_window_fails_the_concurrency_ceiling": not b["US-017 TAC-3 background concurrency never exceeds one"]["holds"],
         "bad_window_fails_classification": not b["US-017 TAC-1 classification is total"]["holds"],
         "no_extra_load_means_no_verdicts": extra_load_verdicts({}, 2) == {},
+        # The probe's OWN verdict stays determinate -- it is read from the
+        # TwiML the app returned, not from the records. The ones that need the
+        # records go indeterminate rather than false.
+        "a_failed_read_is_indeterminate_not_a_failure": all(
+            v["holds"] is None for k, v in extra_load_verdicts(
+                {"admission_probes": {"probes": 2, "outcomes": {"refused": 2}},
+                 "app_records": {"computed": False, "reason": "no read"}}, 2).items()
+            if "one refusal per third call" not in k),
     }
     got["passed"] = all(bool(v) for v in got.values())
     return got
