@@ -82,7 +82,7 @@ Technical acceptance criteria [Lens: TPO] — performance, security, resilience 
 
 ## HLD — Architecture Slice [Lens: Architect]
 
-The pre-warm exists and runs (`start_services.ps1:659–702`, Step 6: enumerate `/api/tags`, POST a one-token `/api/generate` with `keep_alive=24h`). It is **neutralised on the serving path**: `_chat_ollama` (`llm_backend.py:135–146`) passes only `num_ctx` and `temperature`, and Ollama resets a model's keep-alive to the server default on any request that omits it. `OLLAMA_KEEP_ALIVE` is set nowhere in `.env` and read nowhere in `app/`. So residency is protected at boot and unprotected for the rest of the process's life — which is exactly the window the 32,919 ms measurement lives in.
+The pre-warm exists and runs (`start_services.ps1:659–702`, Step 6: enumerate `/api/tags`, POST a one-token `/api/generate` with `keep_alive=24h`). It is **neutralised on the serving path**: `_chat_ollama` (`llm_backend.py:185`) passes only `num_ctx` and `temperature`, and Ollama resets a model's keep-alive to the server default on any request that omits it. `OLLAMA_KEEP_ALIVE` is set nowhere in `.env` and read nowhere in `app/`. So residency is protected at boot and unprotected for the rest of the process's life — which is exactly the window the 32,919 ms measurement lives in.
 
 ```mermaid
 flowchart LR
