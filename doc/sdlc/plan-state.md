@@ -40,10 +40,20 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | | Count | Means |
 |---|---|---|
 | **Written** | **18 / 18** | The planning artifact exists, is self-contained, and validates (`752/0`) |
-| **Implemented, ACs verified** | **8 / 18** | A named acceptance suite passes: US-001 (17/17), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36), US-013 (39/39), US-016 (56/56), US-017 (48/48) |
+| **Implemented — acceptance suite passes** | **8 / 18** | A named suite passes, **measured 2026-09-19**: US-001 (24/24), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36 +1 skip), US-013 (46/46), US-016 (56/56), US-017 (53/53). 333 checks, all exit 0 |
+| **…and every AC/TAC traced** | **0 / 8** | **None.** All eight leave criteria cited by no test — see the traceability row below. "Suite passes" and "ACs verified" are different claims and this register previously ran them together |
 | **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
 | **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 6/8 |
 | **DoD boxes ticked, all 18 stories** | **34 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass, 30/147 before the 2026-09-19 module reconciliation |
+| **AC/TAC traceability** | **42 AC · 106 TAC untraced** | `test_ac_traceability.py`, 2026-09-19. Of 83 ACs and 155 TACs declared, those are cited by no test. **The gate FAILS** — that is the honest state, not a defect in the gate |
+
+**Two counts that were stale and are now measured rather than copied.** The
+register previously recorded US-001 at 17/17, US-013 at 39/39, US-017 at 48/48
+and `test_brd15_rollback.py` at 33/33 — all four were re-run and are 24/24,
+46/46, 53/53 and 38/38. Note US-017's *story* line always said 53/53; it was
+this register that was wrong. Five story status lines carried the same kind of
+drift and were corrected on 2026-09-19; three of those were introduced the same
+day by ticking boxes without updating the line that quotes the count.
 
 **Recount as of 2026-09-19** (mechanical, `\[( |x)\]` over each story's DoD
 section): US-001 4/6 · US-002 0/7 · US-003 0/7 · US-004 0/7 · US-005 0/7 ·
@@ -51,18 +61,27 @@ US-006 5/8 · US-007 6/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8
 US-012 5/8 · US-013 2/8 · US-014 0/9 · US-015 0/12 · US-016 3/10 · US-017 4/10 ·
 US-018 0/10.
 
-**The four recurring blockers**, unchanged and none of them a coding task:
+**The four recurring blockers**, none of them a coding task. One of them changed shape on
+2026-09-19 (blocker 1 is now a gate rather than a chore), and the list is otherwise unchanged:
 
-1. **LLD test mapping (T-1…Tn)** — `US-001` mapped 2026-09-19; US-002/003/006/007
-   remain. The mapping is not paperwork: doing US-001's found that nine of its
-   checks wore a `T-n` belonging to a **different scenario**, so `T-10` and
-   `T-11` read as covered while nothing tests them.
+1. **Requirement traceability (T-n, AC-n, TAC-n)** — now **mechanised**:
+   `test_ac_traceability.py` fails when a story claiming delivery leaves a
+   criterion cited by no test, and it currently **fails on all eight
+   IMPLEMENTED stories**. 42 ACs, 106 TACs and 318 of 348 LLD scenarios are
+   cited by nothing. Doing `US-001`'s mapping by hand first showed why this
+   needed a tool: nine of its checks wore a `T-n` belonging to a **different
+   scenario**, so `T-10` and `T-11` read as covered while nothing tests them.
+
+   An untraced id has two causes needing different fixes — **untested** (write a
+   test; `US-006`'s TAC-1/2/5/8, the load gates never run) and **untagged** (tag
+   the test; `US-006`'s AC-1..4, exercised under `TAC-n` names). Both fail the
+   DoD; the tool says which ids, a human says which cause.
 2. **The story-specific load/soak gates** — `US-001`'s 30-minute N=2 soak,
    `US-006`'s TAC-1/TAC-2/TAC-5, `US-008`'s three consecutive N=2 runs. None has
    been run as specified. Note the ≥100-sample baseline now exists but every
    N=2 figure carries the `harness_fault` caveat (`doc/perf/runs/`).
 3. **`BRD-15` rollback** — demonstrated for six stories by
-   `test_brd15_rollback.py` (33/33); still *asserted* rather than demonstrated
+   `test_brd15_rollback.py` (38/38); still *asserted* rather than demonstrated
    for the rest.
 4. **Module-doc reconciliation** — `MOD-01`, `MOD-03`, `MOD-06`, `MOD-07` and
    the `US-015` benchmark reconciled 2026-09-19. **`MOD-04` closed too** (US-012
@@ -90,7 +109,7 @@ not in the thing itself.
 
 ### `BRD-15` — demonstrated, not asserted
 
-`doc/perf/tools/test_brd15_rollback.py` (33/33) reverts six stories and watches
+`doc/perf/tools/test_brd15_rollback.py` (38/38) reverts six stories and watches
 the prior behaviour return: US-012, US-013, US-016, US-017, US-006, US-011. The
 program's audit had found the same gap in every story — each *asserted* its
 change was revertible and none had been demonstrated by reverting it.
