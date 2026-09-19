@@ -290,6 +290,12 @@ async def post_call_handler(transcript: str, phone_number: str = "") -> bool:
         return False
 
 
+def _bg_priority_enabled() -> bool:
+    """US-017 AC-5: the policy is reversed by one setting, not a code change."""
+    return os.environ.get("BG_PRIORITY_ENABLED", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
 def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
@@ -297,9 +303,27 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
 
     mode: "voice" (default, phone calls) or "chat" (text UIs — Markdown
     SYSTEM_PROMPT, same style as the Streamlit chat).
+
+    US-017 / BRD-20: `mode` already distinguished the two callers, so it is
+    also the admission key. A voice turn holds the gate open for its whole
+    duration; a background unit waits for the line to be clear and runs at most
+    one at a time. `BRD-20`'s operating scenario is two voice callers plus one
+    background request, and this is the single point where that ordering is
+    decided.
     """
     from app.rag import query_rag
-    return query_rag(user_text, mode=mode)
+    if not _bg_priority_enabled():
+        return query_rag(user_text, mode=mode)
+
+    from app.work_priority import classify, GATE, VOICE
+
+    work_class, defect = classify(mode)
+    if work_class == VOICE:
+        label = "voice" if defect is None else f"unclassified:{mode}"
+        with GATE.voice_turn(label=label):
+            return query_rag(user_text, mode=mode)
+    with GATE.background_unit(label="background", mode=mode):
+        return query_rag(user_text, mode=mode)
 
 
 async def test_pipeline_with_text(user_text: str) -> str | None:

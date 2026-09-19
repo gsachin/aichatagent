@@ -56,13 +56,24 @@ def _mode() -> str:
 
 
 def _use_mcp() -> bool:
-    """MCP-first decision: off -> never; on -> always; auto -> breaker-gated."""
+    """MCP-first decision: off -> never; on -> always; auto -> breaker-gated.
+
+    US-013 AC-2/AC-3: in `auto`, a half-open circuit admits exactly ONE probe.
+    Every other caller in that window takes the local rung instead of piling a
+    full request onto a service that has not yet proved it is back -- so two
+    callers meeting the same outage cost one probe between them, not two.
+    """
     mode = _mode()
     if mode == "off":
         return False
     if mode == "on":
         return True
-    return rag_mcp.mcp_available()
+    state = rag_mcp.breaker_state()
+    if state == "closed":
+        return True
+    if state == "half_open":
+        return rag_mcp.claim_probe()
+    return False
 
 
 # ── Ingestion validation (delegated — build path is legacy-owned) ──────────

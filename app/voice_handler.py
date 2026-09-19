@@ -181,6 +181,29 @@ def _parse_tts_speed(raw: str) -> float:
 
 TTS_SPEED = _parse_tts_speed(os.environ.get("KOKORO_SPEED", "1.0"))
 
+#: US-012 AC-4: the isolation fallback must be a CONFIGURATION change, not a code
+#: revert. "shared" is the DG-06 decision (one process-wide cache, reused across
+#: callers); "per_call" bounds the cache to a single session's utterances and
+#: gives up cross-caller reuse in exchange for isolation that needs no argument.
+TTS_CACHE_SCOPE = os.environ.get("TTS_CACHE_SCOPE", "shared").strip().lower()
+
+
+def _cache_key_sha(cache_key: tuple) -> str:
+    """Short, stable digest of a cache key, safe to write to a trace.
+
+    Deterministic across processes, unlike `hash()` of a str, which is salted
+    per interpreter (PYTHONHASHSEED). In-process that salt is harmless; in a log
+    it would make two callers' keys for the same utterance look different, and
+    the isolation test reads keys across a whole run.
+
+    The digest is truncated to 12 hex characters and is one-way, so no agent
+    text lands in the trace (TAC-4).
+    """
+    import hashlib
+
+    raw = "\x1f".join(str(part) for part in cache_key)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
 
 def _tts_voice() -> str:
     return TTS_VOICE
@@ -374,6 +397,12 @@ class VoiceCallSession:
         self.direction = direction
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
+
+        # US-012: the per-call TTS cache. Unused while TTS_CACHE_SCOPE is
+        # "shared" (the DG-06 default), where every session reads and writes the
+        # class-level cache instead. It is allocated unconditionally so that
+        # switching scope is a configuration change with no code path missing.
+        self._session_tts_cache: dict = {}
         self._turn = 0          # utterance counter for the event timeline
 
         # Audio buffer
@@ -768,23 +797,49 @@ class VoiceCallSession:
             logger.exception("VoiceCall: LLM query failed")
             return ""
 
-    # Simple TTS cache — keyed by text hash, avoids re-synthesis of common phrases
-    _tts_cache: dict[int, tuple[np.ndarray, int]] = {}
+    #: TTS cache (DG-06 / US-012).
+    #:
+    #: These are CLASS attributes, so the cache is process-wide: every concurrent
+    #: caller shares one dict. That is the DG-06 "use-as-is" decision, and it is
+    #: conditional on the N=2 isolation test -- not on the argument that content
+    #: keys make sharing obviously safe.
+    #:
+    #: The key is (agent text, voice, speed) and nothing else -- never caller
+    #: speech, caller identity or transcript content (TAC-4). Voice and speed
+    #: joined the key when they became configurable in this same change: with
+    #: them outside it, editing KOKORO_VOICE or KOKORO_SPEED would have kept
+    #: serving audio rendered in the OLD voice from cache.
+    #:
+    #: The value carries the owning call_id. It is not part of the key and never
+    #: affects a lookup; it exists so that "caller B received audio synthesised
+    #: for caller A" is measurable rather than arguable (MOD-04 A.5.2).
+    _shared_tts_cache: dict[tuple, tuple[np.ndarray, int, str]] = {}
     _tts_cache_max = 50
 
     async def _synthesise(self, text: str) -> np.ndarray | None:
         """Run Kokoro TTS in a thread, return float32 PCM array. Cached for speed."""
         self.log_event("TTS_STARTED", chars=len(text))
         try:
-            kokoro = _get_tts_engine()
             tts_text = text[:500] if len(text) > 500 else text
 
+            # US-012: shared (DG-06 default) or per-call (the pre-decided
+            # fallback). Chosen by configuration only -- AC-4 requires the
+            # revert to be a setting, never a code change.
+            voice, speed = _tts_voice(), _tts_speed()
+            cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
+                     else VoiceCallSession._shared_tts_cache)
+            cache_key = (tts_text, voice, speed)
+
             # Check cache
-            cache_key = hash(tts_text)
-            if cache_key in self._tts_cache:
-                cached_audio, cached_sr = self._tts_cache[cache_key]
+            if cache_key in cache:
+                cached_audio, cached_sr, owner = cache[cache_key]
+                # A "cross-call hit" is caller B being served audio that was
+                # synthesised during caller A's session (MOD-04 A.5.2). It is
+                # recorded, not prevented -- measuring it is the whole point of
+                # US-012, and AC-4 pre-decides what a non-zero count means.
+                cross_call = bool(owner) and owner != self.call_id
                 logger.debug(f"TTS cache HIT: {tts_text[:60]}...")
-                self.log_event("TTS_COMPLETED", cached=1)
+                self.log_event("TTS_COMPLETED", cached=1, cross_call=int(cross_call))
                 # US-001: mark on EVERY return path. This one was missed on the
                 # first pass — the cached path returned before the mark, so a
                 # cache hit produced a trace with tts_done absent and the
@@ -792,23 +847,49 @@ class VoiceCallSession:
                 # running a live call, not by inspection.
                 if self._trace is not None:
                     self._trace.mark("tts_done")
-                    self._trace.note(tts_cache_hit=True)
+                    self._trace.note(
+                        tts_cache_hit=True,
+                        tts_cache_scope=TTS_CACHE_SCOPE,
+                        tts_cache_cross_call=cross_call,
+                        tts_cache_owner=owner,
+                        tts_cache_key_sha=_cache_key_sha(cache_key),
+                    )
+                # Copy discipline: the caller gets its own buffer, so a later
+                # mutation of one caller's audio cannot reach the cache or any
+                # other caller (TAC-2).
                 return cached_audio.copy()
 
+            # Only a miss needs the model. Loading it inside the hit path meant a
+            # cache hit still touched the engine, which kept the isolation tests
+            # from running without a GPU.
+            kokoro = _get_tts_engine()
             audio, sr = await asyncio.to_thread(
-                kokoro.create, tts_text, voice=_tts_voice(), speed=_tts_speed()
+                kokoro.create, tts_text, voice=voice, speed=speed
             )
-            # Store in cache
-            if len(self._tts_cache) >= self._tts_cache_max:
-                # Evict oldest
-                oldest = next(iter(self._tts_cache))
-                del self._tts_cache[oldest]
-            self._tts_cache[cache_key] = (audio.copy(), sr)
+            # Store in cache. Bound first, FIFO by insertion order (TAC-3):
+            # re-inserting an existing key keeps its original position, which is
+            # what makes the eviction order predictable.
+            if cache_key not in cache and len(cache) >= self._tts_cache_max:
+                oldest = next(iter(cache))
+                del cache[oldest]
+            cache[cache_key] = (audio.copy(), sr, self.call_id)
 
             logger.info(f"VoiceCall: TTS generated ({len(audio)/sr:.1f}s at {sr} Hz)")
             if self._trace is not None:
                 self._trace.mark("tts_done")
-                self._trace.note(tts_cache_hit=False, audio_s=round(len(audio) / sr, 2))
+                self._trace.note(
+                    tts_cache_hit=False,
+                    tts_cache_scope=TTS_CACHE_SCOPE,
+                    tts_cache_cross_call=False,
+                    # The key is recorded on the MISS path too -- this line is
+                    # what establishes a key's owner. Without it only hits
+                    # carried a key, so nothing could attribute one and the
+                    # isolation analysis had no owner map to compare against.
+                    tts_cache_key_sha=_cache_key_sha(cache_key),
+                    audio_s=round(len(audio) / sr, 2),
+                )
+            # The cache holds its own copy, so the buffer handed back here is
+            # the caller's alone.
             return audio
         except Exception:
             logger.exception("VoiceCall: TTS failed")
