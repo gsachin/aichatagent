@@ -2,7 +2,11 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified; BRD-15 demonstrated** · `test_us011_config_truth.py` 17/17 · DoD 4/8 · LLD mapping and `MOD-07` are open
+- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` 17/17 · DoD 4/8 · LLD mapping and `MOD-07` are open
+
+  **TAC-5 was claimed and not implemented — found by the 2026-09-19 audit, now closed.** The criterion is "a value that cannot be parsed is a boot-time failure naming the key". `validate_types` (`app/config_truth.py:170`) has carried that docstring since it was written, and was called only from `report()` and from its own test — so nothing ever failed a start on a malformed value. It is now called by the US-007 gate's clause 4 (`app/boot_readiness.py` `check_config_keys`), which fails readiness when a managed key is unparseable, and reports the key by name. Verified both ways: `validate_types` finds `FASTAPI_WORKERS='four'`, `check_config_keys` surfaces it, and the clause evaluates false. That is the near-miss case closed — `OLLAMA_KEEP_ALIVE` is a `.env` string and Ollama's Go duration parser rejects `"-1"` with `time: missing unit in duration`, a 400 on EVERY request; that one is handled by a hand-written coercion at one call site, and this is the check that catches the next one.
+
+  **AC-4 / TAC-7 remain partial and the claim is narrowed to say so.** Run attribution is incomplete: `RunSummary` carries no effective-configuration field, and the harness reads only `MIN_UTTERANCE_FRAMES` and `MUTE_STT_DURING_TTS` from `.env` (`doc/perf/tools/load_harness.py`). A run therefore cannot state the configuration it was taken under.
 
 - **Story:** As an **operator who changes a setting and restarts the stack**, I want **the value I typed to be the value the running process uses**, so that **I am not debugging a latency number that was produced by a setting I never chose**.
 - **Business value:** `BRD-16` requires that the effective value of any setting is discoverable and unambiguous. Today three documents describe configuration (`.env`, `.machine_profile.json`, `start_services.ps1` defaults) and nothing reconciles them; five keys have been found written but never read, including one that records a tuning decision (`FASTAPI_WORKERS=4`) that the runtime silently discards. Every performance number the program reports rests on knowing which values were actually in force.

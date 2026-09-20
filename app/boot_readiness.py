@@ -308,7 +308,8 @@ def check_config_keys() -> dict:
     and a gate that always fails is one operators learn to ignore — which is
     the failure mode this whole story exists to prevent.
     """
-    out: dict = {"checked": 0, "without_reader": [], "externally_consumed": []}
+    out: dict = {"checked": 0, "without_reader": [], "externally_consumed": [],
+                 "malformed": []}
     try:
         from app import config_truth as ct
 
@@ -318,6 +319,22 @@ def check_config_keys() -> dict:
             v.key for v in values if v.inert and not ct.is_externally_consumed(v.key))
         out["externally_consumed"] = sorted(
             v.key for v in values if v.inert and ct.is_externally_consumed(v.key))
+        # US-011 TAC-5: "a value that cannot be parsed is a boot-time failure
+        # naming the key". `validate_types` has carried that docstring since it
+        # was written and was called only from `report()` and from its own test,
+        # so nothing ever failed a start on a malformed value -- the claim was
+        # checked by the suite and never executed by the boot path. Wired here,
+        # where clause 4 already asks the sibling question ("does this key have
+        # a reader?"), because the two belong together: a key nobody reads and a
+        # value nothing can parse are the same class of defect, configuration
+        # that is written and does not execute.
+        #
+        # The live near-miss this closes: `OLLAMA_KEEP_ALIVE` is a `.env` string
+        # and Ollama's Go duration parser rejects `"-1"` with `time: missing unit
+        # in duration` -- a 400 on EVERY request. That specific one is handled by
+        # coercion in `_resolve_keep_alive`, by hand at one call site. This is
+        # the check that would catch the next one.
+        out["malformed"] = ct.validate_types()
         out["unread_count"] = len(out["without_reader"])
     except Exception as exc:                      # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {exc}"
@@ -396,11 +413,21 @@ def assess(do_warm: bool = True) -> Readiness:
         r.prefix = {"skipped": "--no-warm: prefix warmth NOT verified"}
 
     r.config = check_config_keys()
-    r.clauses["config_keys"] = not r.config.get("without_reader")
+    r.clauses["config_keys"] = not (r.config.get("without_reader")
+                                    or r.config.get("malformed"))
     if r.config.get("without_reader"):
         r.missing.append(
             "config keys with no reader: "
             + ", ".join(r.config["without_reader"][:8]))
+    # US-011 TAC-5. A malformed value is NOT a degraded capability -- it is a
+    # value the system will not receive as written, so the configured behaviour
+    # and the running behaviour differ and nothing says so. That is the exact
+    # "set != live" defect clause 4 exists to prevent, so it fails the clause
+    # rather than joining the warnings.
+    if r.config.get("malformed"):
+        r.missing.append(
+            "config values that cannot be parsed: "
+            + "; ".join(r.config["malformed"][:5]))
 
     # US-016 AC-3: the pre-synthesised call assets are the assistant's own
     # voice, recorded once. If KOKORO_VOICE or KOKORO_SPEED changed afterwards,
