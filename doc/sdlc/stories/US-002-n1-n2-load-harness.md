@@ -364,14 +364,19 @@ different defect with a different fix — and it is the same shape as the rest o
 this audit, where the document and the artefact had drifted apart rather than
 either being broken.
 
-**One thing this leaves open and I am not resolving here.** After the matrix was
-written the gate also began reporting US-002 with **0 uncited ACs and 0 uncited
-TACs**, up from 5 and 9. The evidence list now includes files that carry generic
-`AC-n` / `TAC-n` strings of their own, and a scoped-by-story citation model can
-be fooled by that. Either the jump is legitimate — the story now names files
-that genuinely cite those ids — or the gate is granting credit it should not.
-**It has not been checked, so the AC and TAC columns for this story should be
-treated as unverified until it is.**
+**The open item is now closed, and it closes in the gate's favour.** US-002's
+uncited AC and TAC counts fell from 5 and 9 to **0 and 0**, and that looked like
+the scoped-citation model granting credit it should not. It is not. The ids in
+`load_harness.py` are **this story's own**, cited by the harness's source to
+describe its own behaviour: *"what it does and does not (AC-3, TAC-9)"*, *"the
+cold/warm classification (AC-2)"*, *"silently shortens the set (AC-4)"*,
+*"record-separation analysis (AC-4)"*. Every one is declared by US-002 and none
+is borrowed from another story. The zeroes are real.
+
+Three corrections to my own claims were made while producing this matrix — the
+gate's file discovery, then the false-credit suspicion, then this. Each was
+caught by running one command instead of reasoning about it, which is the only
+reason any of them is not standing in the document now.
 
 ## Definition of Done
 - [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-9)
