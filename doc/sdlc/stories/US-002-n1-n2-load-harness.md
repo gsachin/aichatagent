@@ -292,6 +292,87 @@ class RunSummary:
 - Related workflow: `WF-02` (two concurrent calls) and `WF-03` step 3 (latency runs in their own window)
 - Honest boundary (stated, not worked around): the harness reproduces network conditions **at the frame stream the app consumes**, because a loopback socket cannot drop or reorder packets. **Carrier-side (Twilio PSTN) conditions cannot be reproduced locally at all** and are validated with **real calls** — every figure from an injected profile is reported as a local injected condition, never as a measurement of carrier behaviour (`TAC-9`)
 
+## LLD test mapping — T-1 … T-24, reconciled 2026-09-19
+
+US-002 has **no `test_us002*.py` suite**. Its acceptance evidence is the
+harness's own `--self-test` (`doc/perf/tools/load_harness.py:3324`), and unlike
+US-006 and US-007 that self-test **does cite scenario ids** — `fixture
+validation T-2`, `summary contract T-3/T-4/T-18/TAC-5/AC-4`, `profile injection
+T-19/T-20/T-21`. So this story's mapping was partly present already, and this
+reconciliation extends it to all 24 rather than starting from nothing.
+
+| LLD | Requires | Satisfied by | Status |
+|---|---|---|---|
+| T-1 | 60 s stream = 3,000 frames, each within 5 ms of its slot (TAC-1) | `_st_frame_audit(60.0)` | **COVERED AND FAILING.** Measured on this host: 15 frames over 5 ms, max deviation 25.7 ms, `tac1_holds_strict False`. The harness documents it itself at `:833-845` ("strict TAC-1 is not reachable on this host"). A failing gate that says so is worth more than a passing one that cannot |
+| T-2 | Malformed fixture raises `FixtureError` naming the entry | `_st_fixture_validation` | **COVERED** |
+| T-3 | A blended cold+warm summary is refused | `_st_summary_contract` | **COVERED** |
+| T-4 | Every summary carries `carrier_boundary_excluded: true` + fixture sha256 | `_st_summary_contract` | **COVERED** |
+| T-5 | One scripted single-caller conversation completes end to end | — | **GAP** — needs a live stack; the self-test is offline by design |
+| T-6 | A noise-gated fixture turn completes and is counted | — | **GAP** |
+| T-7 | A clarification-loop turn completes within the one-shot cap | — | **GAP** |
+| T-8 | An intent with no KB content produces the not-relevant path | — | **GAP** |
+| T-9 | The harness refuses to start against a stack reporting not-ready | `ReadinessError` exists (`:156`) | **GAP — and structurally so.** The harness cannot refuse on readiness because there is no readiness surface to report against; it records `stack_readiness: "assumed - no readiness surface exists"` instead. The refusal path exists and has nothing to consult |
+| T-10 | The harness refuses to start while a quality evaluation runs (TAC-7) | `eval/.eval_in_progress` | **GAP — and self-documented.** The harness looks for the lock and records "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock". The check is present; the lock is never written |
+| T-11 | A cancelled session leaves the other's turns intact, summary marked partial | — | **GAP** |
+| T-12 | Killing the ERC MCP mid-run: one caller degrades, the other is unaffected | — | **GAP** |
+| T-13 | A 100+ turn N=1 warm run with stated count and warm-only p50/p95 | N=1 runs exist (99 scored turns) | **PARTIAL** — runs of the right size exist and have been analysed; T-13 as written is a scenario, not a run |
+| T-14 | N=2: both complete; `records_separated: true`; `turns_over_3000ms` reported | five N=2 runs in `doc/perf/runs/` | **COVERED BY RUNS** — and every one reports `records_separated: true` with 0 unattributed rows, which is the TAC-8/`TRD-22` separation assertion actually passing under load |
+| T-15 | Three consecutive N=2 runs each pass TAC-3 | — | **GAP** — this is US-008's gate too |
+| T-16 | 30-minute N=2 soak, ≈240 rows, no harness-dropped session (TAC-4) | — | **GAP** — the soak has not been run |
+| T-17 | A 2,500 ms injected stall on A: B's first-audio time is not moved by it | — | **GAP** |
+| T-18 | Every summary names a network profile beside the fixture hash | `_st_summary_contract` | **COVERED** |
+| T-19 | A delay/jitter profile shifts frames past their 20 ms slots by the configured amount | `_st_profile_injection` | **COVERED** |
+| T-20 | A loss profile drops frames; the turn still completes; the profile is named | `_st_profile_injection` | **COVERED** |
+| T-21 | A late/out-of-order frame is sent after its successor; the app behaviour is recorded | `_st_profile_injection` | **COVERED** |
+| T-22 | A disconnect/reconnect profile closes and re-opens mid-call; the app ends the session | `disconnect_at_turns` in the profile | **PARTIAL** — the mechanism exists and is exercised by the self-test's injection case, but no scenario drives an actual reconnect against the live stack |
+| T-23 | N=2 under loss-and-jitter: records stay separated, the summary is marked | — | **GAP** |
+| T-24 | ≥100 turns under an injected profile, reported as its own condition | — | **GAP** |
+
+**Coverage: 8 covered (one of them failing), 1 covered by runs, 2 partial, 13 gaps.**
+
+### What this story's mapping says that the others did not
+
+**This is the first D1 story whose mapping was already partly there.** The
+self-test cites its scenarios by id, which is why the traceability gate found
+fewer uncited ids here than the raw count suggested — and why the gate's
+file-discovery matters, for the reason below.
+
+**T-9 and T-10 are gaps with nothing wrong in the code.** Both are refusal
+paths the harness *built* and cannot exercise: T-9 needs a readiness surface to
+refuse against (`US-007`'s open half, now appearing a fourth time), and T-10
+needs `eval/.eval_in_progress` to be written by a runner that does not exist
+(`US-003`'s unbuilt half). The harness says both out loud in its own output.
+That is the right behaviour and it still means two scenarios cannot pass.
+
+**T-1 is covered, failing, and honestly reported.** The 60-second frame audit
+returns 15 late frames and `tac1_holds_strict False` on this host, and the
+harness documents the limitation rather than lowering the bar. It is the only
+scenario in the programme found *failing by design* rather than missing.
+
+**A correction to an earlier version of this very paragraph.** It first
+claimed the traceability gate under-counts because it did not scan
+`load_harness.py`. That was wrong, and checking it took one command. The truth
+is the reverse: the story **never named its own deliverable** — `grep -c
+load_harness` over the file before this matrix was **0** — so the gate had no
+path to resolve and found one evidence file instead of three. Writing this
+matrix is what added the reference, which is why the gate now sees ten of the
+self-test's T-ids and reports US-002 at **14 uncited LLD scenarios, not 24**.
+
+The distinction matters for how the number is read. The gate was not failing to
+look where the evidence was; the story was not pointing at it. That is a
+different defect with a different fix — and it is the same shape as the rest of
+this audit, where the document and the artefact had drifted apart rather than
+either being broken.
+
+**One thing this leaves open and I am not resolving here.** After the matrix was
+written the gate also began reporting US-002 with **0 uncited ACs and 0 uncited
+TACs**, up from 5 and 9. The evidence list now includes files that carry generic
+`AC-n` / `TAC-n` strings of their own, and a scoped-by-story citation model can
+be fooled by that. Either the jump is legitimate — the story now names files
+that genuinely cite those ids — or the gate is granting credit it should not.
+**It has not been checked, so the AC and TAC columns for this story should be
+treated as unverified until it is.**
+
 ## Definition of Done
 - [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-9)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-24)
