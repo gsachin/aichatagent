@@ -245,6 +245,57 @@ function Write-ReadinessReport {
 - Reconciliation: **`REC-11`** (the pre-warm exists, runs, and is neutralised on the serving path — this story makes the boot half verifiable while US-006 fixes the serving half; the plan's earlier "preload not present" claim is corrected rather than repeated); `REC-05` (`.machine_profile.json` is a detection artifact, never runtime authority — the readiness report states values from the resolution path the process used, not from a second read of the files); `REC-06` (stale machine-sizing documents are not evidence; the report states numbers from measurement); `REC-02` (`FASTAPI_WORKERS` is inert and the single-process design is deliberate); `REC-01` (Pipecat is not adopted; only its dead configuration is touched, and that is US-011's)
 - Related workflow: `WF-03` step 2 (a change applied on a branch behind a flag is taken against a stack whose readiness has been confirmed)
 
+## LLD test mapping — T-1 … T-19, reconciled 2026-09-19
+
+Mapped by reading all 29 `check()` calls in `doc/perf/tools/test_us007_readiness.py`
+against the scenario table above. The suite cites `AC-` and `TAC-` ids and **no
+`T-` id**, so as with `US-006` the mapping was absent rather than wrong.
+
+| LLD | Requires | Satisfied by | Status |
+|---|---|---|---|
+| T-1 | `Test-StackReadiness` returns not-ready when any one clause is false, and names which | *"all four clauses true -> READY"*, *"readiness carries every clause explicitly"* | **COVERED — but the named function does not exist.** `Test-StackReadiness` has **zero** matches in `app/` and in `start_services.ps1`; the gate is Python (`assess()` at `app/boot_readiness.py:344`). Third instance of this class — see the note below |
+| T-2 | A malformed config value is reported as a parse failure at start, not defaulted | gate clause 4 (`check_config_keys` -> `validate_types`) | **IMPLEMENTED 2026-09-19, no test in this suite.** It was a GAP until `US-011`'s TAC-5 was found unimplemented and wired in; `test_us011_config_truth.py` covers the detector, this suite does not yet cover the gate consuming it |
+| T-3 | The report contains no credential value; credential keys appear with `set` only | *"TAC-6 config rows mask sensitive values"* | **COVERED** |
+| T-4 | Absent env keys resolve to documented defaults, source stated as "default" | — | **GAP** — `config_truth` carries the source per key but no check asserts the "default" case |
+| T-5 | A partial config produces an unambiguous effective table (one value per key) | — | **GAP** |
+| T-6 | Warm step submits the real voice prompt; the placeholder prompt is reported not-warm | *"uncached prefix -> NOT READY"*, *"the missing warmth is named"*, *"the engine's own prefill is quoted"* | **COVERED** |
+| T-7 | Prefix warmth confirmed by the engine's counters; a warm that misses the cache is not ready | same three + *"an already-warm prefix reports no reload"* | **COVERED** |
+| T-8 | Ollama absent: NOT READY naming the residency gap, non-zero exit (TAC-5) | *"engine absent -> NOT READY"*, *"the error is surfaced, not swallowed"*, *"not ready -> exit 2"* | **COVERED** |
+| T-9 | Model fails to load: the degraded capability is reported; no success declared | *"not resident per /api/ps -> NOT READY"*, *"residency failure names the model"* | **COVERED** |
+| T-10 | Repeated start against a warm stack: idempotent, no second load | *"a second start against a warm stack is still READY"*, *"the warm path records load_ms so a second load is visible"* | **COVERED** |
+| T-11 | A service that never listens is reported at the startup deadline | — | **GAP — and it corroborates `MOD-07` B.6 independently.** That table lists this row as having no implementation anywhere in `boot_readiness.py`; `grep "never listens"` returns 0, from a different document reaching the same conclusion |
+| T-12 | One service up and one down: the specific degraded capability is named | *"a down Postgres degrades but does not block"*, *"a down ERC MCP degrades but does not block"* | **COVERED** |
+| T-13 | Orphan-held port: start fails with the port named | `start_services.ps1` port probes and `Stop-PortOwner` | **COVERED ELSEWHERE** — not the gate's to own, and never was |
+| T-14 | Operator aborts a start mid-way: no partial readiness is claimed | — | **GAP — the second `MOD-07` B.6 row with nothing behind it.** `grep "abort"` in `boot_readiness.py`: 0 |
+| T-15 | CRM and tunnel down: reported, readiness still declared | *"a down Postgres degrades but does not block"*, *"a down ERC MCP degrades but does not block"* | **COVERED** |
+| T-16 | Restart after a failure is safe and repeatable | *"a second start against a warm stack is still READY"* — partially | **PARTIAL** — the warm-restart case is covered; restart *after a failure* is not distinguished from it |
+| T-17 | After a successful gate, a call placed immediately shows no cold-load signature and the GPU is not idle-clocked | — | **GAP** — the call-arrival observation, third story to carry it |
+| T-18 | A call placed 30 minutes later still shows no cold-load signature | — | **GAP** — load gate |
+| T-19 | The 32,919 ms cold load is paid once at boot, never per first call after idle | — | **GAP** — load gate |
+
+**Coverage: 9 covered, 2 covered elsewhere, 1 partial, 7 gaps.**
+
+### Three findings
+
+**The call-arrival observation is now a three-story pattern.** `US-006` T-11 and
+T-16, `US-007` T-17, and `US-007`'s own unticked DoD box all require residency
+or the GPU clock read *at the instant a call arrives*. The gate reads both at
+boot and no readiness surface exists, so none of the four can be satisfied as
+written. **This is one decision, not four fixes**, and it is a Product-Owner
+decision because two of the four are acceptance criteria.
+
+**T-11 and T-14 match the two `MOD-07` B.6 rows with no implementation.** That
+was found by reading the module doc; this is the same conclusion reached from a
+test-scenario table. Two independent routes to the same gap is worth more than
+either — it means the gap is real and not an artefact of one document's wording.
+
+**T-1 names `Test-StackReadiness`, which exists nowhere.** This is the third
+scenario across two stories to name something that was never built — with
+`US-006`'s `_srv_options()` and its `residency_miss`. Individually each is a
+stale line; together they say something about the LLDs as a set: **they were
+written as design intent and are being read as as-built description.** Anyone
+using them to navigate the code will be sent to three places that do not exist.
+
 ## Definition of Done
 - [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-19)

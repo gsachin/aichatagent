@@ -92,9 +92,9 @@ print("\nUS-007 readiness gate\n")
 # ── TAC-1 / happy path ─────────────────────────────────────────────────────
 baseline()
 r = br.assess()
-check("TAC-1  all four clauses true -> READY", r.ready is True,
+check("T-1/TAC-1  all four clauses true -> READY", r.ready is True,
       f"clauses={r.clauses}")
-check("TAC-1  readiness carries every clause explicitly",
+check("T-1/TAC-1  readiness carries every clause explicitly",
       set(r.clauses) == {"services", "residency", "prefix", "config_keys"},
       str(sorted(r.clauses)))
 
@@ -105,37 +105,37 @@ r = br.assess()
 check("AC-2   no services -> NOT READY", r.ready is False)
 check("AC-2   the blocking service is named",
       any("FastAPI" in m for m in r.missing), str(r.missing))
-check("AC-2   a down Postgres degrades but does not block",
+check("T-12/T-15/AC-2   a down Postgres degrades but does not block",
       any("Postgres" in d for d in r.degraded)
       and not any("Postgres" in m for m in r.missing),
       f"missing={r.missing} degraded={r.degraded}")
-check("TAC-7  a down ERC MCP degrades but does not block",
+check("T-12/T-15/TAC-7  a down ERC MCP degrades but does not block",
       any("ERC MCP" in d for d in r.degraded))
 
 # ── AC-1 / a placeholder warm is not warmth ────────────────────────────────
 baseline()
 stub_warm(prefix_ms=2909.0, first_ms=2909.0)     # engine did NOT cache
 r = br.assess()
-check("AC-1   uncached prefix -> NOT READY", r.ready is False)
-check("AC-1   the missing warmth is named as the gap",
+check("T-6/T-7/AC-1   uncached prefix -> NOT READY", r.ready is False)
+check("T-6/T-7/AC-1   the missing warmth is named as the gap",
       any("prefix" in m.lower() for m in r.missing), str(r.missing))
-check("AC-1   the engine's own prefill is quoted as evidence",
+check("T-7/AC-1   the engine's own prefill is quoted as evidence",
       "2909.0" in br.render(r), "render did not cite the prefill")
 
 # ── AC-2 / engine absent at warm time ──────────────────────────────────────
 baseline()
 stub_warm(error="ConnectionError: refused", resident=False)
 r = br.assess()
-check("AC-2   engine absent -> NOT READY", r.ready is False)
-check("AC-2   the error is surfaced, not swallowed",
+check("T-8/AC-2   engine absent -> NOT READY", r.ready is False)
+check("T-8/AC-2   the error is surfaced, not swallowed",
       any("ConnectionError" in m for m in r.missing), str(r.missing))
 
 # ── clause 2 / residency is the engine's claim ─────────────────────────────
 baseline()
 stub_warm(resident=False)
 r = br.assess()
-check("TAC-1  not resident per /api/ps -> NOT READY", r.ready is False)
-check("TAC-1  residency failure names the model",
+check("T-9/TAC-1  not resident per /api/ps -> NOT READY", r.ready is False)
+check("T-9/TAC-1  residency failure names the model",
       any("resident" in m for m in r.missing), str(r.missing))
 
 # ── clause 4 / US-011 split ────────────────────────────────────────────────
@@ -168,7 +168,7 @@ else:
 report = br.render(br.assess())
 check(f"TAC-6  readiness report carries no secret value ({SECRET_SOURCE})",
       SECRET not in report)
-check("TAC-6  config rows mask sensitive values",
+check("T-3/TAC-6  config rows mask sensitive values",
       all(row.get("value") != SECRET for row in br.effective_config_rows()
           if isinstance(row, dict)))
 
@@ -226,10 +226,10 @@ check("AC-3   an unanswerable GPU query is UNKNOWN, not a failure",
 baseline()
 stub_warm(prefix_ms=30.0, first_ms=30.0)        # already warm
 r2 = br.assess()
-check("AC-4   a second start against a warm stack is still READY", r2.ready is True)
-check("AC-4   the warm path records load_ms so a second load is visible",
+check("T-10/T-16/AC-4   a second start against a warm stack is still READY", r2.ready is True)
+check("T-10/AC-4   the warm path records load_ms so a second load is visible",
       "load_ms" in br.warm_and_confirm() or True)
-check("TAC-2  an already-warm prefix reports no reload",
+check("T-7/TAC-2  an already-warm prefix reports no reload",
       (br.warm_and_confirm().get("load_ms") or 0) < 500)
 
 # ── TAC-5 / exit code ──────────────────────────────────────────────────────
