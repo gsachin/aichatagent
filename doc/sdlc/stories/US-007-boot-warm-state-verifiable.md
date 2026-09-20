@@ -2,7 +2,7 @@
 
 # US-007 — Boot-time warm state is verifiable, not assumed [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified; gate exits 0** · `test_us007_readiness.py` 30/30 · DoD 6/8 · LLD mapping and a commit-level rollback are open
+- **Status:** **IMPLEMENTED - ACs verified; gate exits 0** · `test_us007_readiness.py` 30/30 · DoD 5/8 · LLD mapping and a commit-level rollback are open · the call-arrival acceptance box is UNTICKED (no readiness surface exists)
 
 - **Story:** As an **operator starting the stack**, I want **the stack to refuse to call itself ready until the model is resident and the real voice prompt prefix is warm, and to tell me exactly what is missing when it is not**, so that **I stop discovering a cold stack from a caller who waited half a minute in silence**.
 - **Business value:** `BRD-17` requires the inference model **and its prompt prefix** resident before the first call is accepted, and the GPU not idle-clocked at the moment a call arrives. Today the pre-warm sends the literal prompt `"ping"` — it warms weights, not the voice prompt prefix — and a skipped pre-warm is a warning the operator can miss.
