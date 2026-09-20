@@ -47,11 +47,21 @@ _FLOAT_KEYS = ("RAG_SIMILARITY_THRESHOLD", "RAG_MCP_TIMEOUT", "OLLAMA_TEMPERATUR
 #: A "read" is an env lookup, not a mere mention. `app/hardware_profile.py`
 #: writes FASTAPI_WORKERS as a string in a tier table — a naive substring scan
 #: calls that "read", which is precisely the error this module exists to catch.
+#:
+#: The last pattern covers the helper call shapes (`_env`, `_env_int`,
+#: `_env_float`, `_env_bool`) that several modules wrap `os.environ` in. It
+#: previously read `env\(`, which matched `_env(` only by accident of being a
+#: substring and MISSED every typed variant — so a key read as
+#: `_env_int("FASTAPI_PORT", 8000)` was counted as unread and would be reported
+#: INERT. That is a false positive in the direction that matters: it tells an
+#: operator a setting is dead when the runtime is using it. `admission.py`'s
+#: `max_concurrent()` documents hitting this class from the other side (it uses
+#: a literal read because the sweep could not verify the helper form).
 _READ_PATTERNS = (
     r'os\.environ\.get\(\s*["\']{k}["\']',
     r'os\.environ\[\s*["\']{k}["\']\s*\]',
     r'os\.getenv\(\s*["\']{k}["\']',
-    r'env\(\s*["\']{k}["\']',
+    r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\']{k}["\']',
 )
 
 

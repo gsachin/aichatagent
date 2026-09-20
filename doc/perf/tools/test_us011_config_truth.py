@@ -98,6 +98,25 @@ check("TAC-5 a valid value produces no complaint",
 check("TAC-5 the live .env has no malformed values",
       ct.validate_types(env) == [], str(ct.validate_types(env)))
 
+# --- AC-2 / TAC-2: what counts as a READ -----------------------------------
+# The sweep must recognise every lookup shape, or a key the runtime genuinely
+# uses is reported INERT — a false positive in the direction that matters,
+# because it tells an operator a live setting is dead. The typed helper shapes
+# (`_env_int` and friends) were invisible until Phase 1.2: the pattern read
+# `env\(`, which matched `_env(` only by accident of being a substring.
+_PROBE = "US011_PROBE_KEY"
+for shape in (f'os.environ.get("{_PROBE}", "")', f'os.environ["{_PROBE}"]',
+              f'os.getenv("{_PROBE}")', f'_env("{_PROBE}", "")',
+              f'_env_int("{_PROBE}", 1)', f'_env_float("{_PROBE}", 1.0)',
+              f'_env_bool("{_PROBE}", True)'):
+    check(f"AC-2 a read is recognised: {shape}",
+          ct.is_read_anywhere(_PROBE, shape))
+for shape in (f'FASTAPI_WORKERS = "4"   # not the probe',
+              f'x = settings.{_PROBE}',
+              f'environ["{_PROBE}"]'):
+    check(f"AC-2 a mere mention is NOT a read: {shape}",
+          not ct.is_read_anywhere(_PROBE, shape))
+
 # --- TAC-1: direct env reads are REPORTED, not claimed fixed ---------------
 direct = ct.sweep_direct_env_reads()
 check("TAC-1 direct os.environ reads are reported (target is zero, not met)",
