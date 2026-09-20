@@ -230,6 +230,42 @@ def breaker_mode_contract() -> None:
     check("BRD-15  restored: 'probe' is in force", m.breaker_mode() == "probe")
 
 
+# ───────────────────── A3: the breaker is operator-readable ─────────────────
+
+def a3_surface_contract() -> None:
+    """A3 (2026-09-19): the status snapshot served on `/api/perf/policy`.
+
+    The endpoint contract the addition must meet: ADDITIVE (a new key beside
+    admission and work-priority, never a change to either), NON-BLOCKING (a
+    pure in-memory read -- no HTTP, no socket, no wait), and SECRET-FREE
+    (a loopback URL and counts, never a credential value).
+    """
+    print("\n-- A3  the breaker state is readable on the policy surface")
+
+    reset()
+    s = m.mcp_rag_status()
+    check("A3  the snapshot carries the three-state breaker",
+          s["breaker_state"] in ("closed", "open", "half_open")
+          and isinstance(s["breaker_opens"], int)
+          and isinstance(s["breaker_probes"], int))
+    check("A3  the snapshot names the outage it covers",
+          "last_error" in s and "session_ok" in s
+          and "cooldown_active" in s and "breaker_mode" in s)
+    check("A3  the read is a snapshot, not a call",
+          s["mode"] in ("auto", "on", "off")
+          and isinstance(s["probe_read_timeout_s"], float))
+    check("A3  no credential value can appear in the snapshot",
+          not any(k for k in s if any(w in k.lower()
+                  for w in ("token", "secret", "password", "apikey", "api_key")))
+          and s["url"].startswith("http://"))
+
+    force_open(age_s=0.0)
+    s_open = m.mcp_rag_status()
+    check("A3  an open breaker reads as open on the surface",
+          s_open["breaker_state"] == "open" and s_open["cooldown_active"] is True)
+    reset()
+
+
 # ───────────────────── AC-4: the rung is recorded ─────────────────────
 
 def ac4_recording() -> None:
@@ -321,6 +357,7 @@ def main() -> int:
     ac4_recording()
     lld_record()
     breaker_mode_contract()
+    a3_surface_contract()
     reset()
 
     print()

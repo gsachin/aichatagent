@@ -2798,10 +2798,16 @@ async def api_perf_policy():
     """
     from app.admission import status as admission_status
     from app.work_priority import policy_status
+    # A3 (2026-09-19): the retrieval breaker's state, beside the other two.
+    # `mcp_rag_status()` is a pure in-memory snapshot (no HTTP, no blocking
+    # call) -- US-013 built a three-state breaker no operator could read, and
+    # this makes it readable on the same surface as admission and priority.
+    from app.rag_mcp import mcp_rag_status
 
     return JSONResponse({
         "admission": admission_status(),
         "work_priority": policy_status(),
+        "retrieval": mcp_rag_status(),
     })
 
 
