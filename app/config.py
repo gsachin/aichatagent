@@ -101,9 +101,10 @@ class Settings:
     SMTP_PASS: str = field(default_factory=lambda: _env("SMTP_PASS", ""))
 
     # ── Salesforce user API ────────────────────────────────────────
-    # Master switch. OFF by default: with it off, nothing in the app calls
-    # Salesforce and behaviour is identical to today. Phases 3-7 are only
-    # reachable when this is true.
+    # Master switch. OFF by default *in code*: reaching Salesforce requires an
+    # explicit opt-in, so it is the deployment's .env (not this default) that
+    # turns the integration on. With it off, nothing in the app calls
+    # Salesforce and behaviour is identical to before the integration.
     CRM_ENABLED: bool = field(
         default_factory=lambda: _env("CRM_ENABLED", "false").lower() == "true"
     )

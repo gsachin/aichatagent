@@ -36,7 +36,12 @@ logger = logging.getLogger("llm_backend")
 
 # ── Ollama config (unchanged semantics) ────────────────────────────────
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#: Default host is the literal IPv4, NOT "localhost". On Windows "localhost"
+#: resolves to ::1 first and Ollama binds IPv4 only, so the refused IPv6
+#: connect burns ~2,066 ms in SYN retransmits before Python falls back --
+#: paid on every model-resolution and embedding call. 127.0.0.1 skips the
+#: doomed attempt (~15 ms). Class A: same server, same bytes.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
 # Single source of truth for the default context window (env: OLLAMA_NUM_CTX).
 # 8192 — the production voice system prompt (~3.5k tokens) plus RAG context
@@ -99,13 +104,25 @@ def default_model(preferred=None) -> list[str]:
     return [OLLAMA_MODEL] + [p for p in prefs if p != OLLAMA_MODEL]
 
 
-def small_task_num_ctx(fallback: int) -> int:
+def small_task_num_ctx() -> int:
     """
     Context window for small utility LLM calls (intent detection, lead
-    extraction, sentiment). Defaults preserve each call site's historical
-    value; SMALL_TASK_NUM_CTX overrides all of them from .env.
+    extraction, sentiment).
+
+    Defaults to DEFAULT_NUM_CTX -- the SAME value the serving path uses.
+    Ollama keeps one runner per model and tears it down whenever a request
+    arrives with a different num_ctx, paying a full cold reload (~6-11 s
+    measured on this box) on the next voice turn. Call sites having their
+    own historical values (512/1024/2048/4096) meant five context sizes
+    against one model, so the reload was paid constantly.
+
+    Agreement is therefore the only safe default, and it is enforced in
+    code rather than by a setting: SMALL_TASK_NUM_CTX is an escape hatch
+    for a deliberate, measured divergence -- never a required key. It also
+    means predeploy re-sizing OLLAMA_NUM_CTX for a different machine cannot
+    silently reintroduce the thrashing.
     """
-    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(fallback)))
+    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(DEFAULT_NUM_CTX)))
 
 
 def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:
@@ -132,8 +149,42 @@ def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None, temperature=None) -> str:
-    """ollama.chat with today's exact option semantics."""
+#: US-006 / REC-11. Ollama resets a model's keep-alive to the SERVER DEFAULT on
+#: any request that omits it, so a request that never sends one silently undoes
+#: the boot pre-warm on the first turn of the process's life. The pre-warm in
+#: start_services.ps1 Step 6 asks for 24h; `_chat_ollama` then asked for nothing
+#: and got 5 minutes — which is why a 32,919 ms cold load was measured WITH
+#: working pre-warm code in the repository.
+#:
+#: Residency is therefore held on the SERVING path, not the boot path. This is
+#: resolved once, here, and sent on every generation request (TAC-3: zero
+#: keep-alive resets).
+def _resolve_keep_alive(raw: str):
+    """Coerce the configured keep-alive into the type Ollama actually accepts.
+
+    A `.env` value is ALWAYS a string, and Ollama's Go duration parser rejects
+    `"-1"` with `time: missing unit in duration "-1"` — a 400 on every request.
+    So an integer (including a negative one) must be sent as an int, while a
+    duration such as "24h" stays a string. Getting this wrong does not degrade
+    residency, it breaks every call.
+    """
+    s = str(raw).strip()
+    try:
+        return int(s)
+    except ValueError:
+        return s
+
+
+KEEP_ALIVE = _resolve_keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", "-1"))
+
+#: Set when the installed ollama client rejects the keep_alive kwarg, so the
+#: condition is visible rather than silently degrading residency to 5 minutes.
+_keep_alive_unsupported = False
+
+
+def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None,
+                 temperature=None, keep_alive=None, num_predict=None) -> str:
+    """ollama.chat with explicit keep-alive so residency survives the first call."""
     import ollama
 
     if model is None:
@@ -142,7 +193,55 @@ def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None, temperat
     options = {"num_ctx": int(num_ctx)}
     if temperature is not None:
         options["temperature"] = float(temperature)
-    response = ollama.chat(model=model, messages=messages, options=options)
+    # Tail guard. Generation is otherwise unbounded, so the worst case is set
+    # by the model's own appetite rather than by anything we chose -- and on a
+    # live call the worst case is the one that matters. None preserves the old
+    # behaviour exactly, which is why this is opt-in per call site and NOT a
+    # module default: `database.py` asks for structured JSON (lead extraction)
+    # and a 192-token ceiling there would truncate the object mid-field.
+    if num_predict is not None:
+        options["num_predict"] = int(num_predict)
+    ka = KEEP_ALIVE if keep_alive is None else keep_alive
+    try:
+        response = ollama.chat(model=model, messages=messages, options=options,
+                               keep_alive=ka)
+    except TypeError:
+        # Client predates the keep_alive kwarg. Degrade LOUDLY: residency will
+        # fall back to the server default and BRD-17 is unmet.
+        global _keep_alive_unsupported
+        if not _keep_alive_unsupported:
+            _keep_alive_unsupported = True
+            logger.warning(
+                "Ollama client does not accept keep_alive; residency will fall "
+                "back to the server default (%s). BRD-17 is NOT met. Upgrade the "
+                "ollama client or set OLLAMA_KEEP_ALIVE on the server.",
+                os.environ.get("OLLAMA_KEEP_ALIVE", "server default"),
+            )
+        response = ollama.chat(model=model, messages=messages, options=options)
+    # US-001 / REC-12: capture the engine's own counters so prefill and
+    # generation are separable from the single llm_sent..llm_done block.
+    # This is what makes retrieval_ms derivable in app/perf_trace.py — the
+    # draft tracer could not compute the metric BRD-01 names first.
+    # note_current is a no-op when no trace is active.
+    try:
+        from app.perf_trace import note_current
+
+        note_current(
+            model_used=model,
+            prompt_eval_count=response.get("prompt_eval_count"),
+            eval_count=response.get("eval_count"),
+            prefill_ms=round(response.get("prompt_eval_duration", 0) / 1e6, 1),
+            generation_ms=round(response.get("eval_duration", 0) / 1e6, 1),
+            load_ms=round(response.get("load_duration", 0) / 1e6, 1),
+            keep_alive=ka,
+            # A non-trivial load_duration means the model was NOT resident and
+            # had to be read from disk. This is the residency-lapse signal
+            # US-006 requires: an eviction that happened anyway is visible on
+            # the trace rather than silent.
+            residency_lapse=bool(response.get("load_duration", 0) / 1e6 > 500),
+        )
+    except Exception:
+        pass
     return response["message"]["content"]
 
 
@@ -154,6 +253,7 @@ def chat(
     num_ctx=None,
     temperature=None,
     json_mode=False,
+    num_predict=None,
 ) -> str:
     """
     Single-shot chat completion. Returns the assistant text.
@@ -167,11 +267,18 @@ def chat(
     - json_mode: reserved for API parity. Ollama call sites historically
       relied on prompt + defensive regex parsing (no format="json"), so
       both paths keep that behavior — no request-level change.
+    - num_predict: Ollama ONLY — output-token ceiling. None (the default)
+      means unbounded, exactly as before. The MLX path ignores it rather
+      than mapping it to max_tokens, because that mapping cannot be tested
+      on this box and an untested platform branch is worse than a
+      documented gap. Pass it from the VOICE answer path, never from a
+      structured-output path.
     """
     if provider_name() == "mlx":
         return _chat_mlx(messages, model=model, num_ctx=num_ctx, temperature=temperature)
     return _chat_ollama(
-        messages, model=model, preferred=preferred, num_ctx=num_ctx, temperature=temperature
+        messages, model=model, preferred=preferred, num_ctx=num_ctx,
+        temperature=temperature, num_predict=num_predict,
     )
 
 

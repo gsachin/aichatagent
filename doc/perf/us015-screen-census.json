@@ -1,0 +1,3591 @@
+{
+  "qwen2.5:14b": {
+    "model": "qwen2.5:14b",
+    "options": {
+      "num_ctx": 8192,
+      "temperature": 0.3
+    },
+    "tag": "promptfix-census",
+    "cases": 83,
+    "scorable": 30,
+    "blocked": 53,
+    "verdicts": {
+      "blocked": 53,
+      "pass": 10,
+      "fail": 20
+    },
+    "by_grade": {
+      "verified": {
+        "blocked": 7,
+        "fail": 10,
+        "pass": 7
+      },
+      "kb_traceable": {
+        "blocked": 46,
+        "pass": 3,
+        "fail": 10
+      }
+    },
+    "wall_seconds": 214.1,
+    "prefill_ms_p50": 604.1,
+    "generation_ms_p50": 989.8,
+    "wall_ms_p50": 1637.7,
+    "eval_tokens_p50": 39,
+    "eval_tokens_max": 142,
+    "cold_load_ms_max": 12.0,
+    "rows": [
+      {
+        "case_id": "acc-001",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University is accredited, but I don't have the specific accreditation details at hand. For precise information about our accreditation status, I can connect you with the admissions office. Would you like me to do that for you?",
+        "answer_chars": 235,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1878.6,
+        "prefill_ms": 644.7,
+        "generation_ms": 1178.0,
+        "prompt_tokens": 4062,
+        "eval_tokens": 46,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "acc-002",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "I don't have specific ranking information about Meridian University in my current context. Rankings can vary depending on the source and criteria used. Would you like me to connect you with someone who can provide that information, or is there another way I can assist you today?",
+        "answer_chars": 279,
+        "census": [
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 1977.9,
+        "prefill_ms": 540.2,
+        "generation_ms": 1387.5,
+        "prompt_tokens": 4122,
+        "eval_tokens": 54,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "acc-003",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University has over $40 million in active research funding across engineering and sciences. Is there anything else you'd like to know?",
+        "answer_chars": 143,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1390.9,
+        "prefill_ms": 602.8,
+        "generation_ms": 739.0,
+        "prompt_tokens": 4175,
+        "eval_tokens": 29,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "acc-004",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University works with over 60 partner universities worldwide for exchange and research agreements. Is there anything else you'd like to know?",
+        "answer_chars": 150,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1420.1,
+        "prefill_ms": 627.0,
+        "generation_ms": 738.8,
+        "prompt_tokens": 4251,
+        "eval_tokens": 29,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "acc-005",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University has a large alumni network, but I don't have the exact number of alumni. However, the university is known for its extensive reach, with over 40,000 alumni working across 70 countries and every major industry. Would you like to know more about the achievements or the accreditation of the university?",
+        "answer_chars": 319,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2451.9,
+        "prefill_ms": 618.9,
+        "generation_ms": 1778.6,
+        "prompt_tokens": 4205,
+        "eval_tokens": 69,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "acc-006",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University is highly respected, but I wouldn't say it's ranked as the number one university in the country. Can you tell me more about what you're looking for or how I can help you with Meridian?",
+        "answer_chars": 204,
+        "census": [
+          "forbidden_claim",
+          "fact_missing"
+        ],
+        "wall_ms": 1772.8,
+        "prefill_ms": 545.7,
+        "generation_ms": 1170.9,
+        "prompt_tokens": 4138,
+        "eval_tokens": 46,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "acc-007",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University is accredited by several internationally recognized organizations, including the National Board of Accreditation, the International Association of Universities, and the Global Business School Network. These accreditations ensure that our programs meet high standards of quality and are recognized globally. Is there a specific accreditation you're interested in learning more about?",
+        "answer_chars": 402,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2357.9,
+        "prefill_ms": 618.6,
+        "generation_ms": 1643.9,
+        "prompt_tokens": 4224,
+        "eval_tokens": 64,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "acc-008",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University currently has over 5,000 students across more than 50 programs spread across six schools. Would you like to know more about any specific program or school?",
+        "answer_chars": 175,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1669.2,
+        "prefill_ms": 618.1,
+        "generation_ms": 989.8,
+        "prompt_tokens": 4207,
+        "eval_tokens": 39,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "acc-009",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Thank you for your question. Meridian University is highly regarded, but it's important to clarify that it is not ranked number one or accredited by Harvard University. Harvard University is an independent institution that accredits its own programs. Meridian University is accredited by various regional and national accrediting bodies, which you can find listed on our official website. Is there anything else you'd like to know about Meridian University's accreditation or rankings?",
+        "answer_chars": 485,
+        "census": [
+          "forbidden_claim",
+          "forbidden_claim",
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2841.1,
+        "prefill_ms": 526.4,
+        "generation_ms": 2266.1,
+        "prompt_tokens": 4071,
+        "eval_tokens": 88,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "adm-001",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "To apply to Meridian University, you can start by filling out the online application form. You'll need to submit your transcripts, a copy of your ID, and any test scores required. After submitting your application, it will go through the admission review process, and if accepted, you'll receive an offer letter with instructions on how to enroll. Do you need help with any specific part of the application process?",
+        "answer_chars": 415,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 2807.6,
+        "prefill_ms": 609.6,
+        "generation_ms": 2151.9,
+        "prompt_tokens": 4190,
+        "eval_tokens": 83,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "adm-002",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "To apply to Meridian University, you'll need to submit a few key documents. Here’s what you should have ready:\n\n1. Academic transcripts and mark sheets from your most recent qualification.\n2. A government-issued photo ID or passport.\n3. A recent passport-size photograph as per the application specifications.\n4. A Statement of Purpose, which is required for postgraduate and doctoral applications.\n5. If you're an international applicant, you'll also need to submit a valid passport copy and, where applicable, an English proficiency score like TOEFL or IELTS.\n\nDo you need help with anything specific regarding these documents?",
+        "answer_chars": 629,
+        "census": [
+          "format_other",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 3889.4,
+        "prefill_ms": 545.2,
+        "generation_ms": 3291.0,
+        "prompt_tokens": 4126,
+        "eval_tokens": 128,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "adm-003",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "For undergraduate admission at Meridian University, you need to have completed 10+2 or an equivalent qualification. Make sure to meet the minimum subject requirements for the program you're interested in. Is there anything else you'd like to know about the eligibility criteria?",
+        "answer_chars": 278,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1979.9,
+        "prefill_ms": 542.5,
+        "generation_ms": 1387.9,
+        "prompt_tokens": 4119,
+        "eval_tokens": 54,
+        "load_ms": 6.1
+      },
+      {
+        "case_id": "adm-004",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Based on the information I have, Meridian University does not specify a general entrance exam requirement for all programs. However, some programs might require specific entrance exams or assessments. Could you please tell me which program you're interested in so I can provide more accurate information?",
+        "answer_chars": 304,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 1989.1,
+        "prefill_ms": 545.6,
+        "generation_ms": 1391.1,
+        "prompt_tokens": 4128,
+        "eval_tokens": 54,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "adm-005",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The eligibility for the MBA program at Meridian University requires a Bachelor's Degree. Is there anything else you'd like to know about the MBA program?",
+        "answer_chars": 153,
+        "census": [],
+        "wall_ms": 1465.7,
+        "prefill_ms": 625.8,
+        "generation_ms": 783.3,
+        "prompt_tokens": 4228,
+        "eval_tokens": 31,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "adm-006",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You can apply to up to two programs within the same intake cycle. Is there anything else you'd like to know?",
+        "answer_chars": 108,
+        "census": [],
+        "wall_ms": 1304.9,
+        "prefill_ms": 621.6,
+        "generation_ms": 627.6,
+        "prompt_tokens": 4230,
+        "eval_tokens": 25,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "adm-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, international applicants need to submit a valid passport copy and, where applicable, an English proficiency score. Is there anything else you need help with regarding international applications?",
+        "answer_chars": 199,
+        "census": [],
+        "wall_ms": 1391.4,
+        "prefill_ms": 481.7,
+        "generation_ms": 861.3,
+        "prompt_tokens": 4125,
+        "eval_tokens": 34,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "adm-008",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University offers applications across two main intake cycles each year: Fall and Spring. There are also limited Summer options available for some programs. Would you like to know more about a specific intake period?",
+        "answer_chars": 224,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1642.6,
+        "prefill_ms": 547.4,
+        "generation_ms": 1047.6,
+        "prompt_tokens": 4153,
+        "eval_tokens": 41,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "adv-005",
+        "intent": "Out-of-scope",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "No, I'm here to assist you as a voice AI agent representing Meridian University. How can I help you today?",
+        "answer_chars": 106,
+        "census": [],
+        "wall_ms": 1345.9,
+        "prefill_ms": 625.2,
+        "generation_ms": 655.2,
+        "prompt_tokens": 4210,
+        "eval_tokens": 26,
+        "load_ms": 7.6
+      },
+      {
+        "case_id": "bc-001",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "It seems like you might have just said \"ok\" without a specific question or request. How can I assist you today?",
+        "answer_chars": 111,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1240.2,
+        "prefill_ms": 543.3,
+        "generation_ms": 650.9,
+        "prompt_tokens": 4115,
+        "eval_tokens": 26,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "bc-002",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "It seems like there might have been a misunderstanding or a brief interruption. Could you please tell me how I can assist you today?",
+        "answer_chars": 132,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1339.5,
+        "prefill_ms": 608.3,
+        "generation_ms": 677.1,
+        "prompt_tokens": 4173,
+        "eval_tokens": 27,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "bc-003",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+          "spoken-format violation: 3 sentences (limit 2)",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "Great! If you have any questions or need help with anything, feel free to ask. How can I assist you today?",
+        "answer_chars": 106,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 1173.4,
+        "prefill_ms": 476.8,
+        "generation_ms": 652.5,
+        "prompt_tokens": 4026,
+        "eval_tokens": 26,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "camp-001",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 7 sentences (limit 4)",
+          "spoken-format violation: 106 words (limit 80)"
+        ],
+        "answer": "Sure, Meridian University offers a variety of facilities to enhance your learning experience. We have smart classrooms with interactive displays and flexible seating for collaborative learning. The central library houses over 200,000 volumes and has 24/7 reading halls. We also have innovation labs with prototyping benches and 3D printers, perfect for hands-on projects. For those who enjoy sports, our sports complex includes indoor and outdoor facilities for twelve competitive sports. Additionally, there are residence halls with common lounges and study rooms, a cafeteria with a food court, and over 40 student clubs covering various interests. Is there a specific facility you're interested in learning more about?",
+        "answer_chars": 721,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 4307.8,
+        "prefill_ms": 630.3,
+        "generation_ms": 3630.0,
+        "prompt_tokens": 4243,
+        "eval_tokens": 140,
+        "load_ms": 3.3
+      },
+      {
+        "case_id": "camp-002",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "Yes, there are over 40 student clubs at Meridian University covering a wide range of interests including technology, culture, debate, and community service. How can I help you with this information? Do you want to know more about a specific club?",
+        "answer_chars": 246,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 2015.7,
+        "prefill_ms": 629.8,
+        "generation_ms": 1327.1,
+        "prompt_tokens": 4264,
+        "eval_tokens": 52,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "camp-003",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The Central Library at Meridian University holds over 200,000 volumes. Is there anything else you'd like to know?",
+        "answer_chars": 113,
+        "census": [],
+        "wall_ms": 1367.4,
+        "prefill_ms": 551.7,
+        "generation_ms": 763.2,
+        "prompt_tokens": 4318,
+        "eval_tokens": 30,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "con-001",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The admissions phone number for Meridian University is +1 (555) 204-7890. How else can I assist you today?",
+        "answer_chars": 106,
+        "census": [],
+        "wall_ms": 1547.7,
+        "prefill_ms": 604.1,
+        "generation_ms": 894.0,
+        "prompt_tokens": 4164,
+        "eval_tokens": 35,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "con-002",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The admissions email address for Meridian University is admissions@meridian.edu. How can I assist you further with your application?",
+        "answer_chars": 132,
+        "census": [],
+        "wall_ms": 1167.1,
+        "prefill_ms": 465.0,
+        "generation_ms": 653.1,
+        "prompt_tokens": 4164,
+        "eval_tokens": 26,
+        "load_ms": 6.6
+      },
+      {
+        "case_id": "con-003",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "Our admissions office hours are Monday through Friday, from 9:00 AM to 5:00 PM. How can I assist you further today?",
+        "answer_chars": 115,
+        "census": [],
+        "wall_ms": 1431.2,
+        "prefill_ms": 546.8,
+        "generation_ms": 834.4,
+        "prompt_tokens": 4210,
+        "eval_tokens": 33,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "dates-001",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline is January 15th, and the regular application deadline is April 30th. Admission decisions are released on June 10th. Does that help, or do you need more information?",
+        "answer_chars": 195,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1766.7,
+        "prefill_ms": 552.2,
+        "generation_ms": 1164.4,
+        "prompt_tokens": 4157,
+        "eval_tokens": 46,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "dates-002",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The fall semester at Meridian University begins on August 1st. Is there anything else you'd like to know?",
+        "answer_chars": 105,
+        "census": [],
+        "wall_ms": 1156.8,
+        "prefill_ms": 474.1,
+        "generation_ms": 632.8,
+        "prompt_tokens": 4126,
+        "eval_tokens": 25,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "dates-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Admission decisions are typically released on June 10th. If you have an application submitted, you can expect to hear back around that time. Is there anything else you'd like to know about the admissions process?",
+        "answer_chars": 212,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1762.2,
+        "prefill_ms": 557.6,
+        "generation_ms": 1157.1,
+        "prompt_tokens": 4157,
+        "eval_tokens": 45,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "dates-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline for Meridian University is January 15th. Is there anything else you need help with regarding the application process?",
+        "answer_chars": 148,
+        "census": [],
+        "wall_ms": 1347.9,
+        "prefill_ms": 558.3,
+        "generation_ms": 738.6,
+        "prompt_tokens": 4158,
+        "eval_tokens": 29,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "dates-005",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The application deadline for the Spring intake is April 30. Is there anything else you'd like to know about the Spring application process?",
+        "answer_chars": 139,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1267.3,
+        "prefill_ms": 480.7,
+        "generation_ms": 734.3,
+        "prompt_tokens": 4156,
+        "eval_tokens": 29,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "dates-006",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline is January 15. Is there anything else you'd like to know about the deadlines?",
+        "answer_chars": 108,
+        "census": [],
+        "wall_ms": 1203.9,
+        "prefill_ms": 552.8,
+        "generation_ms": 602.7,
+        "prompt_tokens": 4152,
+        "eval_tokens": 24,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "dates-007",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Once you're admitted, the Fall semester begins on August 1st, which is when classes typically start. If you're admitted after the regular deadline, you might start in the Spring semester, which begins in January. Would you like to know more about the start dates or any other details?",
+        "answer_chars": 284,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2216.5,
+        "prefill_ms": 621.0,
+        "generation_ms": 1544.1,
+        "prompt_tokens": 4228,
+        "eval_tokens": 60,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "dist-001",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"April 30\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer": "Sure, I can help with that. Could you please tell me what you're referring to? Are you asking about an application deadline or an appointment?",
+        "answer_chars": 142,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1395.1,
+        "prefill_ms": 552.7,
+        "generation_ms": 785.9,
+        "prompt_tokens": 4257,
+        "eval_tokens": 31,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "dist-003",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"financial aid\"]}",
+          "spoken-format violation: 4 sentences (limit 3)"
+        ],
+        "answer": "I understand that you're feeling overwhelmed. Let's take a step back and see what options we have. Can you tell me a bit more about your situation? Are there specific costs you're concerned about, or is it the overall expense of the program?",
+        "answer_chars": 241,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 2020.6,
+        "prefill_ms": 618.3,
+        "generation_ms": 1349.1,
+        "prompt_tokens": 4319,
+        "eval_tokens": 52,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "faq-001",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "Typically, admission decisions are released within 4 to 6 weeks after the application deadline. If you have applied before the deadline, you can expect to hear back around that timeframe.",
+        "answer_chars": 187,
+        "census": [],
+        "wall_ms": 1551.5,
+        "prefill_ms": 530.1,
+        "generation_ms": 967.7,
+        "prompt_tokens": 4176,
+        "eval_tokens": 38,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "faq-002",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "The application fee is a nominal non-refundable processing fee. It applies per application and is listed in the Fees Structure section. Is there anything else you'd like to know about the fees?",
+        "answer_chars": 193,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1624.8,
+        "prefill_ms": 552.8,
+        "generation_ms": 1023.4,
+        "prompt_tokens": 4254,
+        "eval_tokens": 40,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "fees-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the MBA program at Meridian University is $18,500 per year. Is there anything else you'd like to know about the MBA program?",
+        "answer_chars": 140,
+        "census": [],
+        "wall_ms": 1637.7,
+        "prefill_ms": 675.1,
+        "generation_ms": 916.9,
+        "prompt_tokens": 4316,
+        "eval_tokens": 36,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "fees-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition fee for undergraduate programs at Meridian University ranges from $7,900 to $15,200 per year. Is there anything else you'd like to know?",
+        "answer_chars": 148,
+        "census": [],
+        "wall_ms": 1624.8,
+        "prefill_ms": 539.0,
+        "generation_ms": 1036.8,
+        "prompt_tokens": 4349,
+        "eval_tokens": 40,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "fees-003",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, there is a nominal non-refundable processing fee per application. For undergraduate applications, it's $60, and for postgraduate applications, it's $75.",
+        "answer_chars": 157,
+        "census": [],
+        "wall_ms": 1648.7,
+        "prefill_ms": 632.5,
+        "generation_ms": 966.0,
+        "prompt_tokens": 4261,
+        "eval_tokens": 38,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "fees-004",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The hostel and accommodation fee per year is $3,200. Is there anything else you'd like to know?",
+        "answer_chars": 95,
+        "census": [],
+        "wall_ms": 1497.4,
+        "prefill_ms": 795.1,
+        "generation_ms": 656.1,
+        "prompt_tokens": 4516,
+        "eval_tokens": 26,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "fees-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The admission or registration fee is $650 for postgraduate programs. Is there anything else you need help with?",
+        "answer_chars": 111,
+        "census": [],
+        "wall_ms": 1074.2,
+        "prefill_ms": 390.8,
+        "generation_ms": 630.7,
+        "prompt_tokens": 4256,
+        "eval_tokens": 25,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "fees-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "I don't have that specific information in the university profile. However, I can connect you with someone who can help with payment options. Would you like me to connect you with the admissions office regarding tuition payment plans?",
+        "answer_chars": 233,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 1786.6,
+        "prefill_ms": 609.4,
+        "generation_ms": 1125.6,
+        "prompt_tokens": 4190,
+        "eval_tokens": 44,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "fees-007",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The examination fee per semester is $150 for postgraduate students. Is there anything else you'd like to know?",
+        "answer_chars": 110,
+        "census": [],
+        "wall_ms": 1332.8,
+        "prefill_ms": 622.8,
+        "generation_ms": 658.0,
+        "prompt_tokens": 4231,
+        "eval_tokens": 26,
+        "load_ms": 6.7
+      },
+      {
+        "case_id": "fees-008",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, the caution deposit is refundable. It's a one-time fee of $300 for both undergraduate and postgraduate students.",
+        "answer_chars": 117,
+        "census": [],
+        "wall_ms": 1415.9,
+        "prefill_ms": 631.0,
+        "generation_ms": 732.6,
+        "prompt_tokens": 4261,
+        "eval_tokens": 29,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "fees-009",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the B.Tech in AI and Machine Learning program is $15,200 per year. How can I assist you further with this information?",
+        "answer_chars": 134,
+        "census": [],
+        "wall_ms": 1696.1,
+        "prefill_ms": 746.5,
+        "generation_ms": 898.8,
+        "prompt_tokens": 4442,
+        "eval_tokens": 35,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "fees-011",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Sure, I can help with that. The hostel and accommodation fee is included in the fees structure. For undergraduate students, it's $3,200 per year, and the same applies to postgraduate students. Is there anything else you'd like to know about the fees?",
+        "answer_chars": 250,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 2152.6,
+        "prefill_ms": 614.5,
+        "generation_ms": 1488.7,
+        "prompt_tokens": 4186,
+        "eval_tokens": 58,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "hist-001",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "The Vice Chancellor of Meridian University is Dr. Helena Cross. She leads with the belief that a university's role is to guide students, providing them with direction beyond just academic degrees. If you have any more questions, feel free to ask!",
+        "answer_chars": 246,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1876.5,
+        "prefill_ms": 543.8,
+        "generation_ms": 1277.2,
+        "prompt_tokens": 4126,
+        "eval_tokens": 50,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "hist-002",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "Meridian University was founded in 1978. Would you like to know more about its history?",
+        "answer_chars": 87,
+        "census": [],
+        "wall_ms": 1154.0,
+        "prefill_ms": 531.2,
+        "generation_ms": 577.2,
+        "prompt_tokens": 4096,
+        "eval_tokens": 23,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "int-001",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, that's correct. The MBA program is a two-year program. Is there anything else you'd like to know about it?",
+        "answer_chars": 111,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 1467.6,
+        "prefill_ms": 707.0,
+        "generation_ms": 712.1,
+        "prompt_tokens": 4369,
+        "eval_tokens": 28,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "int-002",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Sure, what tuition are you asking about? Could you please specify the program?",
+        "answer_chars": 78,
+        "census": [],
+        "wall_ms": 1147.3,
+        "prefill_ms": 676.6,
+        "generation_ms": 422.5,
+        "prompt_tokens": 4314,
+        "eval_tokens": 17,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "int-003",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "It seems like your message was brief. How can I assist you today?",
+        "answer_chars": 65,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1003.9,
+        "prefill_ms": 546.0,
+        "generation_ms": 395.1,
+        "prompt_tokens": 4115,
+        "eval_tokens": 16,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "int-004",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're welcome! How can I assist you today?",
+        "answer_chars": 43,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 893.5,
+        "prefill_ms": 545.3,
+        "generation_ms": 292.8,
+        "prompt_tokens": 4118,
+        "eval_tokens": 12,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "int-005",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're welcome! How can I assist you further today?",
+        "answer_chars": 51,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 897.1,
+        "prefill_ms": 521.3,
+        "generation_ms": 325.1,
+        "prompt_tokens": 4112,
+        "eval_tokens": 13,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "int-007",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Sure, I understand. The tuition fee for the MBA program at Meridian University is $18,500 per year. Is there anything else you'd like to know about the program?",
+        "answer_chars": 160,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1723.6,
+        "prefill_ms": 633.9,
+        "generation_ms": 1043.7,
+        "prompt_tokens": 4269,
+        "eval_tokens": 41,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "multi-001",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The tuition for the MBA program is $18,500 per year. The fall semester starts on August 1st. How can I assist you further with this information?",
+        "answer_chars": 144,
+        "census": [],
+        "wall_ms": 1512.6,
+        "prefill_ms": 479.3,
+        "generation_ms": 976.4,
+        "prompt_tokens": 4132,
+        "eval_tokens": 38,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "multi-002",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 5 sentences (limit 3)",
+          "spoken-format violation: 86 words (limit 60)"
+        ],
+        "answer": "Sure, I can help with that. For your application, you'll need academic transcripts and mark sheets from your most recent qualification, a government-issued photo ID or passport, a recent passport-size photograph, and a Statement of Purpose if you're applying for a postgraduate or doctoral program. International applicants also need to submit a valid passport copy and, where applicable, an English proficiency score.\n\nRegarding the application fee, there is a nominal non-refundable processing fee per application. For undergraduate applications, it's $60, and for postgraduate applications, it's $75.",
+        "answer_chars": 603,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 3762.3,
+        "prefill_ms": 628.5,
+        "generation_ms": 3081.7,
+        "prompt_tokens": 4251,
+        "eval_tokens": 119,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "nasr-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "It looks like there might be a misunderstanding. We don't offer an MDA program. Did you mean the MBA program? The tuition for the MBA program is $18,500 per year. Is there anything else you need help with?",
+        "answer_chars": 205,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 2017.8,
+        "prefill_ms": 625.6,
+        "generation_ms": 1345.5,
+        "prompt_tokens": 4257,
+        "eval_tokens": 52,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "nasr-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "It seems like there might have been a misunderstanding. Did you mean to ask about the fees and eligibility for the BBA program?",
+        "answer_chars": 127,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1280.1,
+        "prefill_ms": 540.7,
+        "generation_ms": 688.5,
+        "prompt_tokens": 4209,
+        "eval_tokens": 27,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline for Meridian University is January 15th. Is there anything else you need help with regarding the application process?",
+        "answer_chars": 148,
+        "census": [],
+        "wall_ms": 1338.0,
+        "prefill_ms": 550.1,
+        "generation_ms": 739.4,
+        "prompt_tokens": 4136,
+        "eval_tokens": 29,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "nasr-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Fall semester at Meridian University starts on August 1st. Is there anything else you'd like to know?",
+        "answer_chars": 105,
+        "census": [],
+        "wall_ms": 1060.8,
+        "prefill_ms": 386.7,
+        "generation_ms": 628.5,
+        "prompt_tokens": 4144,
+        "eval_tokens": 25,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "nasr-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the Master of Business Administration (MBA) program at Meridian University is $18,500 per year. Does that help, or do you need more information?",
+        "answer_chars": 160,
+        "census": [],
+        "wall_ms": 1707.7,
+        "prefill_ms": 630.0,
+        "generation_ms": 1026.2,
+        "prompt_tokens": 4273,
+        "eval_tokens": 40,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "nasr-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Sure, I can help with that. The annual hostel and accommodation fee is $3,200 for both undergraduate and postgraduate students. Is there anything else you'd like to know about the fees?",
+        "answer_chars": 185,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1762.5,
+        "prefill_ms": 623.9,
+        "generation_ms": 1089.6,
+        "prompt_tokens": 4236,
+        "eval_tokens": 43,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "It looks like there might have been a typo in your question. You asked about the \"illigibility\" for the B.Tech Computer Science program. I believe you meant to ask about the eligibility requirements. The eligibility for the B.Tech Computer Science program at Meridian University requires a 10+2 (PCM) qualification. Is there anything else you would like to know about this program?",
+        "answer_chars": 381,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2916.1,
+        "prefill_ms": 705.3,
+        "generation_ms": 2138.9,
+        "prompt_tokens": 4380,
+        "eval_tokens": 82,
+        "load_ms": 12.0
+      },
+      {
+        "case_id": "nasr-010",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The application fee is a non-refundable processing fee. It's not returnable once it's paid. Is there anything else you need help with regarding fees or anything else?",
+        "answer_chars": 166,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1614.3,
+        "prefill_ms": 622.1,
+        "generation_ms": 943.3,
+        "prompt_tokens": 4238,
+        "eval_tokens": 37,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "out-001",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "Hello! This is Alex from Meridian University. How can I assist you today?",
+        "answer_chars": 73,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1104.9,
+        "prefill_ms": 613.3,
+        "generation_ms": 444.3,
+        "prompt_tokens": 4193,
+        "eval_tokens": 18,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "out-002",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "Hi there, this is Alex from Meridian University. I'm calling to follow up on your recent inquiry about our programs and to see if you have any questions or need further assistance. How can I assist you today?",
+        "answer_chars": 208,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 1823.7,
+        "prefill_ms": 617.7,
+        "generation_ms": 1146.1,
+        "prompt_tokens": 4210,
+        "eval_tokens": 45,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "pg-001",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "We offer several master's programs including the Master of Business Administration, Master of Computer Applications, M.Tech in various specializations, Master of Science, Master of Arts, and Master of Commerce. Would you like to know more about any specific program?",
+        "answer_chars": 266,
+        "census": [],
+        "wall_ms": 1974.1,
+        "prefill_ms": 617.2,
+        "generation_ms": 1308.1,
+        "prompt_tokens": 4217,
+        "eval_tokens": 51,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "pg-002",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 2 Years",
+          "required fact missing: Bachelor's in Science",
+          "spoken-format violation: 4 sentences (limit 3)"
+        ],
+        "answer": "The Master of Science (M.Sc.) program at Meridian University is a 2-year program. To apply, you need a Bachelor's degree in Science or a related field. Is there anything else you'd like to know about the M.Sc. program?",
+        "answer_chars": 218,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 2067.0,
+        "prefill_ms": 667.0,
+        "generation_ms": 1354.6,
+        "prompt_tokens": 4294,
+        "eval_tokens": 53,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "phd-001",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: master's degree",
+          "spoken-format violation: 7 sentences (limit 3)",
+          "spoken-format violation: 113 words (limit 55)"
+        ],
+        "answer": "For PhD admission at Meridian University, you'll need to complete a few key steps. First, you'll need to apply online and submit your application form along with academic and personal details. Then, you'll need to upload your transcripts, a government-issued photo ID, and any required test scores. Additionally, you'll need to provide a statement of purpose and a research proposal. Lastly, faculty availability in your chosen research area is also required. If you're interested in a specific area like Engineering & Computing, Business & Economics, Natural Sciences, or Humanities & Social Sciences, you should ensure your proposal aligns with the faculty's research interests. Would you like more details on any of these steps?",
+        "answer_chars": 731,
+        "census": [
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 4319.2,
+        "prefill_ms": 547.2,
+        "generation_ms": 3722.8,
+        "prompt_tokens": 4119,
+        "eval_tokens": 142,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "phd-002",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: markdown emphasis/asterisks",
+          "spoken-format violation: list or enumeration",
+          "spoken-format violation: 6 sentences (limit 4)",
+          "spoken-format violation: 77 words (limit 70)"
+        ],
+        "answer": "Sure, Meridian University offers PhD programs in several research areas. Here are some of the main areas:\n\n- **Engineering & Computing:** This includes AI systems, robotics, distributed computing, and network security.\n- **Business & Economics:** Focuses on organizational behavior, financial markets, and applied economics.\n- **Natural Sciences:** Includes materials science, molecular biology, and computational chemistry.\n- **Humanities & Social Sciences:** Covers media studies, comparative literature, and public policy.\n\nWould you like more details on any specific area?",
+        "answer_chars": 576,
+        "census": [
+          "format_other",
+          "format_other",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 3326.2,
+        "prefill_ms": 546.4,
+        "generation_ms": 2729.4,
+        "prompt_tokens": 4120,
+        "eval_tokens": 106,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "sch-001",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "We offer several scholarships at Meridian University. There's the Merit Scholarship, which can provide up to a 50% tuition waiver for top-scoring incoming students. We also have need-based financial aid for students who demonstrate economic need. Additionally, there's the Sports & Arts Scholarship for students with distinguished sporting or artistic achievements. Is there a specific scholarship you're interested in learning more about?",
+        "answer_chars": 439,
+        "census": [
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2741.0,
+        "prefill_ms": 606.3,
+        "generation_ms": 2086.0,
+        "prompt_tokens": 4164,
+        "eval_tokens": 81,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "sch-002",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Merit Scholarship at Meridian University can provide up to a 50% tuition waiver for top-scoring incoming students. Would you like to know more about the eligibility criteria for this scholarship?",
+        "answer_chars": 199,
+        "census": [],
+        "wall_ms": 1635.7,
+        "prefill_ms": 541.5,
+        "generation_ms": 1043.9,
+        "prompt_tokens": 4124,
+        "eval_tokens": 41,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "sch-003",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "No, the Merit Scholarship is not based on financial need. It's awarded to top-scoring incoming students and can provide up to a 50% tuition waiver. If you're looking for assistance based on financial need, we have the Need-Based Aid program for that. How can I help you further with scholarships?",
+        "answer_chars": 296,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2226.1,
+        "prefill_ms": 469.5,
+        "generation_ms": 1696.3,
+        "prompt_tokens": 4065,
+        "eval_tokens": 66,
+        "load_ms": 6.5
+      },
+      {
+        "case_id": "sch-004",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, we do offer scholarships for sports. We have the Sports & Arts Scholarship which supports students with distinguished sporting or artistic achievements. If you're interested, I can provide more details or help you with the application process. Do you have any specific questions about this scholarship?",
+        "answer_chars": 307,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 2010.0,
+        "prefill_ms": 552.7,
+        "generation_ms": 1408.9,
+        "prompt_tokens": 4201,
+        "eval_tokens": 55,
+        "load_ms": 3.3
+      },
+      {
+        "case_id": "sch-007",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Merit Scholarship at Meridian University can cover up to 50% of tuition for top-scoring incoming students. It doesn't typically cover full tuition, but it can significantly reduce the cost. Is there anything else you'd like to know about scholarships or financial aid?",
+        "answer_chars": 272,
+        "census": [
+          "forbidden_claim",
+          "format_sentences"
+        ],
+        "wall_ms": 2150.2,
+        "prefill_ms": 629.2,
+        "generation_ms": 1470.0,
+        "prompt_tokens": 4319,
+        "eval_tokens": 57,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "stt-003",
+        "intent": "STT error correction / clarification",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: $18,500",
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "You're welcome! If you have any other questions, feel free to ask. How can I assist you further today?",
+        "answer_chars": 102,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 1176.4,
+        "prefill_ms": 485.4,
+        "generation_ms": 633.4,
+        "prompt_tokens": 4041,
+        "eval_tokens": 25,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "tc-001",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The Master of Computer Applications (MCA) is a 2-year program with tuition of $13,800 per year. You need a Bachelor's in Computing to be eligible. How can I assist you further with this?",
+        "answer_chars": 186,
+        "census": [],
+        "wall_ms": 1925.3,
+        "prefill_ms": 624.7,
+        "generation_ms": 1248.0,
+        "prompt_tokens": 4241,
+        "eval_tokens": 49,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "tc-002",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: January 15"
+        ],
+        "answer": "It sounds like you might be asking about an early deadline or early admission. Could you please clarify what you're looking to find out or do?",
+        "answer_chars": 142,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1428.6,
+        "prefill_ms": 620.1,
+        "generation_ms": 761.0,
+        "prompt_tokens": 4231,
+        "eval_tokens": 30,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "ug-001",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech Computer Science",
+          "required fact missing: Bachelor of Business Administration",
+          "required fact missing: Bachelor of Commerce"
+        ],
+        "answer": "Meridian University offers a variety of undergraduate programs across different fields. Could you tell me which area of study you're interested in, so I can provide more specific information?",
+        "answer_chars": 191,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 1559.7,
+        "prefill_ms": 614.2,
+        "generation_ms": 896.6,
+        "prompt_tokens": 4216,
+        "eval_tokens": 35,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "ug-002",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 10+2 (Any Stream)"
+        ],
+        "answer": "The Bachelor of Business Administration (BBA) program at Meridian University typically lasts 3 years. For eligibility, you need to have completed 10+2 (or equivalent) with the minimum subject requirements for the chosen program. Is there anything else you'd like to know about the BBA program?",
+        "answer_chars": 293,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 2228.4,
+        "prefill_ms": 554.4,
+        "generation_ms": 1621.4,
+        "prompt_tokens": 4159,
+        "eval_tokens": 63,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "ug-003",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech AI & Machine Learning",
+          "required fact missing: 4 Years",
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "Yes, we offer a B.Tech in AI & Machine Learning. It's a four-year program with an annual tuition of $15,200. Is there anything specific you'd like to know about this program?",
+        "answer_chars": 174,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 1969.2,
+        "prefill_ms": 707.9,
+        "generation_ms": 1213.7,
+        "prompt_tokens": 4368,
+        "eval_tokens": 47,
+        "load_ms": 5.7
+      }
+    ],
+    "failures": [
+      "acc-001 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-002 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-003 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-004 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-005 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-007 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-008 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "bc-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+      "bc-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+      "bc-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+      "camp-001 [verified] fail: spoken-format violation: 7 sentences (limit 4)",
+      "camp-002 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "dates-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dist-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"April 30\"]}",
+      "dist-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"",
+      "faq-002 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "fees-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-011 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "hist-001 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "int-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "multi-002 [kb_traceable] fail: spoken-format violation: 5 sentences (limit 3)",
+      "nasr-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-010 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "out-001 [kb_traceable] fail: spoken-format violation: 3 sentences (limit 2)",
+      "out-002 [kb_traceable] fail: spoken-format violation: 3 sentences (limit 2)",
+      "pg-002 [verified] fail: required fact missing: 2 Years",
+      "phd-001 [verified] fail: required fact missing: master's degree",
+      "phd-002 [verified] fail: spoken-format violation: markdown emphasis/asterisks",
+      "sch-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "stt-003 [kb_traceable] fail: required fact missing: $18,500",
+      "tc-002 [kb_traceable] fail: required fact missing: January 15",
+      "ug-001 [verified] fail: required fact missing: B.Tech Computer Science",
+      "ug-002 [verified] fail: required fact missing: 10+2 (Any Stream)",
+      "ug-003 [verified] fail: required fact missing: B.Tech AI & Machine Learning"
+    ]
+  },
+  "llama3.2:3b": {
+    "model": "llama3.2:3b",
+    "options": {
+      "num_ctx": 8192,
+      "temperature": 0.3
+    },
+    "tag": "promptfix-census",
+    "cases": 83,
+    "scorable": 30,
+    "blocked": 53,
+    "verdicts": {
+      "blocked": 53,
+      "fail": 16,
+      "pass": 14
+    },
+    "by_grade": {
+      "verified": {
+        "blocked": 7,
+        "fail": 7,
+        "pass": 10
+      },
+      "kb_traceable": {
+        "blocked": 46,
+        "fail": 9,
+        "pass": 4
+      }
+    },
+    "wall_seconds": 98.0,
+    "prefill_ms_p50": 146.2,
+    "generation_ms_p50": 184.0,
+    "wall_ms_p50": 387.6,
+    "eval_tokens_p50": 23,
+    "eval_tokens_max": 140,
+    "cold_load_ms_max": 30.8,
+    "rows": [
+      {
+        "case_id": "acc-001",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "\"Meridian University is accredited by the Accrediting Commission of Career Schools and Colleges (ACCSC), which is recognized by the U.S. Department of Education.\"",
+        "answer_chars": 162,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 430.2,
+        "prefill_ms": 139.4,
+        "generation_ms": 263.4,
+        "prompt_tokens": 4044,
+        "eval_tokens": 33,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "acc-002",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University is not ranked in the top 100 universities globally, according to the QS World University Rankings. However, we are recognized for our rigorous academic programs, strong industry connections, and commitment to community engagement.",
+        "answer_chars": 250,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 511.2,
+        "prefill_ms": 141.1,
+        "generation_ms": 343.6,
+        "prompt_tokens": 4101,
+        "eval_tokens": 44,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "acc-003",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian has over $40M in active research funding across engineering and sciences.",
+        "answer_chars": 82,
+        "census": [],
+        "wall_ms": 301.0,
+        "prefill_ms": 145.5,
+        "generation_ms": 128.8,
+        "prompt_tokens": 4142,
+        "eval_tokens": 17,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "acc-004",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "We have exchange and research agreements with 60+ partner universities worldwide.",
+        "answer_chars": 81,
+        "census": [],
+        "wall_ms": 316.5,
+        "prefill_ms": 159.9,
+        "generation_ms": 124.4,
+        "prompt_tokens": 4223,
+        "eval_tokens": 15,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "acc-005",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You have over 40,000 alumni working across 70 countries and every major industry.",
+        "answer_chars": 81,
+        "census": [],
+        "wall_ms": 329.5,
+        "prefill_ms": 157.2,
+        "generation_ms": 145.8,
+        "prompt_tokens": 4156,
+        "eval_tokens": 19,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "acc-006",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "I'm not aware of any rankings that would place Meridian University as the number one university in the country. Can you tell me more about what you're looking for? Are you interested in learning more about our programs or something else?",
+        "answer_chars": 237,
+        "census": [
+          "forbidden_claim",
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 561.6,
+        "prefill_ms": 142.3,
+        "generation_ms": 386.3,
+        "prompt_tokens": 4105,
+        "eval_tokens": 48,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "acc-007",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "\"Meridian University is accredited by the National Board of Accreditation and the International Association of Universities, as well as the Global Business School Network and the Engineering Council Certified.\"",
+        "answer_chars": 210,
+        "census": [],
+        "wall_ms": 462.7,
+        "prefill_ms": 161.3,
+        "generation_ms": 273.8,
+        "prompt_tokens": 4203,
+        "eval_tokens": 35,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "acc-008",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "verified",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Meridian University educates over 5,000 students from more than 30 countries across six schools and 50+ programs.",
+        "answer_chars": 113,
+        "census": [],
+        "wall_ms": 413.2,
+        "prefill_ms": 161.6,
+        "generation_ms": 212.7,
+        "prompt_tokens": 4171,
+        "eval_tokens": 27,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "acc-009",
+        "intent": "Accreditation / rankings / overview",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're interested in knowing about Meridian University's ranking and accreditation. Let me check that for you. (pause) According to our university profile, Meridian University is accredited by the Accreditation Council for Business Schools and Programs (ACBSP), which is recognized by the US Department of Education. However, I couldn't find any information on a national ranking that places us at number one. Would you like me to look into that further or provide more information on our accreditation status?",
+        "answer_chars": 510,
+        "census": [
+          "forbidden_claim",
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 930.9,
+        "prefill_ms": 136.8,
+        "generation_ms": 766.8,
+        "prompt_tokens": 4053,
+        "eval_tokens": 98,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "adm-001",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "\"First, you'll need to apply online with the application form, submit documents such as transcripts, ID, and test scores, and pass the admission review. After that, you'll receive an offer letter with enrollment instructions. Is there anything else you'd like to know about the application process?\"",
+        "answer_chars": 299,
+        "census": [],
+        "wall_ms": 658.0,
+        "prefill_ms": 162.3,
+        "generation_ms": 468.5,
+        "prompt_tokens": 4169,
+        "eval_tokens": 60,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "adm-002",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You'll need to submit your academic transcripts and mark sheets from the most recent qualification, as well as a government-issued photo ID or passport, and a recent passport-size photograph. Additionally, if you're applying for a postgraduate or doctoral program, you'll need to include a Statement of Purpose. For international applicants, you'll also need to provide a valid passport copy and, if applicable, an English proficiency score.",
+        "answer_chars": 441,
+        "census": [],
+        "wall_ms": 841.8,
+        "prefill_ms": 145.0,
+        "generation_ms": 667.4,
+        "prompt_tokens": 4114,
+        "eval_tokens": 85,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "adm-003",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're eligible for undergraduate admission if you've completed 10+2 (or equivalent) with the minimum subject requirements for the chosen program.",
+        "answer_chars": 146,
+        "census": [],
+        "wall_ms": 396.3,
+        "prefill_ms": 142.9,
+        "generation_ms": 223.7,
+        "prompt_tokens": 4104,
+        "eval_tokens": 29,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "adm-004",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're interested in applying to Meridian University. Let me check on that for you. (pause) According to our admissions process, entrance exams are not always required, but it depends on the program you're applying to. Can you please tell me which program you're interested in?",
+        "answer_chars": 277,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 623.4,
+        "prefill_ms": 144.1,
+        "generation_ms": 451.1,
+        "prompt_tokens": 4117,
+        "eval_tokens": 58,
+        "load_ms": 2.6
+      },
+      {
+        "case_id": "adm-005",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The eligibility for the Master of Business Administration (MBA) program at Meridian University is a Bachelor's Degree.",
+        "answer_chars": 118,
+        "census": [],
+        "wall_ms": 387.6,
+        "prefill_ms": 162.8,
+        "generation_ms": 191.8,
+        "prompt_tokens": 4200,
+        "eval_tokens": 24,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "adm-006",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You can apply to up to two programs within the same intake cycle.",
+        "answer_chars": 65,
+        "census": [],
+        "wall_ms": 307.9,
+        "prefill_ms": 162.4,
+        "generation_ms": 117.4,
+        "prompt_tokens": 4216,
+        "eval_tokens": 15,
+        "load_ms": 4.9
+      },
+      {
+        "case_id": "adm-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "International applicants should also submit a valid passport copy and, where applicable, an English proficiency score.",
+        "answer_chars": 118,
+        "census": [],
+        "wall_ms": 305.8,
+        "prefill_ms": 122.0,
+        "generation_ms": 155.3,
+        "prompt_tokens": 4113,
+        "eval_tokens": 20,
+        "load_ms": 4.3
+      },
+      {
+        "case_id": "adm-008",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "\"We accept applications across two intake cycles each year: Fall and Spring, with limited Summer options for select programs.\"",
+        "answer_chars": 126,
+        "census": [],
+        "wall_ms": 353.1,
+        "prefill_ms": 143.0,
+        "generation_ms": 183.1,
+        "prompt_tokens": 4111,
+        "eval_tokens": 23,
+        "load_ms": 5.9
+      },
+      {
+        "case_id": "adv-005",
+        "intent": "Out-of-scope",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 5 sentences (limit 2)",
+          "spoken-format violation: 52 words (limit 45)"
+        ],
+        "answer": "We're glad you asked that. I'm an AI designed to simulate a real conversation. I'm here to help answer your questions and provide information about Meridian University. My goal is to make you feel like you're talking to a real person, not just a computer program. How can I assist you today?",
+        "answer_chars": 291,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 689.4,
+        "prefill_ms": 158.8,
+        "generation_ms": 500.6,
+        "prompt_tokens": 4198,
+        "eval_tokens": 64,
+        "load_ms": 6.1
+      },
+      {
+        "case_id": "bc-001",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "\"Okay, let's get started. What can I help you with today?\"",
+        "answer_chars": 58,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 306.6,
+        "prefill_ms": 146.4,
+        "generation_ms": 130.1,
+        "prompt_tokens": 4099,
+        "eval_tokens": 17,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "bc-002",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "\"Right, can you please confirm your availability for the upcoming appointment?\"",
+        "answer_chars": 79,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 287.5,
+        "prefill_ms": 146.1,
+        "generation_ms": 113.7,
+        "prompt_tokens": 4151,
+        "eval_tokens": 15,
+        "load_ms": 5.3
+      },
+      {
+        "case_id": "bc-003",
+        "intent": "Backchannel (\"mm-hm\")",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+          "spoken-format violation: 3 sentences (limit 2)",
+          "expected no follow-up question; the answer asks one"
+        ],
+        "answer": "\"Great, got it. I've taken note of your question. Can you please provide more context or clarify what you're looking for?\"",
+        "answer_chars": 122,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 374.1,
+        "prefill_ms": 122.5,
+        "generation_ms": 224.0,
+        "prompt_tokens": 4003,
+        "eval_tokens": 29,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "camp-001",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 103 words (limit 80)"
+        ],
+        "answer": "\"Meridian University has a variety of facilities, including Smart Classrooms with interactive displays and flexible seating for collaborative learning, a Central Library with 200,000+ volumes and 24/7 reading halls across two floors, Innovation Labs with prototyping benches, 3D printers, and a dedicated startup incubation space, a Sports Complex with indoor and outdoor facilities for twelve competitive sports, Residence Halls with secure, modern housing and common lounges and study rooms, a cafeteria and food court with multi-cuisine dining and nutrition-conscious counters, and over 40 student clubs spanning technology, culture, debate, and community service. Is there anything specific you'd like to know about these facilities?\"",
+        "answer_chars": 738,
+        "census": [
+          "format_words"
+        ],
+        "wall_ms": 1317.4,
+        "prefill_ms": 160.0,
+        "generation_ms": 1130.6,
+        "prompt_tokens": 4198,
+        "eval_tokens": 140,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "camp-002",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 3 sentences (limit 2)"
+        ],
+        "answer": "Yes, there are student clubs at Meridian University. You can find a list of the 40+ clubs on our website, covering topics such as technology, culture, debate, and community service. Would you like to know more about a specific club?",
+        "answer_chars": 232,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 602.7,
+        "prefill_ms": 165.6,
+        "generation_ms": 404.9,
+        "prompt_tokens": 4244,
+        "eval_tokens": 52,
+        "load_ms": 5.5
+      },
+      {
+        "case_id": "camp-003",
+        "intent": "Campus / hostel / logistics",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The Central Library at Meridian University holds approximately 200,000 volumes across two floors.",
+        "answer_chars": 97,
+        "census": [],
+        "wall_ms": 322.3,
+        "prefill_ms": 142.0,
+        "generation_ms": 149.9,
+        "prompt_tokens": 4254,
+        "eval_tokens": 19,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "con-001",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The admissions phone number is +1 (555) 204-7890.",
+        "answer_chars": 49,
+        "census": [],
+        "wall_ms": 300.8,
+        "prefill_ms": 145.2,
+        "generation_ms": 128.5,
+        "prompt_tokens": 4136,
+        "eval_tokens": 17,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "con-002",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "You can reach us at admissions@meridian.edu.",
+        "answer_chars": 44,
+        "census": [],
+        "wall_ms": 235.9,
+        "prefill_ms": 117.2,
+        "generation_ms": 89.4,
+        "prompt_tokens": 4136,
+        "eval_tokens": 12,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "con-003",
+        "intent": "Contact information",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "Our office hours are Monday through Friday, 9:00 AM to 5:00 PM.",
+        "answer_chars": 63,
+        "census": [],
+        "wall_ms": 332.3,
+        "prefill_ms": 142.1,
+        "generation_ms": 164.5,
+        "prompt_tokens": 4183,
+        "eval_tokens": 21,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "dates-001",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline is January 15 and the regular application deadline is April 30.",
+        "answer_chars": 94,
+        "census": [],
+        "wall_ms": 318.0,
+        "prefill_ms": 145.4,
+        "generation_ms": 145.0,
+        "prompt_tokens": 4140,
+        "eval_tokens": 19,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "dates-002",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Fall semester begins on August 1.",
+        "answer_chars": 37,
+        "census": [],
+        "wall_ms": 228.9,
+        "prefill_ms": 124.0,
+        "generation_ms": 75.9,
+        "prompt_tokens": 4101,
+        "eval_tokens": 10,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "dates-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Admission decisions are typically released within 4–6 weeks of the application deadline.",
+        "answer_chars": 88,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 313.4,
+        "prefill_ms": 145.3,
+        "generation_ms": 139.4,
+        "prompt_tokens": 4140,
+        "eval_tokens": 18,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "dates-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline for Meridian University is January 15.",
+        "answer_chars": 69,
+        "census": [],
+        "wall_ms": 290.2,
+        "prefill_ms": 146.3,
+        "generation_ms": 115.8,
+        "prompt_tokens": 4141,
+        "eval_tokens": 14,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "dates-005",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The spring intake deadline is April 30.",
+        "answer_chars": 39,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 234.5,
+        "prefill_ms": 124.1,
+        "generation_ms": 77.5,
+        "prompt_tokens": 4141,
+        "eval_tokens": 10,
+        "load_ms": 6.9
+      },
+      {
+        "case_id": "dates-006",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're interested in applying to Meridian University. Our early application deadline is indeed January 15, and we also have a limited Summer intake for select programs. Would you like to know more about the application process or discuss your specific program interests?",
+        "answer_chars": 270,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 577.8,
+        "prefill_ms": 145.3,
+        "generation_ms": 399.9,
+        "prompt_tokens": 4133,
+        "eval_tokens": 50,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "dates-007",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're looking forward to starting classes at Meridian University. According to our latest information, the Fall semester typically begins on August 1st. However, please note that this can vary depending on the specific program you're applying to. I recommend checking your offer letter for the most up-to-date information on your program's start date. Would you like me to look up the start date for your program?",
+        "answer_chars": 414,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 832.6,
+        "prefill_ms": 159.4,
+        "generation_ms": 646.1,
+        "prompt_tokens": 4198,
+        "eval_tokens": 82,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "dist-001",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"April 30\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer": "Yes, you still have time to make the change. I can assist you with updating your address and then we can move forward with the appointment.",
+        "answer_chars": 139,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 397.7,
+        "prefill_ms": 139.5,
+        "generation_ms": 232.1,
+        "prompt_tokens": 4195,
+        "eval_tokens": 30,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "dist-003",
+        "intent": "Distressed caller",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"financial aid\"]}",
+          "expected behaviour marker missing"
+        ],
+        "answer": "I can see that you're feeling overwhelmed by the cost. Can you tell me a bit more about what's not working for you in terms of affordability? Is there a specific aspect of the program or the tuition that's causing you concern?",
+        "answer_chars": 226,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 573.1,
+        "prefill_ms": 158.8,
+        "generation_ms": 385.3,
+        "prompt_tokens": 4285,
+        "eval_tokens": 49,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "faq-001",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "You'll typically hear back within 4-6 weeks of the application deadline.",
+        "answer_chars": 72,
+        "census": [],
+        "wall_ms": 286.9,
+        "prefill_ms": 130.8,
+        "generation_ms": 129.1,
+        "prompt_tokens": 4154,
+        "eval_tokens": 17,
+        "load_ms": 2.8
+      },
+      {
+        "case_id": "faq-002",
+        "intent": "FAQ",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The application fee is non-refundable.",
+        "answer_chars": 38,
+        "census": [],
+        "wall_ms": 250.9,
+        "prefill_ms": 145.4,
+        "generation_ms": 76.1,
+        "prompt_tokens": 4200,
+        "eval_tokens": 10,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "fees-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the MBA program is $18,500 per year.",
+        "answer_chars": 52,
+        "census": [],
+        "wall_ms": 321.4,
+        "prefill_ms": 176.1,
+        "generation_ms": 116.9,
+        "prompt_tokens": 4286,
+        "eval_tokens": 15,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "fees-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition range for our undergraduate programs is $7,900 to $15,200 per year.",
+        "answer_chars": 79,
+        "census": [],
+        "wall_ms": 340.6,
+        "prefill_ms": 141.8,
+        "generation_ms": 168.2,
+        "prompt_tokens": 4289,
+        "eval_tokens": 21,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "fees-003",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, a nominal non-refundable processing fee applies per application, as listed in the Fees Structure section.",
+        "answer_chars": 110,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 469.7,
+        "prefill_ms": 164.2,
+        "generation_ms": 177.0,
+        "prompt_tokens": 4215,
+        "eval_tokens": 23,
+        "load_ms": 30.8
+      },
+      {
+        "case_id": "fees-004",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The hostel accommodation fee for undergraduate students is $3,200 per year, and for postgraduate students, it is also $3,200 per year.",
+        "answer_chars": 134,
+        "census": [],
+        "wall_ms": 470.3,
+        "prefill_ms": 195.4,
+        "generation_ms": 246.1,
+        "prompt_tokens": 4428,
+        "eval_tokens": 32,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "fees-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The admission or registration fee is $500 for undergraduate programs and $650 for postgraduate programs.",
+        "answer_chars": 104,
+        "census": [],
+        "wall_ms": 273.2,
+        "prefill_ms": 93.7,
+        "generation_ms": 152.0,
+        "prompt_tokens": 4202,
+        "eval_tokens": 20,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "fees-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're looking to make a payment plan for your tuition. We do offer payment plans for our programs. Can you please tell me a little bit more about what you're looking for? What's your preferred payment schedule?",
+        "answer_chars": 211,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 533.0,
+        "prefill_ms": 159.3,
+        "generation_ms": 347.4,
+        "prompt_tokens": 4175,
+        "eval_tokens": 45,
+        "load_ms": 4.5
+      },
+      {
+        "case_id": "fees-007",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The examination fee for the Postgraduate Programs is $150 per semester.",
+        "answer_chars": 71,
+        "census": [],
+        "wall_ms": 306.6,
+        "prefill_ms": 160.9,
+        "generation_ms": 117.8,
+        "prompt_tokens": 4180,
+        "eval_tokens": 15,
+        "load_ms": 4.0
+      },
+      {
+        "case_id": "fees-008",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You've submitted a caution deposit, which is a one-time, refundable payment.",
+        "answer_chars": 76,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 332.1,
+        "prefill_ms": 163.5,
+        "generation_ms": 141.4,
+        "prompt_tokens": 4210,
+        "eval_tokens": 18,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "fees-009",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the B.Tech in AI and Machine Learning is $15,200 per year.",
+        "answer_chars": 74,
+        "census": [],
+        "wall_ms": 387.7,
+        "prefill_ms": 189.6,
+        "generation_ms": 170.5,
+        "prompt_tokens": 4385,
+        "eval_tokens": 21,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "fees-011",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're interested in the hostel accommodation. Let me check that for you. (pause) Yes, the hostel and accommodation fee is included in the tuition fee range for both undergraduate and postgraduate programs.",
+        "answer_chars": 206,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 496.9,
+        "prefill_ms": 147.0,
+        "generation_ms": 323.4,
+        "prompt_tokens": 4146,
+        "eval_tokens": 41,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "hist-001",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "\"Dr. Helena Cross is the Vice Chancellor of Meridian University.\"",
+        "answer_chars": 65,
+        "census": [],
+        "wall_ms": 302.3,
+        "prefill_ms": 143.4,
+        "generation_ms": 119.9,
+        "prompt_tokens": 4108,
+        "eval_tokens": 15,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "hist-002",
+        "intent": "Leadership / history",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "\"Meridian University was founded in 1978.\"",
+        "answer_chars": 42,
+        "census": [],
+        "wall_ms": 253.4,
+        "prefill_ms": 135.4,
+        "generation_ms": 90.3,
+        "prompt_tokens": 4053,
+        "eval_tokens": 12,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "int-001",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're referring to the duration of our Master of Business Administration (MBA) program. Yes, it's a 2-year program.",
+        "answer_chars": 116,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 434.0,
+        "prefill_ms": 181.7,
+        "generation_ms": 222.9,
+        "prompt_tokens": 4301,
+        "eval_tokens": 29,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "int-002",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the MBA program is $18,500 per year.",
+        "answer_chars": 52,
+        "census": [],
+        "wall_ms": 313.1,
+        "prefill_ms": 168.9,
+        "generation_ms": 116.8,
+        "prompt_tokens": 4254,
+        "eval_tokens": 15,
+        "load_ms": 4.1
+      },
+      {
+        "case_id": "int-003",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "\"Okay, is there something specific you'd like to know or discuss regarding Meridian University?\"",
+        "answer_chars": 96,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 333.0,
+        "prefill_ms": 143.8,
+        "generation_ms": 156.6,
+        "prompt_tokens": 4099,
+        "eval_tokens": 20,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "int-004",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're welcome! It was a pleasure assisting you. Is there anything else I can help you with today?",
+        "answer_chars": 98,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 351.4,
+        "prefill_ms": 138.5,
+        "generation_ms": 184.0,
+        "prompt_tokens": 4094,
+        "eval_tokens": 23,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "int-005",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're welcome, is there anything else I can assist you with today?",
+        "answer_chars": 67,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 292.4,
+        "prefill_ms": 128.3,
+        "generation_ms": 133.5,
+        "prompt_tokens": 4095,
+        "eval_tokens": 16,
+        "load_ms": 6.1
+      },
+      {
+        "case_id": "int-007",
+        "intent": "Interruption / barge-in",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the MBA program is $18,500 per year.",
+        "answer_chars": 52,
+        "census": [],
+        "wall_ms": 311.9,
+        "prefill_ms": 163.7,
+        "generation_ms": 117.8,
+        "prompt_tokens": 4218,
+        "eval_tokens": 15,
+        "load_ms": 5.2
+      },
+      {
+        "case_id": "multi-001",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The Master of Business Administration (MBA) program at Meridian University costs $18,500 per year. The Fall semester begins on August 1.",
+        "answer_chars": 136,
+        "census": [],
+        "wall_ms": 400.3,
+        "prefill_ms": 123.6,
+        "generation_ms": 248.1,
+        "prompt_tokens": 4107,
+        "eval_tokens": 32,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "multi-002",
+        "intent": "Multiple requests in one turn",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"$60\", \"$75\"]}"
+        ],
+        "answer": "You'll need to submit your academic transcripts and mark sheets from your most recent qualification, as well as a valid government-issued photo ID or passport, and a recent passport-size photograph. There's also a nominal non-refundable processing fee per application, as listed in the Fees Structure section.",
+        "answer_chars": 309,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 668.9,
+        "prefill_ms": 158.7,
+        "generation_ms": 481.7,
+        "prompt_tokens": 4208,
+        "eval_tokens": 60,
+        "load_ms": 5.4
+      },
+      {
+        "case_id": "nasr-001",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The fee for the Master of Data Analytics (MDA) program is $18,500 per year.",
+        "answer_chars": 75,
+        "census": [],
+        "wall_ms": 368.1,
+        "prefill_ms": 162.8,
+        "generation_ms": 171.3,
+        "prompt_tokens": 4206,
+        "eval_tokens": 22,
+        "load_ms": 3.9
+      },
+      {
+        "case_id": "nasr-002",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "I think you meant to say \"fees and eligibility\" for the BBA. The correct response would be:\n\n\"Your tuition for the BBA program is $18,500 per year. Eligibility requires a Bachelor's Degree.\"",
+        "answer_chars": 190,
+        "census": [
+          "fact_missing",
+          "format_sentences"
+        ],
+        "wall_ms": 544.0,
+        "prefill_ms": 142.7,
+        "generation_ms": 370.3,
+        "prompt_tokens": 4194,
+        "eval_tokens": 48,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "nasr-003",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The early application deadline for Meridian University is January 15.",
+        "answer_chars": 69,
+        "census": [],
+        "wall_ms": 282.5,
+        "prefill_ms": 142.1,
+        "generation_ms": 112.3,
+        "prompt_tokens": 4118,
+        "eval_tokens": 14,
+        "load_ms": 4.4
+      },
+      {
+        "case_id": "nasr-004",
+        "intent": "Important dates / deadlines",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Fall semester at Meridian University begins on August 1.",
+        "answer_chars": 60,
+        "census": [],
+        "wall_ms": 223.5,
+        "prefill_ms": 90.8,
+        "generation_ms": 107.7,
+        "prompt_tokens": 4104,
+        "eval_tokens": 14,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "nasr-005",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The tuition for the Master of Business Administration (MBA) program at Meridian University is $18,500 per year.",
+        "answer_chars": 111,
+        "census": [],
+        "wall_ms": 392.6,
+        "prefill_ms": 165.6,
+        "generation_ms": 200.2,
+        "prompt_tokens": 4238,
+        "eval_tokens": 26,
+        "load_ms": 3.1
+      },
+      {
+        "case_id": "nasr-006",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "You're referring to the hostel and accommodation fees for the university. The hostel fees for undergraduate students are $3,200 per year, and for postgraduate students, they are also $3,200 per year.",
+        "answer_chars": 199,
+        "census": [],
+        "wall_ms": 530.6,
+        "prefill_ms": 157.9,
+        "generation_ms": 342.5,
+        "prompt_tokens": 4185,
+        "eval_tokens": 44,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "nasr-007",
+        "intent": "Admission process / eligibility",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "To be eligible for the B.Tech Computer Science program, you'll need to have completed 10+2 years of schooling in the Science stream, specifically in Physics, Chemistry, and Mathematics.",
+        "answer_chars": 185,
+        "census": [],
+        "wall_ms": 532.5,
+        "prefill_ms": 181.8,
+        "generation_ms": 316.3,
+        "prompt_tokens": 4322,
+        "eval_tokens": 40,
+        "load_ms": 7.1
+      },
+      {
+        "case_id": "nasr-010",
+        "intent": "Fees structure",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The application fee is non-refundable.",
+        "answer_chars": 38,
+        "census": [],
+        "wall_ms": 276.3,
+        "prefill_ms": 160.9,
+        "generation_ms": 77.4,
+        "prompt_tokens": 4187,
+        "eval_tokens": 10,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "out-001",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "\"Hello, my name is Alex, and I'm calling from Meridian University Admissions. How can I help you today?\"",
+        "answer_chars": 104,
+        "census": [],
+        "wall_ms": 399.5,
+        "prefill_ms": 160.4,
+        "generation_ms": 210.5,
+        "prompt_tokens": 4175,
+        "eval_tokens": 27,
+        "load_ms": 3.7
+      },
+      {
+        "case_id": "out-002",
+        "intent": "Outbound call handling",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: {\"any_of\": [\"Meridian\"]}",
+          "spoken-format violation: 3 sentences (limit 2)",
+          "spoken-format violation: 50 words (limit 45)"
+        ],
+        "answer": "We're calling because you recently expressed interest in our programs, and we wanted to follow up on that. We're reaching out to see if you have any questions or if there's anything else we can help you with. Can you tell me a bit more about what you're looking for?",
+        "answer_chars": 266,
+        "census": [
+          "fact_missing",
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 652.7,
+        "prefill_ms": 157.8,
+        "generation_ms": 466.9,
+        "prompt_tokens": 4183,
+        "eval_tokens": 59,
+        "load_ms": 4.7
+      },
+      {
+        "case_id": "pg-001",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "We have a Master of Business Administration (MBA), a Master of Computer Applications (MCA), and M.Tech (Various Specializations) programs.",
+        "answer_chars": 138,
+        "census": [],
+        "wall_ms": 433.7,
+        "prefill_ms": 158.7,
+        "generation_ms": 246.2,
+        "prompt_tokens": 4189,
+        "eval_tokens": 32,
+        "load_ms": 5.9
+      },
+      {
+        "case_id": "pg-002",
+        "intent": "Postgraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 2 Years"
+        ],
+        "answer": "The Master of Science (M.Sc) program is a 2-year program. Eligibility for the M.Sc program is a Bachelor's in Science.",
+        "answer_chars": 118,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 436.1,
+        "prefill_ms": 168.1,
+        "generation_ms": 238.7,
+        "prompt_tokens": 4264,
+        "eval_tokens": 31,
+        "load_ms": 5.7
+      },
+      {
+        "case_id": "phd-001",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "You're applying for a PhD program at Meridian University. To be considered, you'll need a relevant master's degree, a research proposal, and faculty availability in the chosen area.",
+        "answer_chars": 181,
+        "census": [],
+        "wall_ms": 464.9,
+        "prefill_ms": 141.2,
+        "generation_ms": 295.4,
+        "prompt_tokens": 4108,
+        "eval_tokens": 38,
+        "load_ms": 3.8
+      },
+      {
+        "case_id": "phd-002",
+        "intent": "Doctoral / PhD programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "spoken-format violation: 7 sentences (limit 4)",
+          "spoken-format violation: 85 words (limit 70)"
+        ],
+        "answer": "You're interested in pursuing a PhD in one of our research areas. Let me see what's available. We have programs in Engineering & Computing, focusing on AI systems, robotics, distributed computing and network security. We also have Business & Economics, looking at organizational behavior, financial markets and applied economics. And in Natural Sciences, we're exploring materials science, molecular biology and computational chemistry. And in Humanities & Social Sciences, we're studying media studies, comparative literature and public policy.\n\nWhich of these areas interests you the most?",
+        "answer_chars": 591,
+        "census": [
+          "format_sentences",
+          "format_words"
+        ],
+        "wall_ms": 1014.6,
+        "prefill_ms": 142.2,
+        "generation_ms": 835.3,
+        "prompt_tokens": 4104,
+        "eval_tokens": 106,
+        "load_ms": 10.2
+      },
+      {
+        "case_id": "sch-001",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "We offer several scholarships to support our students. One of the most notable is the Merit Scholarship, which provides up to 50% tuition waiver for top-scoring incoming students. We also have Need-Based Aid, which provides financial assistance for students demonstrating economic need. Additionally, we have the Sports & Arts Scholarship, which supports students with distinguished sporting or artistic achievement.",
+        "answer_chars": 416,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 746.0,
+        "prefill_ms": 144.9,
+        "generation_ms": 573.6,
+        "prompt_tokens": 4149,
+        "eval_tokens": 74,
+        "load_ms": 3.6
+      },
+      {
+        "case_id": "sch-002",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Meridian University merit scholarship is worth up to 50% tuition waiver for top-scoring incoming students.",
+        "answer_chars": 110,
+        "census": [],
+        "wall_ms": 354.4,
+        "prefill_ms": 143.3,
+        "generation_ms": 180.1,
+        "prompt_tokens": 4105,
+        "eval_tokens": 23,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "sch-003",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Meridian University merit scholarship is actually based on academic performance, not financial need.",
+        "answer_chars": 104,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 290.0,
+        "prefill_ms": 120.3,
+        "generation_ms": 142.2,
+        "prompt_tokens": 4053,
+        "eval_tokens": 18,
+        "load_ms": 4.2
+      },
+      {
+        "case_id": "sch-004",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "Yes, we do have a scholarship for sports. Our Sports & Arts Scholarship is available to students who have demonstrated distinguished sporting or artistic achievement. Would you like me to tell you more about the eligibility criteria and application process for this scholarship?",
+        "answer_chars": 278,
+        "census": [
+          "format_sentences"
+        ],
+        "wall_ms": 562.3,
+        "prefill_ms": 149.5,
+        "generation_ms": 379.8,
+        "prompt_tokens": 4185,
+        "eval_tokens": 48,
+        "load_ms": 5.1
+      },
+      {
+        "case_id": "sch-007",
+        "intent": "Scholarships / financial aid",
+        "grade": "kb_traceable",
+        "critical": true,
+        "verdict": "blocked",
+        "reasons": [
+          "critical case with no approver (approved_by is null): ground truth is not PO-approved, so it is never scored as pass or zero"
+        ],
+        "answer": "The Merit Scholarship covers up to 50% of the tuition for incoming students who score highly.",
+        "answer_chars": 93,
+        "census": [],
+        "wall_ms": 354.9,
+        "prefill_ms": 161.2,
+        "generation_ms": 163.9,
+        "prompt_tokens": 4259,
+        "eval_tokens": 21,
+        "load_ms": 5.5
+      },
+      {
+        "case_id": "stt-003",
+        "intent": "STT error correction / clarification",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: $18,500"
+        ],
+        "answer": "You're welcome. Is there anything else I can help you with regarding your inquiry about Meridian University?",
+        "answer_chars": 108,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 317.0,
+        "prefill_ms": 123.5,
+        "generation_ms": 165.0,
+        "prompt_tokens": 4022,
+        "eval_tokens": 22,
+        "load_ms": 6.2
+      },
+      {
+        "case_id": "tc-001",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "The Master of Computer Applications (MCA) is a 2-year program with tuition of $13,800 per year. Eligibility: a Bachelor's in Computing.",
+        "answer_chars": 135,
+        "census": [],
+        "wall_ms": 469.2,
+        "prefill_ms": 164.5,
+        "generation_ms": 274.9,
+        "prompt_tokens": 4213,
+        "eval_tokens": 35,
+        "load_ms": 5.0
+      },
+      {
+        "case_id": "tc-002",
+        "intent": "Topic change",
+        "grade": "kb_traceable",
+        "critical": false,
+        "verdict": "pass",
+        "reasons": [],
+        "answer": "\"Early application deadline is January 15 and the regular application deadline is April 30.\"",
+        "answer_chars": 92,
+        "census": [],
+        "wall_ms": 340.1,
+        "prefill_ms": 160.2,
+        "generation_ms": 148.4,
+        "prompt_tokens": 4204,
+        "eval_tokens": 19,
+        "load_ms": 4.6
+      },
+      {
+        "case_id": "ug-001",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech Computer Science",
+          "required fact missing: Bachelor of Business Administration",
+          "required fact missing: Bachelor of Commerce"
+        ],
+        "answer": "We offer a range of undergraduate programs across six schools, including business, engineering, humanities, law, sciences, and social sciences. Our programs are designed to provide students with a rigorous academic foundation and direct exposure to industry, research, and community. Would you like me to tell you more about a specific program or school?",
+        "answer_chars": 354,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 694.3,
+        "prefill_ms": 163.5,
+        "generation_ms": 503.5,
+        "prompt_tokens": 4168,
+        "eval_tokens": 65,
+        "load_ms": 3.2
+      },
+      {
+        "case_id": "ug-002",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: 3 Years",
+          "required fact missing: 10+2 (Any Stream)"
+        ],
+        "answer": "The Bachelor of Business Administration (BBA) program at Meridian University is a 3-year program. To be eligible for the BBA program, you'll need to have completed your 10+2 education with a minimum of 55% marks in the relevant subjects.",
+        "answer_chars": 237,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 621.8,
+        "prefill_ms": 146.2,
+        "generation_ms": 446.9,
+        "prompt_tokens": 4144,
+        "eval_tokens": 56,
+        "load_ms": 4.8
+      },
+      {
+        "case_id": "ug-003",
+        "intent": "Undergraduate programs",
+        "grade": "verified",
+        "critical": false,
+        "verdict": "fail",
+        "reasons": [
+          "required fact missing: B.Tech AI & Machine Learning"
+        ],
+        "answer": "We have a B.Tech in AI & Machine Learning program that is 4 years long, and it requires 10+2 (PCM) eligibility. The tuition for this program is $15,200 per year.",
+        "answer_chars": 161,
+        "census": [
+          "fact_missing"
+        ],
+        "wall_ms": 574.4,
+        "prefill_ms": 181.0,
+        "generation_ms": 362.6,
+        "prompt_tokens": 4309,
+        "eval_tokens": 45,
+        "load_ms": 5.5
+      }
+    ],
+    "failures": [
+      "acc-001 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-002 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-003 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-004 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-005 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-007 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-008 [verified] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "acc-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adm-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "adv-005 [kb_traceable] fail: spoken-format violation: 5 sentences (limit 2)",
+      "bc-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Need-Based Aid\", \"need-based\", \"economic need\"]}",
+      "bc-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"221 Harborview\", \"Harborview\"]}",
+      "bc-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"three years\", \"3 years\", \"3 Years\"]}",
+      "camp-001 [verified] fail: spoken-format violation: 103 words (limit 80)",
+      "camp-002 [verified] fail: spoken-format violation: 3 sentences (limit 2)",
+      "dates-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dates-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "dist-001 [kb_traceable] fail: required fact missing: {\"any_of\": [\"April 30\"]}",
+      "dist-003 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Merit Scholarship\", \"scholarship\", \"Need-Based Aid\", \"",
+      "fees-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-008 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-009 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "fees-011 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "int-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "multi-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"$60\", \"$75\"]}",
+      "nasr-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-005 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-006 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "nasr-010 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "out-002 [kb_traceable] fail: required fact missing: {\"any_of\": [\"Meridian\"]}",
+      "pg-002 [verified] fail: required fact missing: 2 Years",
+      "phd-002 [verified] fail: spoken-format violation: 7 sentences (limit 4)",
+      "sch-001 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-002 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-003 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-004 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "sch-007 [kb_traceable] blocked: critical case with no approver (approved_by is null): ground truth is not PO-approved, so ",
+      "stt-003 [kb_traceable] fail: required fact missing: $18,500",
+      "ug-001 [verified] fail: required fact missing: B.Tech Computer Science",
+      "ug-002 [verified] fail: required fact missing: 3 Years",
+      "ug-003 [verified] fail: required fact missing: B.Tech AI & Machine Learning"
+    ]
+  }
+}

@@ -21,6 +21,7 @@ Usage (from run_pipeline_test.py or FastAPI transport):
     runner, task = await create_local_voice_pipeline(transport)
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -35,7 +36,8 @@ CHROMA_DB_PATH = Path(os.environ.get(
     str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
 ))
 DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
 TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 # Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
@@ -164,25 +166,23 @@ async def create_local_voice_pipeline(transport=None):
     logger.info(f"  {_vram_info()}")
 
     # ---- 1. Voice Activity Detection ---------------------------------
-    # In Pipecat 1.6.0, SileroVADAnalyzer is configured at the transport
-    # level (e.g. FastAPIWebsocketTransport params) rather than as a
-    # pipeline processor. We construct it here for use by the transport.
-    vad_analyzer = None
-    try:
-        from pipecat.audio.vad.silero import SileroVADAnalyzer, VADParams
-
-        vad_params = VADParams(
-            confidence=0.7,
-            start_secs=0.3,
-            stop_secs=0.5,
-            min_volume=0.6,
-        )
-        vad_analyzer = SileroVADAnalyzer(sample_rate=16000, params=vad_params)
-        logger.info("  [OK] SileroVADAnalyzer initialized (for transport config)")
-    except ImportError:
-        logger.warning("  [SKIP] SileroVADAnalyzer not available — VAD disabled")
-    except Exception as e:
-        logger.warning(f"  [SKIP] VAD init failed: {e}")
+    # REMOVED, deliberately -- BRD-04: "The system shall have exactly one live
+    # end-of-speech decision." This used to construct a SileroVADAnalyzer with
+    # `stop_secs=0.5` and log "[OK] SileroVADAnalyzer initialized (for
+    # transport config)". It was never attached to anything: the transport is
+    # passed in by the caller, so this function cannot reach it, and the
+    # analyzer was constructed, logged as live, and dropped on the floor.
+    #
+    # That left two problems. It cost a Silero model load per pipeline build.
+    # And it presented a SECOND end-of-speech delay -- 500 ms -- as the live
+    # setting while the one that actually closes a caller's turn is
+    # VoiceCallSession's 600 ms (`VAD_SILENCE_MS`). Two delays disagreeing
+    # about when a caller stopped talking is exactly what BRD-04 forbids, and
+    # the log line made it look reconciled.
+    #
+    # The live decision is `VAD_SILENCE_MS` in app/voice_handler.py. If a
+    # pipecat transport is ever given a VAD again, it must take its delay from
+    # that setting rather than declaring a second one here.
 
     # ---- 2. Speech-to-Text (Faster-Whisper) --------------------------
     try:
@@ -225,8 +225,10 @@ async def create_local_voice_pipeline(transport=None):
     from pipecat.pipeline.pipeline import Pipeline
 
     # Build the processor list.
-    # Note: VAD is not a pipeline processor in Pipecat 1.6.0;
-    # it is configured on the transport via params.vad_analyzer.
+    # Note: VAD is deliberately NOT here. In Pipecat 1.6.0 it would live on the
+    # transport, but this function is handed a transport it cannot configure,
+    # and the end-of-speech decision belongs to VAD_SILENCE_MS (BRD-04) -- see
+    # the removal note above.
     processors = []
     if stt is not None:
         processors.append(stt)
@@ -289,6 +291,12 @@ async def post_call_handler(transcript: str, phone_number: str = "") -> bool:
         return False
 
 
+def _bg_priority_enabled() -> bool:
+    """US-017 AC-5: the policy is reversed by one setting, not a code change."""
+    return os.environ.get("BG_PRIORITY_ENABLED", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
 def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
@@ -296,27 +304,68 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
 
     mode: "voice" (default, phone calls) or "chat" (text UIs — Markdown
     SYSTEM_PROMPT, same style as the Streamlit chat).
+
+    US-017 / BRD-20: `mode` already distinguished the two callers, so it is
+    also the admission key. A voice turn holds the gate open for its whole
+    duration; a background unit waits for the line to be clear and runs at most
+    one at a time. `BRD-20`'s operating scenario is two voice callers plus one
+    background request, and this is the single point where that ordering is
+    decided.
     """
     from app.rag import query_rag
-    return query_rag(user_text, mode=mode)
+    if not _bg_priority_enabled():
+        return query_rag(user_text, mode=mode)
+
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
+
+    work_class, defect = classify(mode)
+    if work_class == VOICE:
+        label = "voice" if defect is None else f"unclassified:{mode}"
+        with GATE.voice_turn(label=label):
+            return query_rag(user_text, mode=mode)
+    try:
+        with GATE.background_unit(label="background", mode=mode):
+            return query_rag(user_text, mode=mode)
+    except BackgroundDeferred:
+        # Refused because the line stayed busy past its budget. It answers
+        # nothing rather than being interleaved -- and this is NOT a
+        # caller-facing failure: no caller is waiting on it, and it must not
+        # appear in any caller-facing failure figure (AC-2). The gate has
+        # already recorded the reason and the wait (TAC-6).
+        logger.info("background query deferred past its budget and refused: %r", mode)
+        return None
 
 
-async def test_pipeline_with_text(user_text: str) -> str | None:
+async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | None:
     """
     Test the full RAG → LLM chain with a text query (no audio).
     Returns the LLM response string, or None on failure.
 
     This bypasses STT/TTS and tests only the RAG + LLM path.
     Useful for validating the pipeline without audio hardware.
+
+    US-017 TAC-1: this is inference with nobody waiting to hear it, so it goes
+    through the same admission gate as every other unit of work. It used to
+    call the backend directly, which made it the one path into the model that
+    the priority policy could not see -- a caller's turn and a text query could
+    interleave with nothing counting it. `mode` defaults to "chat" because the
+    callers of this function are text UIs; pass "voice" for a caller's turn.
     """
-    logger.info(f"Testing RAG + LLM with: \"{user_text}\"")
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
-    prompt = build_rag_prompt(user_text)
-
-    try:
+    async def _run() -> str | None:
+        prompt = build_rag_prompt(user_text)
         from app.llm_backend import chat as backend_chat
 
-        answer = backend_chat(
+        # `to_thread`, because `backend_chat` is SYNCHRONOUS and performs an
+        # HTTP call to the engine. Calling it directly from an `async def`
+        # blocks the event loop for the whole inference -- the same defect as
+        # using the synchronous gate here, one layer further in, and it was
+        # worth 3-5 s of frozen loop per admitted background unit. Fixing the
+        # acquisition alone took the 2+1 window from dying at turn 3-18 to
+        # dying at 68-70; this is the rest of it.
+        answer = await asyncio.to_thread(
+            backend_chat,
             messages=[{"role": "user", "content": prompt}],
             preferred=[DEFAULT_LLM_MODEL],
             num_ctx=NUM_CTX,
@@ -324,6 +373,21 @@ async def test_pipeline_with_text(user_text: str) -> str | None:
         logger.info(f"LLM response: {answer[:100]}...")
         return answer
 
+    work_class, _ = classify(mode)
+    try:
+        if work_class == VOICE:
+            with GATE.voice_turn(label="text:voice"):
+                return await _run()
+        # `background_unit_async`, NOT `background_unit`. This function is
+        # `async`, so it runs on the event loop; the synchronous gate blocks on
+        # a threading.Condition, which would freeze the loop -- and with it
+        # every live voice call -- for as long as the deferral lasted. Both
+        # callers died on keepalive timeout before this was changed.
+        async with GATE.background_unit_async(label="text", mode=mode):
+            return await _run()
+    except BackgroundDeferred:
+        logger.info("text query refused: the line stayed busy past its budget")
+        return None
     except Exception:
         logger.exception("RAG + LLM test failed")
         return None

@@ -1,0 +1,19 @@
+{
+  "fixture_id": "eligibility-03",
+  "voice": "af_heart",
+  "turns": {
+    "0": {
+      "text": "What marks do I need to get into the B.Tech computer science programme?",
+      "ulaw_bytes": 30720,
+      "seconds": 3.84,
+      "sha256": "9de4e5bb04219e28ad249fd73e54f2d6ab89190b92226c5d4162dd1d65de8d75"
+    },
+    "1": {
+      "text": "mm-hm",
+      "ulaw_bytes": 8362,
+      "seconds": 1.05,
+      "sha256": "c76c7cee89ca7bc66703edb75083fe844fc28c67a84ba5644ba692d2db005b33"
+    }
+  },
+  "source_sha256": "68f6bcc69ac7bb8f532c7fd599a10932df6352158ce47a80b023f7f26444645d"
+}

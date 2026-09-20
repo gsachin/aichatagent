@@ -1,0 +1,35 @@
+{
+  "schema": "us002.fixture/1",
+  "fixture_id": "fees-01",
+  "version": 1,
+  "intent": "Fees structure",
+  "description": "Three-turn fees conversation. Synthetic audio: the scripted text is what the caller intends to say, and is NOT asserted against Whisper's transcript (see the harness docstring).",
+  "seed": 20260918,
+  "trailing_silence_ms": 800,
+  "turns": [
+    {
+      "turn_id": 0,
+      "text": "How much are the tuition fees for the computer science programme?",
+      "expect_keywords": ["fee", "tuition"],
+      "segments": [
+        {"kind": "speech", "ms": 2600}
+      ]
+    },
+    {
+      "turn_id": 1,
+      "text": "And is there any difference for international students?",
+      "expect_keywords": ["international", "fee"],
+      "segments": [
+        {"kind": "speech", "ms": 2200}
+      ]
+    },
+    {
+      "turn_id": 2,
+      "text": "Can I pay it in instalments?",
+      "expect_keywords": ["instal", "pay"],
+      "segments": [
+        {"kind": "speech", "ms": 1800}
+      ]
+    }
+  ]
+}

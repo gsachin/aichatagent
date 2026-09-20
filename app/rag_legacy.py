@@ -56,7 +56,8 @@ SOURCES = [
     },
 ]
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
 # Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
 # 8192 default — voice calls run the full production voice system prompt

@@ -33,6 +33,15 @@ OLLAMA_BASE_URL = rag_legacy.OLLAMA_BASE_URL
 OLLAMA_MODEL = rag_legacy.OLLAMA_MODEL
 OLLAMA_NUM_CTX = rag_legacy.OLLAMA_NUM_CTX
 OLLAMA_TEMPERATURE = rag_legacy.OLLAMA_TEMPERATURE
+#: Output-token ceiling for the SPOKEN answer. 192 was chosen from the
+#: measured answer-length distribution, not from taste: over 83 golden-set
+#: cases the 95th percentile was 106 tokens (qwen2.5:14b) and 82
+#: (llama3.2:3b), and a ceiling of 192 truncates ZERO of them. It buys a
+#: bounded worst case -- the one thing an unbounded generation cannot give a
+#: live call -- while changing nothing on the answers actually produced.
+#: Set OLLAMA_NUM_PREDICT=0 to remove the ceiling.
+_num_predict_raw = os.environ.get("OLLAMA_NUM_PREDICT", "192").strip()
+OLLAMA_NUM_PREDICT = int(_num_predict_raw) if _num_predict_raw.lstrip("-").isdigit() else 192
 EMBED_MODEL = rag_legacy.EMBED_MODEL
 CHUNK_SIZE = rag_legacy.CHUNK_SIZE
 CHUNK_OVERLAP = rag_legacy.CHUNK_OVERLAP
@@ -56,13 +65,24 @@ def _mode() -> str:
 
 
 def _use_mcp() -> bool:
-    """MCP-first decision: off -> never; on -> always; auto -> breaker-gated."""
+    """MCP-first decision: off -> never; on -> always; auto -> breaker-gated.
+
+    US-013 AC-2/AC-3: in `auto`, a half-open circuit admits exactly ONE probe.
+    Every other caller in that window takes the local rung instead of piling a
+    full request onto a service that has not yet proved it is back -- so two
+    callers meeting the same outage cost one probe between them, not two.
+    """
     mode = _mode()
     if mode == "off":
         return False
     if mode == "on":
         return True
-    return rag_mcp.mcp_available()
+    state = rag_mcp.breaker_state()
+    if state == "closed":
+        return True
+    if state == "half_open":
+        return rag_mcp.claim_probe()
+    return False
 
 
 # ── Ingestion validation (delegated — build path is legacy-owned) ──────────
@@ -91,6 +111,28 @@ def retrieve_context_hybrid(query: str, top_k: int = MMR_K,
 # ── Retrieval (the decoupled seam) ─────────────────────────────────────────
 
 def retrieve_context(query: str) -> str:
+    """
+    US-001 wrapper: emits retrieval_done on EVERY return path — MCP-first,
+    legacy fallback, and empty result. A wrapper rather than a mark per return
+    because four marks is four chances to miss one, and the metric it feeds
+    (`retrieval_ms`) is the one BRD-01 names first (REC-12).
+
+    The mark is emitted from inside the worker thread running the blocking
+    RAG+LLM call. It reaches the right turn because asyncio.to_thread copies
+    the calling context, so the per-WebSocket ContextVar is visible here; two
+    concurrent callers get distinct copies (BRD-06).
+    """
+    result = _retrieve_context(query)
+    try:
+        from app.perf_trace import mark_current
+
+        mark_current("retrieval_done")
+    except Exception:
+        pass
+    return result
+
+
+def _retrieve_context(query: str) -> str:
     """
     Returns the formatted context string: '[§ {section}]\\n{body}' chunks
     joined by '\\n\\n---\\n\\n'. MCP-first with legacy fallback per USE_MCP_RAG.
@@ -193,6 +235,7 @@ def query_rag(question: str, *, mode: str = "voice") -> str | None:
             model=model,
             num_ctx=OLLAMA_NUM_CTX,
             temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
+            num_predict=OLLAMA_NUM_PREDICT if OLLAMA_NUM_PREDICT > 0 else None,
         )
 
     except Exception:

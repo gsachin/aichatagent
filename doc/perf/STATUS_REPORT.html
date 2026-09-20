@@ -1,0 +1,609 @@
+<title>Latency Program Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ground:#F5F6F8;
+  --surface:#FFFFFF;
+  --surface-2:#EDEFF2;
+  --ink:#15181C;
+  --ink-2:#4B535D;
+  --ink-3:#79828D;
+  --rule:#DDE1E6;
+  --rule-strong:#C3C9D0;
+  --accent:#0E5C63;
+  --accent-soft:#E2EFF0;
+  --ok:#2C7749;
+  --ok-soft:#E4F1E9;
+  --warn:#9C5D12;
+  --warn-soft:#F7EDDC;
+  --crit:#A62C22;
+  --crit-soft:#F8E5E2;
+  --seg-fixed:#0E5C63;
+  --seg-blocked:#A86414;
+  --seg-contention:#6F7B88;
+  --shadow:0 1px 2px rgba(20,26,34,.05), 0 8px 24px -12px rgba(20,26,34,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1116;
+    --surface:#161A20;
+    --surface-2:#1D232A;
+    --ink:#E7EAEE;
+    --ink-2:#A7B0BB;
+    --ink-3:#75808C;
+    --rule:#252B33;
+    --rule-strong:#333B45;
+    --accent:#4FB0B6;
+    --accent-soft:#0F2B2E;
+    --ok:#63BE8A;
+    --ok-soft:#122C1F;
+    --warn:#D6A046;
+    --warn-soft:#2E2413;
+    --crit:#E27A6A;
+    --crit-soft:#2E1917;
+    --seg-fixed:#3E8F96;
+    --seg-blocked:#C08A2E;
+    --seg-contention:#6B7684;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1116;
+  --surface:#161A20;
+  --surface-2:#1D232A;
+  --ink:#E7EAEE;
+  --ink-2:#A7B0BB;
+  --ink-3:#75808C;
+  --rule:#252B33;
+  --rule-strong:#333B45;
+  --accent:#4FB0B6;
+  --accent-soft:#0F2B2E;
+  --ok:#63BE8A;
+  --ok-soft:#122C1F;
+  --warn:#D6A046;
+  --warn-soft:#2E2413;
+  --crit:#E27A6A;
+  --crit-soft:#2E1917;
+  --seg-fixed:#3E8F96;
+  --seg-blocked:#C08A2E;
+  --seg-contention:#6B7684;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:"Source Serif 4",Georgia,"Times New Roman",serif;
+  font-size:17px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{
+  max-width:940px;
+  margin:0 auto;
+  padding-block:0 96px;
+  padding-inline:20px;
+  display:flex;
+  flex-direction:column;
+  gap:52px;
+}
+
+/* ---------- masthead ---------- */
+.masthead{
+  border-bottom:2px solid var(--ink);
+  padding-block:44px 20px;
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+.eyebrow{
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+}
+h1{
+  font-family:"Archivo",system-ui,sans-serif;
+  font-weight:700;
+  font-size:clamp(2rem,5.4vw,3.1rem);
+  line-height:1.06;
+  letter-spacing:-.022em;
+  margin:0;
+  text-wrap:balance;
+}
+.standfirst{
+  font-size:1.14rem;
+  color:var(--ink-2);
+  max-width:62ch;
+  margin:0;
+}
+.standfirst strong{color:var(--ink);font-weight:600}
+
+/* ---------- meta strip ---------- */
+.meta{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+  gap:1px;
+  background:var(--rule);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  overflow:hidden;
+}
+.meta div{background:var(--surface);padding:12px 15px;display:flex;flex-direction:column;gap:3px}
+.meta dt{
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+}
+.meta dd{
+  margin:0;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:13px;font-weight:600;
+  font-variant-numeric:tabular-nums;
+  overflow-wrap:anywhere;
+}
+
+/* ---------- sections ---------- */
+section{display:flex;flex-direction:column;gap:20px}
+h2{
+  font-family:"Archivo",system-ui,sans-serif;
+  font-weight:600;
+  font-size:1.42rem;
+  letter-spacing:-.012em;
+  margin:0;
+  padding-bottom:9px;
+  border-bottom:1px solid var(--rule-strong);
+  text-wrap:balance;
+}
+h3{
+  font-family:"Archivo",system-ui,sans-serif;
+  font-weight:600;
+  font-size:1rem;
+  letter-spacing:.005em;
+  margin:0;
+}
+p{margin:0;max-width:68ch}
+a{color:var(--accent)}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.86em}
+
+/* ---------- verdict ---------- */
+.verdict{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-left:4px solid var(--crit);
+  border-radius:3px;
+  padding:24px 26px;
+  box-shadow:var(--shadow);
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+.verdict h2{border:0;padding:0;font-size:1.2rem}
+.verdict p{max-width:66ch}
+
+/* ---------- waterfall ---------- */
+.chart{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:22px 24px 24px;
+  box-shadow:var(--shadow);
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+.bar{
+  display:flex;
+  height:46px;
+  border-radius:2px;
+  overflow:hidden;
+  gap:2px;
+  background:var(--surface-2);
+}
+.bar span{display:block;min-width:0}
+.bar .s-fixed{background:var(--seg-fixed)}
+.bar .s-blocked{background:var(--seg-blocked)}
+.bar .s-contention{background:var(--seg-contention)}
+.axis{
+  display:flex;
+  justify-content:space-between;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px;
+  color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+  border-top:1px solid var(--rule);
+  padding-top:7px;
+  margin-top:-8px;
+}
+.legend{display:flex;flex-wrap:wrap;gap:10px 22px}
+.legend span{
+  display:flex;align-items:center;gap:8px;
+  font-size:.84rem;color:var(--ink-2);
+}
+.swatch{width:12px;height:12px;border-radius:2px;flex:none}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:.88rem;
+  font-variant-numeric:tabular-nums;
+}
+caption{
+  text-align:left;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3);
+  padding-bottom:9px;
+}
+th,td{padding:8px 12px 8px 0;text-align:left;border-bottom:1px solid var(--rule);vertical-align:top}
+th{
+  font-family:"Archivo",system-ui,sans-serif;
+  font-weight:600;font-size:.72rem;
+  letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);
+  border-bottom:1px solid var(--rule-strong);
+}
+td.num,th.num{text-align:right;font-family:"JetBrains Mono",ui-monospace,monospace}
+td.num{font-weight:600}
+tr:last-child td{border-bottom:0}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:18px 20px;box-shadow:var(--shadow)}
+.scroll table{min-width:520px}
+
+/* ---------- pills ---------- */
+.pill{
+  display:inline-block;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10px;font-weight:600;
+  letter-spacing:.07em;text-transform:uppercase;
+  padding:3px 8px;border-radius:2px;white-space:nowrap;
+}
+.p-ok{background:var(--ok-soft);color:var(--ok)}
+.p-warn{background:var(--warn-soft);color:var(--warn)}
+.p-crit{background:var(--crit-soft);color:var(--crit)}
+.p-mute{background:var(--surface-2);color:var(--ink-3)}
+
+/* ---------- cause blocks ---------- */
+.cause{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:20px 22px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.cause-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.cause-head h3{flex:1 1 auto;min-width:min(100%,18ch)}
+.cause p{max-width:66ch}
+.cause .scroll{box-shadow:none;border-color:var(--rule);padding:0;border:0;background:transparent}
+
+/* ---------- stat row ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:14px}
+.stat{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:16px 18px;
+  display:flex;flex-direction:column;gap:5px;
+}
+.stat .k{
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);
+}
+.stat .v{
+  font-family:"Archivo",system-ui,sans-serif;
+  font-weight:700;font-size:1.85rem;line-height:1;
+  letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;
+}
+.stat .s{font-size:.8rem;color:var(--ink-2);line-height:1.4}
+.v-ok{color:var(--ok)} .v-crit{color:var(--crit)} .v-warn{color:var(--warn)}
+
+ul.tight{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:7px;max-width:68ch}
+ul.tight li::marker{color:var(--ink-3)}
+.note{font-size:.86rem;color:var(--ink-3);max-width:66ch}
+
+footer{
+  border-top:1px solid var(--rule);
+  padding-top:20px;
+  font-size:.84rem;
+  color:var(--ink-3);
+  display:flex;flex-direction:column;gap:7px;
+}
+@media (max-width:520px){
+  body{font-size:16px}
+  .wrap{padding-inline:16px;gap:40px}
+  .bar{height:34px}
+}
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Performance program · status audit · 2026-09-19</div>
+    <h1>Latency Program Audit</h1>
+    <p class="standfirst">
+      The fixes are real and I measured them on your running stack. But three of the four
+      that produced the largest gains live only in an <strong>untracked <code>.env</code></strong> —
+      and your setup path overwrites that file from a template that still contains every
+      original defect. That is why the program feels like it changed nothing.
+    </p>
+  </header>
+
+  <div class="meta">
+    <div><dt>Branch</dt><dd>perf/us007-boot-readiness</dd></div>
+    <div><dt>Commit</dt><dd>93af9df · local only</dd></div>
+    <div><dt>Stories written</dt><dd>18 / 18</dd></div>
+    <div><dt>DoD boxes ticked</dt><dd>14 / 147</dd></div>
+    <div><dt>Turn p50 today</dt><dd>4,539 ms</dd></div>
+    <div><dt>Against cap</dt><dd>46 / 48 over</dd></div>
+  </div>
+
+  <section>
+    <div class="verdict">
+      <h2>The verdict</h2>
+      <p>
+        Measured on your own running stack a few minutes ago, the engine is doing the same
+        work it did before — prefill and generation are <em>unchanged to the millisecond</em>,
+        which is exactly what a lossless fix is supposed to look like. What the program
+        actually removed was waste: a two-second hostname stall, a 12-second context-switch
+        reload, a synthesiser running on the wrong processor.
+      </p>
+      <p>
+        <strong>But none of that survives a rebuild.</strong> <code>.env</code> is gitignored,
+        and <code>.env.example</code> — which <code>bootstrap_services.py</code> and your setup
+        docs copy verbatim onto a new machine — still says <code>localhost</code> and omits two
+        keys entirely. The largest measured win in the whole program is a one-line setting that
+        is not in the repository.
+      </p>
+      <p>
+        And the work that would have changed what a caller <em>feels</em> was never started:
+        the two biggest levers are both blocked on a ground-truth approval that only you can give.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the 4.7 seconds actually goes</h2>
+    <p>
+      A caller waits <strong>4,684 ms</strong> on average from the moment they stop speaking to
+      the first syllable they hear. Stage times are means across 50 turns at N=2 — means are
+      additive, so these sum to the whole. Colour says who can shorten each one.
+    </p>
+
+    <div class="chart">
+      <div class="bar" role="img" aria-label="Turn latency decomposed: endpointing 600 ms, speech recognition 329 ms, retrieval 990 ms, engine queue 768 ms, prefill 773 ms, generation 1202 ms, synthesis 23 ms">
+        <span class="s-fixed"     style="flex:600"  title="Endpointing 600 ms"></span>
+        <span class="s-fixed"     style="flex:329"  title="Speech recognition 329 ms"></span>
+        <span class="s-blocked"   style="flex:990"  title="Retrieval 990 ms"></span>
+        <span class="s-contention"style="flex:768"  title="Engine queue 768 ms"></span>
+        <span class="s-fixed"     style="flex:773"  title="Prefill 773 ms"></span>
+        <span class="s-blocked"   style="flex:1202" title="Generation 1202 ms"></span>
+        <span class="s-fixed"     style="flex:23"   title="Synthesis to first audio 23 ms"></span>
+      </div>
+      <div class="axis"><span>0 ms</span><span>2,340 ms</span><span>4,684 ms</span></div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--seg-fixed)"></i>Real work — no story changes it</span>
+        <span><i class="swatch" style="background:var(--seg-blocked)"></i>Addressable — story exists but is blocked</span>
+        <span><i class="swatch" style="background:var(--seg-contention)"></i>Two-caller contention</span>
+      </div>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Mean per-turn stage times · N=2 warm · n=50 · measured 2026-09-19</caption>
+        <thead>
+          <tr><th>Stage</th><th class="num">Mean</th><th class="num">Share</th><th>Shortened by</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Endpointing (VAD silence gate)</td><td class="num">600 ms</td><td class="num">13%</td><td><span class="pill p-mute">not a target</span></td></tr>
+          <tr><td>Speech recognition</td><td class="num">329 ms</td><td class="num">7%</td><td><span class="pill p-mute">no story</span></td></tr>
+          <tr><td>Retrieval (RAG)</td><td class="num">990 ms</td><td class="num">21%</td><td><span class="pill p-crit">US-009 blocked</span></td></tr>
+          <tr><td>LLM engine queue</td><td class="num">768 ms</td><td class="num">16%</td><td><span class="pill p-warn">needs re-test</span></td></tr>
+          <tr><td>LLM prefill</td><td class="num">773 ms</td><td class="num">17%</td><td><span class="pill p-crit">US-010 blocked</span></td></tr>
+          <tr><td>LLM generation</td><td class="num">1,202 ms</td><td class="num">26%</td><td><span class="pill p-crit">US-004 blocked</span></td></tr>
+          <tr><td>Synthesis → first audio</td><td class="num">23 ms</td><td class="num">0.5%</td><td><span class="pill p-ok">already fast</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">
+      Generation is 26% of the wait only because the answer is not streamed — the caller sits
+      in silence until the model has finished writing the <em>whole</em> reply. That single
+      architectural fact is <code>US-004</code>, and it is the program's own words for the
+      largest lever it had. It was never started.
+    </p>
+  </section>
+
+  <section>
+    <h2>What is delivered — re-verified today</h2>
+    <p>
+      Every acceptance suite in the program re-run against your live stack this session. All
+      four reproduce their documented verdicts.
+    </p>
+
+    <div class="scroll">
+      <table>
+        <caption>Acceptance suites, re-run 2026-09-19 on the running stack</caption>
+        <thead>
+          <tr><th>Story</th><th>What it does</th><th class="num">Suite</th><th>Live check</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>US-001</code></td><td>Per-turn stage tracing</td><td class="num">17 / 17</td><td><span class="pill p-ok">pass</span></td></tr>
+          <tr><td><code>US-006</code></td><td>Hold model residency</td><td class="num">11 / 11</td><td><span class="pill p-ok">ollama ps → Forever</span></td></tr>
+          <tr><td><code>US-007</code></td><td>Boot warm state verifiable</td><td class="num">30 / 30</td><td><span class="pill p-ok">3 of 4 clauses live</span></td></tr>
+          <tr><td><code>US-011</code></td><td>Single config source of truth</td><td class="num">16 / 16</td><td><span class="pill p-ok">found 4 dead keys</span></td></tr>
+          <tr><td><code>US-008</code></td><td>Retrieval off the event loop</td><td class="num">no suite</td><td><span class="pill p-warn">retrieval p50 750 ms</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Fixes I confirmed working on the live process</h3>
+    <ul class="tight">
+      <li><strong>Kokoro synthesis runs on CUDA.</strong> Loaded the engine in your venv: the ONNX session reports <code>CUDAExecutionProvider</code> active, not merely compiled in. This was the fix for a synthesiser that was silently on the CPU while the app logged otherwise.</li>
+      <li><strong>Model residency is held.</strong> <code>ollama ps</code> reports an expiry in the year 2318 — the keep-alive is doing its job; the five-minute default would have dropped it between calls.</li>
+      <li><strong>The two-second hostname stall is real and the fix works.</strong> Reproduced live: <code>localhost</code> costs <strong>2,066 ms</strong>, <code>127.0.0.1</code> costs <strong>15 ms</strong>. Ollama binds IPv4 only, and Windows burns two seconds refusing the IPv6 connection before falling back.</li>
+      <li><strong>The boot gate runs and refuses to lie.</strong> Three clauses pass, the fourth fails on four config keys that are set and read by nothing, and the gate exits 2 rather than claiming readiness.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What is pending</h2>
+
+    <div class="stats">
+      <div class="stat"><span class="k">Definition of Done</span><span class="v v-crit">14 / 147</span><span class="s">Boxes ticked across all 18 stories. No story is complete.</span></div>
+      <div class="stat"><span class="k">Stories blocked</span><span class="v v-crit">5</span><span class="s">All on <code>DG-03</code>, including the two largest latency levers.</span></div>
+      <div class="stat"><span class="k">Ground truths approved</span><span class="v v-crit">0 / 137</span><span class="s">of 161 golden-set cases. 103 of 110 critical cases still pending.</span></div>
+      <div class="stat"><span class="k">Ready, not started</span><span class="v v-warn">4</span><span class="s">No blocker at all — just never picked up.</span></div>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Story ledger · 18 written · 18 counted</caption>
+        <thead>
+          <tr><th>Status</th><th class="num">n</th><th>Stories</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="pill p-ok">Implemented, suite passes</span></td><td class="num">4</td><td>US-001 · US-006 · US-007 · US-011</td></tr>
+          <tr><td><span class="pill p-warn">Implemented, no suite</span></td><td class="num">1</td><td>US-008 — evidence is a measurement, not a test</td></tr>
+          <tr><td><span class="pill p-warn">In progress / awaiting sign-off</span></td><td class="num">4</td><td>US-002 · US-003 · US-014 · US-015</td></tr>
+          <tr><td><span class="pill p-crit">Blocked on DG-03</span></td><td class="num">5</td><td>US-004 · US-005 · US-009 · US-010 · US-018</td></tr>
+          <tr><td><span class="pill p-mute">Not started</span></td><td class="num">4</td><td>US-012 · US-013 · US-016 · US-017</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ul class="tight">
+      <li><strong>The plan validates; the system has never been validated.</strong> The artifact validator reports 752 passed / 0 failed — and the plan's own scorecard prints <code>SYSTEM IMPLEMENTATION VALIDATION: NOT YET RUN</code> directly beneath it. The green tick measures document consistency, nothing more.</li>
+      <li><strong>The boot gate will fail forever until four keys are implemented or deleted</strong> — <code>FASTAPI_WORKERS</code>, <code>KOKORO_SPEED</code>, <code>LOG_FILE</code>, <code>LOG_LEVEL</code> are all set and read by nothing.</li>
+      <li><strong>The latency target was never signed off.</strong> <code>BRD-02</code>'s 700 ms is arithmetically dead, and the replacement figure (~2,300 ms) is still awaiting your decision — and is itself now stale against today's measurement.</li>
+      <li><strong>The commit is local.</strong> Two commits sit unpushed on this branch.</li>
+      <li><strong>Doc drift.</strong> <code>doc/sdlc.zip</code> is a stale export — it is missing five files and every shared file differs. If anyone reviews from the zip, they see a version with no statuses at all.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Why the improvement is not visible to you</h2>
+    <p>Three causes, in order of how much each one costs you.</p>
+
+    <div class="cause">
+      <div class="cause-head">
+        <h3>1 · The biggest wins are configuration, and they are not in the repository</h3>
+        <span class="pill p-crit">primary cause</span>
+      </div>
+      <p>
+        <code>.env</code> is gitignored. Four fixes the program measured and reported live only
+        there — and <code>.env.example</code>, the template your own bootstrap copies onto any
+        fresh machine, still carries the original defective values or omits the key entirely.
+      </p>
+      <div class="scroll">
+        <table>
+          <caption>The fixes that do not survive <code>Copy-Item .env.example .env</code></caption>
+          <thead>
+            <tr><th>Key</th><th>Working <code>.env</code></th><th>Template</th><th>Cost when reverted</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>OLLAMA_URL</code></td><td><code>127.0.0.1</code></td><td><code>localhost</code></td><td>+2,066 ms every turn</td></tr>
+            <tr><td><code>SMALL_TASK_NUM_CTX</code></td><td><code>8192</code></td><td><span class="pill p-crit">absent</span></td><td>context-size thrashing</td></tr>
+            <tr><td><code>OLLAMA_KEEP_ALIVE</code></td><td><code>-1</code></td><td><span class="pill p-crit">absent</span></td><td>residency drops to 5 min</td></tr>
+            <tr><td><code>RAG_MCP_TIMEOUT</code></td><td><code>6.0</code></td><td><code>2.5</code></td><td>timeout + fallback paid twice</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The context-size one is the program's own headline — it called it <em>"the largest single
+        win and invisible to code reading."</em> It depends entirely on one env var that the
+        template does not have. I measured what its absence costs on your box just now:
+      </p>
+      <div class="scroll">
+        <table>
+          <caption>Measured live · switching <code>num_ctx</code> on one loaded model</caption>
+          <thead><tr><th>Call</th><th class="num">Wall time</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td>Same size, no switch</td><td class="num">790 ms</td><td>served from the loaded runner</td></tr>
+            <tr><td>2048 → 8192</td><td class="num">11,022 ms</td><td>runner torn down and rebuilt</td></tr>
+            <tr><td>8192 → 2048</td><td class="num">5,777 ms</td><td>rebuilt again on the way back</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The voice path runs at 8192. The lead-extraction and sentiment calls use 512, 1024 and
+        2048. Sentiment scoring fires automatically after every conversation. So on a stack built
+        from the template, one finished call can push the next caller's first turn into a
+        five-to-eleven second reload — which would feel exactly like nothing was ever fixed.
+      </p>
+      <p class="note">
+        There is a matching gap on the dependency side: <code>requirements.txt</code> declares
+        <code>onnxruntime-gpu==1.28.0</code>, but the build actually running the GPU synthesis is
+        <code>1.26.0</code>. A rebuild from requirements installs a different build than the one
+        measured.
+      </p>
+    </div>
+
+    <div class="cause">
+      <div class="cause-head">
+        <h3>2 · Everything that would move the felt number is blocked on you</h3>
+        <span class="pill p-crit">structural</span>
+      </div>
+      <p>
+        What remains is real work, not waste. Streaming generation alone is 1,202 ms of a caller
+        sitting in silence; retrieval is another 990 ms. Both have written, self-contained stories
+        — <code>US-004</code> and <code>US-009</code> — and both are marked
+        <strong>BLOCKED on <code>DG-03</code></strong>, because they change what the model returns.
+      </p>
+      <p>
+        Gating a behaviour-changing fix behind a quality baseline is correct engineering — you
+        should not trade answer accuracy for speed without evidence. But the baseline needs
+        12 critical-intent ground truths approved by a human, and that approval is the one thing
+        no agent can supply. It never came, so the five stories behind it never started. The
+        program did the disciplined thing and that is precisely why it delivered so little.
+      </p>
+      <p class="note">
+        <strong>This is the unblock.</strong> 137 of 161 golden-set ground truths are sitting in
+        <code>eval/golden_set.jsonl</code> marked <code>PENDING_PO_SIGNOFF</code>. They are written;
+        they need review, not authoring.
+      </p>
+    </div>
+
+    <div class="cause">
+      <div class="cause-head">
+        <h3>3 · The original target was arithmetically impossible</h3>
+        <span class="pill p-warn">upstream</span>
+      </div>
+      <p>
+        700 ms p50 could never be met: the endpointing silence gate alone is 600 ms — 86% of the
+        budget — before transcription even starts. The program found this, said so plainly, and
+        asked for a replacement SLO rather than quietly relaxing the number. That is the right
+        behaviour, but it means the stated goal was unreachable from day one.
+      </p>
+      <p>
+        Worth holding onto: even with every blocked story shipped, the arithmetic lands near
+        <strong>2,300–2,500 ms</strong> — not 700. The honest target is a different target, and it
+        still needs your signature.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>What I would do next, in this order</h2>
+    <ul class="tight">
+      <li><strong>Move the four settings into <code>.env.example</code> and commit them.</strong> Nothing else on this list matters until the fixes survive a fresh clone. This is minutes of work and it is the entire difference between the program having delivered and not.</li>
+      <li><strong>Re-measure after that, not before.</strong> A rebuilt stack should be measured fresh — the environment as it is now is not what the docs describe, so today's numbers are not a fair baseline for either side of the comparison.</li>
+      <li><strong>Approve the ground truths, or explicitly drop the quality gate.</strong> 137 cases need review. Until that is resolved, five stories — including both real levers — stay frozen. If the gate is not worth your time, say so and unblock them deliberately.</li>
+      <li><strong>Decide the SLO against today's number.</strong> 4,539 ms p50 is the current truth. Pick the target you actually want, then let the backlog be ordered against it.</li>
+      <li><strong>Then start <code>US-004</code>.</strong> Streaming generation is the single largest remaining lever and the prerequisite for streaming synthesis. It has been written and waiting since the plan was authored.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <div>Measured against the live stack on this machine: services on 8000, 11434 and 8098; N=2 warm runs of 48–50 turns; app-side traces from <code>logs/perf_turns.jsonl</code>; acceptance suites re-run in place.</div>
+    <div>One caveat on my own numbers: my first load run was contaminated — I ran the residency suite against the same stack at the same time, which unloaded the model mid-measurement. Its figures are discarded; only the clean run is reported above. The residency suite reproduces 11/11 once the stack is quiet.</div>
+    <div>The stack was restored to its original warm state (model resident at the app's context size) after testing.</div>
+  </footer>
+
+</div>

@@ -1,0 +1,330 @@
+{
+  "run_id": "20260919T061419Z",
+  "condition": "N=2",
+  "thermal_state": "cold",
+  "turn_count": 2,
+  "first_audio_n": 1,
+  "fixture_sha256": "57c12ef9d96a56f08ec453d5661b8fa2bc577bf809acd904c196442665dc4abc",
+  "fixtures": [
+    "fees-01",
+    "deadlines-02"
+  ],
+  "fixture_hashes": {
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce",
+    "deadlines-02": "d2ba439268f91da1946193ec820f0b8fe54cc21886d2828c4edb86fd9b187623"
+  },
+  "fixture_version": {
+    "fees-01": 1,
+    "deadlines-02": 1
+  },
+  "network_profile": "clean",
+  "profile_parameters": {
+    "frame_delay_ms": 0.0,
+    "jitter_ms": 0.0,
+    "loss_percent": 0.0,
+    "reorder_percent": 0.0,
+    "disconnect_at_turns": []
+  },
+  "profile_description": "carrier framing, no injection",
+  "injected_condition": false,
+  "first_audio_ms": {
+    "p50": 13171.0,
+    "p95": 13171.0,
+    "worst": 13171.0,
+    "n": 1,
+    "bucket": "cold"
+  },
+  "cold_first_audio_ms": {
+    "n": 1,
+    "p50": 13171.0,
+    "p95": 13171.0,
+    "worst": 13171.0,
+    "min": 13171.0
+  },
+  "warm_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "carrier_boundary_excluded": true,
+  "records_separated": true,
+  "separation": {
+    "records_separated": true,
+    "separation_basis": "logs/perf_turns.jsonl",
+    "trace_rows_in_window": 1,
+    "trace_rows_unattributable": 0,
+    "distinct_call_ids": 1,
+    "reasons": [],
+    "detail": "rows attributed by call_id to the session that opened that streamSid; no row unattributed, no call_id shared between sessions, no repeated turn_id"
+  },
+  "turns_over_3000ms": 1,
+  "cap_exceeded": true,
+  "cap_basis": "first_audio_ms > 3000 (BRD-05 per-turn ceiling)",
+  "turns_without_response": 1,
+  "turns_timed_out": 1,
+  "partial": true,
+  "dropped_turns": 0,
+  "discarded": true,
+  "discard_reason": "turn cap exceeded (>3000 ms first audio): A turn 0 = 13171 ms",
+  "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report",
+  "readiness": {
+    "url": "ws://127.0.0.1:8000/ws/twilio",
+    "checks": [
+      {
+        "check": "quality-eval lock",
+        "path": "D:\\project\\universityDemo\\eval\\.eval_in_progress",
+        "result": "no lock file present",
+        "note": "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock"
+      },
+      {
+        "check": "tcp reachability",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "result": "listening"
+      }
+    ],
+    "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report"
+  },
+  "frame_audit": {
+    "frames_emitted": 412,
+    "frames_dropped": 0,
+    "frames_reordered": 0,
+    "frames_late_gt_5ms": 9,
+    "frames_slot_clamped": 1,
+    "max_slot_deviation_ms": 26.844,
+    "worst_session_p95_slot_deviation_ms": 1.344,
+    "harness_fault": true,
+    "tac1_holds": false,
+    "per_session": {
+      "A": {
+        "frames_emitted": 204,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 6,
+        "frames_late_gt_5ms_from_clamp": 1,
+        "frames_late_gt_5ms_unexplained": 5,
+        "frames_slot_clamped": 1,
+        "max_slot_deviation_ms": 26.844,
+        "p50_slot_deviation_ms": 0.372,
+        "p95_slot_deviation_ms": 1.344,
+        "p99_slot_deviation_ms": 16.903,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 26.844,
+        "p95_harness_deviation_ms": 1.311,
+        "frames_harness_late_gt_5ms": 5,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": false,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      },
+      "B": {
+        "frames_emitted": 208,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 3,
+        "frames_late_gt_5ms_from_clamp": 0,
+        "frames_late_gt_5ms_unexplained": 3,
+        "frames_slot_clamped": 0,
+        "max_slot_deviation_ms": 18.227,
+        "p50_slot_deviation_ms": 0.356,
+        "p95_slot_deviation_ms": 1.126,
+        "p99_slot_deviation_ms": 7.461,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 18.227,
+        "p95_harness_deviation_ms": 1.126,
+        "frames_harness_late_gt_5ms": 3,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": false,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      }
+    },
+    "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
+  },
+  "per_session": [
+    {
+      "label": "A",
+      "turn_count": 1,
+      "planned_turns": 1,
+      "completed": true,
+      "connected": true,
+      "error": null,
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ6bb648bcc6f206c74d4a7e5be0ecc9"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 1,
+        "p50": 13171.0,
+        "p95": 13171.0,
+        "worst": 13171.0,
+        "min": 13171.0
+      },
+      "turns_over_3000ms": 1,
+      "turns_without_response": 0,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 390
+      },
+      "turns": [
+        {
+          "session_label": "A",
+          "turn_index": 0,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "cold",
+          "first_audio_ms": 13171.0,
+          "turn_total_ms": 13171.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 221139.375,
+          "stream_sid": "MZ6bb648bcc6f206c74d4a7e5be0ecc9",
+          "new_session": false,
+          "note": ""
+        }
+      ]
+    },
+    {
+      "label": "B",
+      "turn_count": 1,
+      "planned_turns": 1,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ176cd99efb2cecde01799ae1541706"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "turns_over_3000ms": 0,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 389
+      },
+      "turns": [
+        {
+          "session_label": "B",
+          "turn_index": 0,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "cold",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 221144.546,
+          "stream_sid": "MZ176cd99efb2cecde01799ae1541706",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    }
+  ],
+  "target_turns_per_session": 1,
+  "powered": false,
+  "url": "ws://127.0.0.1:8000/ws/twilio",
+  "started_at": "2026-09-19T06:14:19Z",
+  "ended_at": "2026-09-19T06:15:20Z",
+  "wall_seconds": 60.78,
+  "harness_version": "us002-harness/1.0.0",
+  "harness_sha256": "46b2e29b11b098c4824518ed4a34a1b5f972a71af34ef9431885e2f8097cefed",
+  "app_contract_check": {
+    "checked": [
+      {
+        "file": "voice_handler.py",
+        "name": "silence_threshold_frames",
+        "harness": 30,
+        "app": 30,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "max_utterance_frames",
+        "harness": 300,
+        "app": 300,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "MIN_UTTERANCE_FRAMES",
+        "harness": 15,
+        "app": 15,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "RMS gate",
+        "harness": 80,
+        "app": 80,
+        "status": "ok"
+      }
+    ],
+    "drift": [],
+    "ok": true
+  },
+  "json_path": "",
+  "disclosures": {
+    "carrier_boundary": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
+    "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
+    "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (3 rows present before the run)"
+  },
+  "notes": [
+    "DISCARDED RUN - no latency claim may be taken from it (a discarded run is not a passing run).",
+    "UNDERPOWERED: 1 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+  ]
+}

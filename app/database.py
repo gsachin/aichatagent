@@ -30,6 +30,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -182,10 +183,18 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
     try:
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-        raw = backend_chat(
+        # to_thread: `backend_chat` is the SYNCHRONOUS Ollama client. Called
+        # here directly it blocks the event loop for the whole generation --
+        # and this runs from the Twilio disconnect handler, so every live call
+        # and every HTTP request freezes with it. Measured 2026-09-19: this
+        # exact call hung the process for minutes inside a socket read, with
+        # Ollama idle, and took the whole service down (py-spy: MainThread in
+        # httpx sync read <- ollama.chat <- here).
+        raw = await asyncio.to_thread(
+            backend_chat,
             messages=[{"role": "user", "content": prompt}],
             preferred=default_model(["qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(2048),
+            num_ctx=small_task_num_ctx(),
             json_mode=True,
         )
         logger.debug(f"LLM extraction raw: {raw}")

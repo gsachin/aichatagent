@@ -61,7 +61,45 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-logging.basicConfig(level=logging.INFO)
+def _configure_logging() -> None:
+    """Apply LOG_LEVEL and LOG_FILE from the environment.
+
+    Both keys shipped in .env and were read by nothing: the level was pinned to
+    INFO and no file handler existed, so `logs/voice_assistant.log` was never
+    created and had never been written to. Found by US-011's reader sweep --
+    a key that is set and read by nothing is invisible until someone sweeps
+    for exactly that.
+    """
+    import os as _os
+
+    level_name = _os.environ.get("LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, None)
+    if not isinstance(level, int):
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger("voice_api").warning(
+            "LOG_LEVEL=%r is not a logging level; using INFO", level_name)
+        level = logging.INFO
+    else:
+        logging.basicConfig(level=level)
+
+    log_file = _os.environ.get("LOG_FILE", "").strip()
+    if not log_file:
+        return
+    try:
+        path = Path(log_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+    except OSError as exc:
+        # A bad LOG_FILE must not stop the stack from serving calls.
+        logging.getLogger("voice_api").warning(
+            "LOG_FILE=%r could not be opened (%s); file logging disabled",
+            log_file, exc)
+
+
+_configure_logging()
 logger = logging.getLogger("voice_api")
 
 
@@ -163,10 +201,50 @@ def _machine_profile_status() -> dict:
 
 
 @asynccontextmanager
+def _reconcile_workers() -> None:
+    """Report the configured FASTAPI_WORKERS against what is actually running.
+
+    FASTAPI_WORKERS is machine-sizing metadata written by scripts/predeploy.py.
+    No launcher passes it to uvicorn -- start_services.ps1, start_services.sh,
+    the Dockerfile and docker-compose all start a single process -- so a
+    configured value above 1 is a silent contradiction between .env and the
+    running stack. That mismatch is the exact defect class US-011 was written
+    to surface ("set != live"), and it had to be found by hand the first time:
+    the plan inherited a claim of 4 workers when there is one.
+
+    Reading it here does not change the worker count. It makes the difference
+    visible at boot instead of leaving it for someone to rediscover, and it is
+    deliberately NOT wired to `--workers`: this stack holds model residency
+    (whisper, Kokoro) and per-call session state in-process, so a second worker
+    would load a second copy of every model. On a 16 GB card already holding
+    ~13 GB, that is a crash, not a speedup.
+    """
+    import os as _os
+
+    raw = _os.environ.get("FASTAPI_WORKERS", "").strip()
+    if not raw:
+        return
+    try:
+        configured = int(raw)
+    except ValueError:
+        logger.warning("FASTAPI_WORKERS=%r is not an integer; ignoring", raw)
+        return
+    if configured > 1:
+        logger.warning(
+            "FASTAPI_WORKERS=%d is configured but this stack runs a single "
+            "uvicorn worker by design (in-process model residency and per-call "
+            "session state). No launcher honours the setting; the running "
+            "count is 1. Set FASTAPI_WORKERS=1 to make .env agree with the "
+            "stack, or see doc/sdlc/modules/MOD-07-config-boot.md.",
+            configured,
+        )
+
+
 async def lifespan(app_instance):
     """Initialize and cleanup resources."""
     global _db_available, _outbound_worker, _follow_up_scheduler
     # Startup
+    _reconcile_workers()
     try:
         from app.database import init_db
 
@@ -219,6 +297,20 @@ async def lifespan(app_instance):
             # Pre-load Whisper model
             _get_stt_model()
             logger.info("Whisper model pre-warmed")
+
+            # Pre-load Kokoro too (C4 / Class A). Whisper was warmed here and
+            # Kokoro was not, so the FIRST synthesis of the FIRST call loaded
+            # the ONNX model -- from inside an `async def`, on the event loop,
+            # while every other live call, media stream and keepalive waited.
+            # A caller's first answer is the turn they are most likely to be
+            # timing, and it was the one paying a model load.
+            try:
+                from app.voice_handler import _get_tts_engine
+
+                _get_tts_engine()
+                logger.info("Kokoro TTS pre-warmed")
+            except Exception as tts_exc:                # noqa: BLE001
+                logger.warning(f"Kokoro pre-warm skipped: {tts_exc}")
 
         await _asyncio.to_thread(_warmup)
     except Exception as e:
@@ -360,6 +452,53 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </Connect>
     <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
 </Response>"""
+
+
+# US-016: the refusal. A third caller hears a sentence produced ahead of time
+# and the call ends. There is deliberately NO <Connect> here -- no media stream
+# is established, so no session, no history and no KV allocation is created for
+# a call that has no capacity to run in. The carrier has already answered the
+# PSTN leg (an inbound call cannot be declined by the app); the only lever the
+# application has is which TwiML it returns, and this returns the refusal.
+TWIML_BUSY_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+
+# Used only when the pre-synthesised asset is absent. See `_busy_twiml`.
+TWIML_BUSY_SAY_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">{text}</Say>
+    <Hangup/>
+</Response>"""
+
+
+def _busy_twiml(host: str) -> str:
+    """TwiML that plays the busy message and connects nothing.
+
+    The pre-synthesised asset is the path: it is the assistant's own voice,
+    produced ahead of time, and playing it costs this box nothing (US-016
+    AC-3/AC-6). `app/static/` is gitignored, though, so a stack that has not
+    run `scripts/build_call_assets.py` has no asset -- and a refusal that
+    played a missing file would disconnect the caller in silence, which is a
+    worse outcome than the over-capacity call it exists to prevent.
+
+    So the fallback is the carrier's own `<Say>`: a different voice, but words
+    the caller can act on, and still zero cost to this box -- the synthesis
+    happens at Twilio, not here. The boot gate reports the missing asset
+    separately, so the degraded voice is visible rather than silent.
+    """
+    from app.admission import BUSY_ASSET, BUSY_TEXT, asset_available
+
+    if asset_available(BUSY_ASSET):
+        return TWIML_BUSY_TEMPLATE.format(
+            audio_url=f"https://{host}/static/audio/{BUSY_ASSET}")
+    logger.warning(
+        "/twilio: busy asset %s missing -- falling back to carrier <Say>. "
+        "Build it: .venv/Scripts/python.exe scripts/build_call_assets.py", BUSY_ASSET)
+    escaped = (BUSY_TEXT.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return TWIML_BUSY_SAY_TEMPLATE.format(text=escaped)
 
 
 # ── u-law conversion utilities ───────────────────────────────────────
@@ -544,6 +683,14 @@ async def websocket_twilio(websocket: WebSocket):
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "transcript": [],
                 }
+
+                # US-016: this is the moment a session becomes live, and the
+                # only moment. The admission counter is fed from the real
+                # lifecycle rather than from requests, so a refused call can
+                # never inflate the count it was refused by.
+                from app.admission import REGISTRY
+
+                REGISTRY.register(stream_sid)
                 session.call_id = stream_sid
                 # Mint the conversation id now, while the call is starting. The CRM
                 # needs it here — lookup-or-create is the only endpoint that returns
@@ -590,7 +737,15 @@ async def websocket_twilio(websocket: WebSocket):
                         "Ask me anything about Meridian University programs, "
                         "tuition fees, or how to apply."
                     )
-                    chunks = generate_ulaw_greeting(greeting)
+                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
+                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
+                    # LOADS the model when cold. Called directly from an async
+                    # handler it froze the whole event loop for a model load on the
+                    # FIRST turn of the FIRST call, which is the worst possible
+                    # moment and the one a caller is most likely to notice. Every
+                    # other live call, every media stream and every keepalive waits
+                    # behind it. `to_thread` gives it a worker thread instead.
+                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
                     logger.info(f"AI greeting: {len(chunks)} chunks")
                     for chunk in chunks:
                         out_payload = base64.b64encode(chunk).decode("ascii")
@@ -663,6 +818,7 @@ async def websocket_twilio(websocket: WebSocket):
                     # Send TTS audio chunks back through the WebSocket
                     session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
                     tts_playing = True
+                    _marked_first_frame = False
                     try:
                         for chunk in tts_chunks:
                             out_payload = base64.b64encode(chunk).decode("ascii")
@@ -673,6 +829,15 @@ async def websocket_twilio(websocket: WebSocket):
                             })
                             if not await _ws_send(websocket, response):
                                 raise WebSocketDisconnect(code=1000)
+                            # US-001: first_audio_sent is taken at the socket
+                            # write, not at the end of synthesis — this is the
+                            # end of BRD-02's measured segment.
+                            if not _marked_first_frame:
+                                _marked_first_frame = True
+                                _t = getattr(session, "_trace", None)
+                                if _t is not None:
+                                    _t.mark("first_audio_sent")
+                                    _t.emit()
                     finally:
                         tts_playing = False
                     session.log_event("AGENT_SPEECH_STOPPED")
@@ -711,6 +876,15 @@ async def websocket_twilio(websocket: WebSocket):
             entry = _active_call_sids.pop(stream_sid, None)
             if entry and "ended_at" not in entry:
                 _push_transcript_event("call_ended", stream_sid)
+
+            # US-016: the slot is freed here, on every exit path from the
+            # handler. A refused caller dialling back finds a free slot and is
+            # admitted as a fresh session -- no state from the refusal is
+            # carried into it, because a refused call never had any.
+            if stream_sid:
+                from app.admission import REGISTRY
+
+                REGISTRY.release(stream_sid)
         # Close the session and recover its id before the registry drops it —
         # the post-call handler needs it to write the conversation.
         from app.crm import session as crm_session
@@ -843,7 +1017,15 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                         f"Admissions. Do you have a moment to talk about our "
                         f"programs, tuition fees, or how to apply?"
                     )
-                    chunks = generate_ulaw_greeting(greeting)
+                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
+                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
+                    # LOADS the model when cold. Called directly from an async
+                    # handler it froze the whole event loop for a model load on the
+                    # FIRST turn of the FIRST call, which is the worst possible
+                    # moment and the one a caller is most likely to notice. Every
+                    # other live call, every media stream and every keepalive waits
+                    # behind it. `to_thread` gives it a worker thread instead.
+                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
                     logger.info(
                         f"AI greeting: {len(chunks)} chunks"
                     )
@@ -1108,7 +1290,22 @@ async def twilio_voice_webhook(From: str = Query("")):
     `Form` would silently never bind. It is threaded into the TwiML as a
     `<Parameter>` because the media stream itself never carries it.
     """
+    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+
     host = _resolve_tunnel_host()
+
+    # US-016: the admission decision, taken from the live session count at the
+    # carrier-facing endpoint (TAC-1). Refusing here rather than at the media
+    # stream means a caller with no capacity to run in is not first walked
+    # through the IVR -- they hear the busy message immediately.
+    if admission_enabled():
+        d = REGISTRY.decide(call_sid=From or "")
+        if not d.admitted:
+            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            logger.info("/twilio/voice: REFUSED (outcome=refused, live=%d, limit=%d)",
+                        d.live, d.limit)
+            return Response(content=_busy_twiml(host), media_type="application/xml")
+
     twiml = TWIML_IVR_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
     logger.info(f"/twilio/voice: serving IVR menu with host={host}, caller={'set' if From else 'unknown'}")
     return Response(content=twiml, media_type="application/xml")
@@ -1124,7 +1321,23 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query("")):
     so `From` is still present here — which is why it is declared again rather
     than carried in a session.
     """
+    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+
     host = _resolve_tunnel_host()
+
+    # US-016: the binding decision. This endpoint is where <Connect><Stream>
+    # would go out, so it is the last point at which a call can be refused
+    # before a session exists. The check at /twilio/voice spares a caller the
+    # IVR; this one is what actually guarantees no session is created, because
+    # a line can fill while a caller is still pressing a digit.
+    if admission_enabled():
+        d = REGISTRY.decide(call_sid=From or "")
+        if not d.admitted:
+            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            logger.info("/twilio/voice/connect: REFUSED (outcome=refused, live=%d, limit=%d)",
+                        d.live, d.limit)
+            return Response(content=_busy_twiml(host), media_type="application/xml")
+
     logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}, caller={'set' if From else 'unknown'}")
     twiml = TWIML_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
     return Response(content=twiml, media_type="application/xml")
@@ -1506,7 +1719,15 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     try:
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-        raw = backend_chat(
+        # US-017 C4 / Class A: `backend_chat` is a SYNCHRONOUS HTTP call to the
+        # engine. Called directly from this async handler it blocks the event
+        # loop for the whole inference -- so a WhatsApp message arriving while
+        # two calls are live would freeze both of them for the duration. The
+        # third instance of this defect found by the AST scan, and the one with
+        # the least excuse: it is on a path that only runs when a caller is
+        # also on the line.
+        raw = (await _asyncio.to_thread(
+            backend_chat,
             messages=[{
                 "role": "user",
                 "content": (
@@ -1523,8 +1744,8 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
                 ),
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
-            num_ctx=small_task_num_ctx(1024),
-        ).strip().lower()
+            num_ctx=small_task_num_ctx(),
+        )).strip().lower()
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
             return True, detected_program
@@ -2477,6 +2698,30 @@ def _push_transcript_event(event_type: str, call_sid: str, data: dict | None = N
     # Keep only last 200 events
     if len(_transcript_events) > 200:
         _transcript_events[:] = _transcript_events[-200:]
+
+
+@app.get("/api/perf/policy")
+async def api_perf_policy():
+    """Admission and work-priority records, as counts (US-016, US-017).
+
+    The load harness runs in a separate process, so the invariants these two
+    stories own -- "an N=3 window produces exactly one refusal and zero new
+    sessions", "zero background starts during a voice turn" -- cannot be
+    counted from the harness's own side. They are properties of the app's
+    decision points, so the app has to report them.
+
+    Counts and reasons only: no phone number, no transcript, no caller text.
+    `caller_ref` is a truncated digest. This is the same surface an operator
+    reads to answer "why was that call refused", which is why it is a normal
+    endpoint rather than a test hook.
+    """
+    from app.admission import status as admission_status
+    from app.work_priority import policy_status
+
+    return JSONResponse({
+        "admission": admission_status(),
+        "work_priority": policy_status(),
+    })
 
 
 @app.get("/api/calls/live")

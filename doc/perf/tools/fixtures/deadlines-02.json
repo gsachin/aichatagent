@@ -1,0 +1,29 @@
+{
+  "schema": "us002.fixture/1",
+  "fixture_id": "deadlines-02",
+  "version": 1,
+  "intent": "Important dates / deadlines",
+  "description": "Two-turn deadline conversation, second turn preceded by a 2 s caller pause inside the turn (a real caller hesitation - the app sees two speech segments with silence between them).",
+  "seed": 20260919,
+  "trailing_silence_ms": 800,
+  "turns": [
+    {
+      "turn_id": 0,
+      "text": "When is the last date to apply for the undergraduate programme?",
+      "expect_keywords": ["deadline", "apply"],
+      "segments": [
+        {"kind": "speech", "ms": 2400}
+      ]
+    },
+    {
+      "turn_id": 1,
+      "text": "Sorry - and when do the entrance results come out?",
+      "expect_keywords": ["result", "date"],
+      "segments": [
+        {"kind": "speech", "ms": 1600},
+        {"kind": "silence", "ms": 240},
+        {"kind": "speech", "ms": 1800}
+      ]
+    }
+  ]
+}

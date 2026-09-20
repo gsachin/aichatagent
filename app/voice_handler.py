@@ -81,19 +81,46 @@ def _get_stt_model():
 
 
 def _get_tts_engine():
-    """Load Kokoro ONNX once and cache — GPU-accelerated via CUDA."""
+    """Load Kokoro ONNX once and cache.
+
+    Requests the CUDA execution provider, then reports which provider the
+    session ACTUALLY got.
+
+    The original version logged "CUDA GPU enabled" whenever
+    `ort.get_available_providers()` listed CUDA — that lists providers compiled
+    into the wheel, not providers that instantiate. On this box the CUDA
+    provider fails ("Require cuDNN 9.* and CUDA 13.*"; torch ships CUDA 12.8)
+    and ONNX Runtime silently falls back to CPU, so the log claimed a 5-10x
+    speedup that was never happening while the CPU did all the work.
+
+    Measured consequence: RTF ~0.6 on CPU, which is the ~6 s single-session
+    synthesis and the 12-16 s N=2 bottleneck. The claim is now read from the
+    session itself, so it cannot be true-by-accident again.
+    """
     global _tts_engine
     if _tts_engine is not None:
         return _tts_engine
 
-    # Force CUDA execution provider for 5-10x faster TTS
+    # Ask for CUDA. Whether we GET it is checked below, from the session.
     import onnxruntime as ort
-    available = ort.get_available_providers()
-    if "CUDAExecutionProvider" in available:
-        os.environ["ONNX_PROVIDER"] = "CUDAExecutionProvider"
-        logger.info("Kokoro TTS: CUDA GPU enabled")
-    else:
-        logger.warning("Kokoro TTS: CUDA not available, using CPU (slow)")
+    requested = "CUDAExecutionProvider" if "CUDAExecutionProvider" in \
+        ort.get_available_providers() else None
+    if requested:
+        os.environ["ONNX_PROVIDER"] = requested
+
+    # Make CUDA/cuDNN actually resolvable. On Windows the ORT wheel does NOT
+    # bundle them, so the provider fails to instantiate and ONNX Runtime
+    # silently falls back to CPU. torch ships CUDA 12.8 + cuDNN 9 and registers
+    # its own lib dir on import; preload_dlls() reuses those.
+    #
+    # This is the difference between RTF 0.63 and RTF 0.06 on this box — the
+    # ~6 s single-session synthesis and the 12-16 s two-caller bottleneck.
+    # Order matters: torch first, then preload_dlls(), then the session.
+    try:
+        import torch  # noqa: F401  (registers torch's bundled CUDA/cuDNN dirs)
+        ort.preload_dlls()
+    except Exception as exc:
+        logger.warning("Kokoro TTS: CUDA DLL preload skipped (%s)", exc)
 
     from kokoro_onnx import Kokoro
 
@@ -102,8 +129,88 @@ def _get_tts_engine():
         os.path.join(cache_dir, "kokoro-v1.0.onnx"),
         os.path.join(cache_dir, "voices-v1.0.bin"),
     )
-    logger.info("Kokoro TTS engine ready")
+
+    # The truth, read back from the session that was actually built.
+    try:
+        active = _tts_engine.sess.get_providers()
+        on_gpu = "CUDAExecutionProvider" in active
+    except Exception:
+        active, on_gpu = ["<unknown>"], False
+
+    if on_gpu:
+        logger.info("Kokoro TTS: running on CUDA (%s)", ",".join(active))
+    else:
+        logger.warning(
+            "Kokoro TTS: CPU ONLY — requested %s, session got %s. Synthesis is "
+            "~0.6x real-time and contends with everything else on the CPU; this "
+            "is the dominant cost of a two-caller turn. See doc/perf/"
+            "IMPLEMENTATION_STATUS.md.",
+            requested or "(nothing)", ",".join(active),
+        )
     return _tts_engine
+
+
+#: Voice and speaking rate for the LIVE call path.
+#:
+#: Both keys shipped in .env and were ignored here: the call site hardcoded
+#: voice="af_heart", speed=1.0. KOKORO_VOICE was read by app/pipeline.py, so it
+#: looked alive in a grep while the Twilio path -- the one that actually serves
+#: callers -- never consulted it. Reading them here makes the live path agree
+#: with the rest of the stack.
+#:
+#: Speed is clamped to the range Kokoro renders cleanly; outside it the output
+#: degrades into artefacts, which is worse than ignoring the setting. A value
+#: that will not parse falls back to 1.0 with a warning rather than raising --
+#: a typo in .env must not stop the stack from answering calls.
+TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart").strip() or "af_heart"
+
+
+def _parse_tts_speed(raw: str) -> float:
+    try:
+        speed = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("KOKORO_SPEED=%r is not a number; using 1.0", raw)
+        return 1.0
+    clamped = min(max(speed, 0.5), 2.0)
+    if clamped != speed:
+        logger.warning(
+            "KOKORO_SPEED=%.2f is outside the clean-synthesis range 0.5-2.0; "
+            "using %.2f", speed, clamped)
+    return clamped
+
+
+TTS_SPEED = _parse_tts_speed(os.environ.get("KOKORO_SPEED", "1.0"))
+
+#: US-012 AC-4: the isolation fallback must be a CONFIGURATION change, not a code
+#: revert. "shared" is the DG-06 decision (one process-wide cache, reused across
+#: callers); "per_call" bounds the cache to a single session's utterances and
+#: gives up cross-caller reuse in exchange for isolation that needs no argument.
+TTS_CACHE_SCOPE = os.environ.get("TTS_CACHE_SCOPE", "shared").strip().lower()
+
+
+def _cache_key_sha(cache_key: tuple) -> str:
+    """Short, stable digest of a cache key, safe to write to a trace.
+
+    Deterministic across processes, unlike `hash()` of a str, which is salted
+    per interpreter (PYTHONHASHSEED). In-process that salt is harmless; in a log
+    it would make two callers' keys for the same utterance look different, and
+    the isolation test reads keys across a whole run.
+
+    The digest is truncated to 12 hex characters and is one-way, so no agent
+    text lands in the trace (TAC-4).
+    """
+    import hashlib
+
+    raw = "\x1f".join(str(part) for part in cache_key)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _tts_voice() -> str:
+    return TTS_VOICE
+
+
+def _tts_speed() -> float:
+    return TTS_SPEED
 
 
 # ── u-law ↔ PCM conversion (stdlib audioop) ───────────────────────────
@@ -121,6 +228,60 @@ def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
 # ── Standalone helper for main.py greeting ────────────────────────────
 
 
+def _turn_outcome(chunks: list[bytes]) -> list[bytes]:
+    """Record a turn on the four-outcome axis, then pass the audio through.
+
+    US-016 AC-2: `served`, `degraded`, `failed` and `refused` are four different
+    things and are never collapsed. `degraded` is recorded where the fixed
+    response is played, `refused` where a call is turned away at admission, and
+    this covers the other two -- a turn that produced speech, and a turn that
+    produced none.
+    """
+    from app.admission import REGISTRY
+
+    if chunks:
+        REGISTRY.note_served()
+    else:
+        REGISTRY.note_failed()
+    return chunks
+
+
+def load_call_asset_ulaw(name: str) -> list[bytes] | None:
+    """Read a pre-synthesised call asset as µ-law chunks. No model, no synthesis.
+
+    US-016 AC-5: the fixed response and the busy message are the two sentences
+    a caller hears when the machinery is not available to say anything else.
+    Both are read from disk here -- this function touches no engine and no
+    synthesiser, which is precisely why it still works when one or both are
+    gone. Returns None if the asset is missing, and the caller decides what to
+    do rather than being handed silence.
+    """
+    from app.admission import asset_path
+
+    path = asset_path(name)
+    if not path.is_file():
+        return None
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                logger.warning("call asset %s is not mono 16-bit PCM", name)
+                return None
+            rate = w.getframerate()
+            pcm = w.readframes(w.getnframes())
+        if rate != 8000:
+            # Built at carrier rate, so this is a guard rather than a path.
+            logger.warning("call asset %s is %d Hz, expected 8000", name, rate)
+            return None
+    except Exception:
+        logger.exception("call asset %s could not be read", name)
+        return None
+
+    chunk = 320  # 20 ms at 8 kHz, the Media Streams frame size
+    return [pcm_to_ulaw(pcm[i:i + chunk]) for i in range(0, len(pcm), chunk)]
+
+
 def generate_ulaw_greeting(text: str) -> list[bytes]:
     """
     Quick TTS → µ-law chunker for use in WebSocket start handlers.
@@ -128,7 +289,7 @@ def generate_ulaw_greeting(text: str) -> list[bytes]:
     Returns a list of µ-law byte chunks ready for Twilio Media Streams.
     """
     kokoro = _get_tts_engine()
-    audio, sr = kokoro.create(text, voice="af_heart", speed=1.0)
+    audio, sr = kokoro.create(text, voice=_tts_voice(), speed=_tts_speed())
     from scipy.signal import resample
 
     target_len = int(len(audio) * 8000 / 24000)
@@ -168,6 +329,66 @@ STT_MAX_NO_SPEECH_PROB = float(os.environ.get("STT_MAX_NO_SPEECH_PROB", "0.8"))
 STT_MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "3"))
 # Utterances shorter than this are treated as noise bursts (15 × 20 ms = 300 ms).
 MIN_UTTERANCE_FRAMES = int(os.environ.get("MIN_UTTERANCE_FRAMES", "15"))
+
+# ── BRD-04: the ONE live end-of-speech decision ─────────────────────────
+# "The system shall have exactly one live end-of-speech decision, its delay
+#  documented, and its value reconciled explicitly against BRD-02."
+#
+# This is it. `is_silent()` gates the audio and `feed_audio()` counts trailing
+# silence; when the count reaches VAD_SILENCE_FRAMES the turn is closed. There
+# is no second decision on this path, and there must never be one -- a second
+# VAD with a different delay is two systems disagreeing about when a caller
+# stopped talking, which is how a caller gets talked over.
+#
+# Reconciled against BRD-02 (p50 <= 700 ms for TURN_E2E_MS): this delay is
+# measured at 600 ms, i.e. 86% of that budget before STT has run (`AS-04`).
+# BRD-02's 700 ms is therefore NOT reachable by tuning this number -- see
+# doc/perf/us015-model-decision.md for the measured chain. The value is kept
+# because 600 ms is the pause tolerance callers are given, and the fixtures
+# encode a 240 ms mid-turn hesitation as a real caller behaviour that must
+# survive. Lowering it is not a free win: it splits callers who pause.
+VAD_SILENCE_MS = int(os.environ.get("VAD_SILENCE_MS", "600"))
+VAD_SILENCE_FRAMES = max(1, round(VAD_SILENCE_MS / 20))
+
+
+def _vad_silence_frames() -> int:
+    """Read the live end-of-speech delay at SESSION construction.
+
+    Read per call rather than once at import so a deployment can change the
+    delay without a rebuild, and so a test can construct a session with a
+    different delay without reloading the module. BRD-04's "configuration that
+    does not execute shall not be presented as the live setting" cuts both
+    ways: a value nobody can reach is not a setting.
+    """
+    raw = os.environ.get("VAD_SILENCE_MS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return max(1, round(int(raw) / 20))
+    return VAD_SILENCE_FRAMES
+
+
+#: BRD-04 does not forbid closing a turn EARLY if the work has already been
+#: done -- it forbids a second *decision*. Speculative STT keeps the single
+#: decision and its single 600 ms delay; it merely transcribes the audio the
+#: caller has already produced while the remaining silence is still being
+#: counted. The result is used only if the audio did not change, so the
+#: transcript is identical to the non-speculative one by construction. Set to
+#: 0 to disable. Default: start STT 220 ms before the endpoint fires, which is
+#: the measured STT p50 (203 ms) rounded up -- starting earlier would usually
+#: finish before the window closed and waste a GPU pass on resumed callers.
+VAD_SPECULATIVE_ADVANCE_MS = int(os.environ.get("VAD_SPECULATIVE_ADVANCE_MS", "220"))
+
+
+def _speculative_advance_ms() -> int:
+    """Read the speculative lead at SESSION construction.
+
+    Same reasoning as `_vad_silence_frames`: a value read once at import is a
+    value a deployment cannot change and a test cannot vary, which is the
+    defect BRD-04 names. Read per session so both can.
+    """
+    raw = os.environ.get("VAD_SPECULATIVE_ADVANCE_MS", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return VAD_SPECULATIVE_ADVANCE_MS
 
 _NOISE_WORDS = {"is", "uh", "um", "oh", "ah", "hmm", "hm", "mhm", "eh", "huh"}
 
@@ -279,17 +500,37 @@ class VoiceCallSession:
 
     def __init__(
         self,
-        silence_threshold_frames: int = 30,  # ~600 ms at 20 ms/frame
+        silence_threshold_frames: int | None = None,  # None -> the live BRD-04 value
         max_utterance_frames: int = 300,     # ~6 seconds max
         sample_rate: int = 8000,             # Twilio uses 8 kHz
         direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
     ):
-        self._silence_threshold = silence_threshold_frames
+        # BRD-04: one decision, and `None` resolves to the setting rather than
+        # to a literal. The parameter used to default to the number 30 while no
+        # caller ever passed it, so the documented "configuration" was a
+        # constant that nothing could reach.
+        self._silence_threshold = (_vad_silence_frames()
+                                   if silence_threshold_frames is None
+                                   else silence_threshold_frames)
         self._max_utterance = max_utterance_frames
+        # Speculative-STT state. `_spec_epoch` invalidates a result whose
+        # utterance has already been reset, so a slow transcription can never
+        # be mistaken for the next caller turn's audio.
+        self._spec_task = None
+        self._spec_result = None
+        self._spec_epoch = 0
+        self._spec_started = False
+        self._spec_advance_ms = _speculative_advance_ms()
         self._sample_rate = sample_rate
         self.direction = direction
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
+
+        # US-012: the per-call TTS cache. Unused while TTS_CACHE_SCOPE is
+        # "shared" (the DG-06 default), where every session reads and writes the
+        # class-level cache instead. It is allocated unconditionally so that
+        # switching scope is a configuration change with no code path missing.
+        self._session_tts_cache: dict = {}
         self._turn = 0          # utterance counter for the event timeline
 
         # Audio buffer
@@ -299,6 +540,9 @@ class VoiceCallSession:
 
         # Conversation context (accumulated across utterances)
         self._conversation_history: list[str] = []
+
+        # US-001 turn tracing (app/perf_trace.py). Never raises; may be None.
+        self._trace = None
 
     def log_event(self, name: str, **fields) -> None:
         """Emit one structured event line for the call timeline."""
@@ -312,6 +556,81 @@ class VoiceCallSession:
         self._audio_buffer.clear()
         self._silence_count = 0
         self._total_frames = 0
+        # Invalidate any in-flight speculation. The epoch, not the snapshot
+        # alone, is what makes this safe: the harness loops a four-fixture set,
+        # so two turns genuinely can carry byte-identical audio, and a stale
+        # result would otherwise be indistinguishable from a fresh one.
+        self._spec_epoch += 1
+        self._spec_started = False
+        self._spec_result = None
+        self._spec_task = None
+
+    def _maybe_start_speculative_stt(self) -> None:
+        """Transcribe the audio-so-far while the pause is still being measured.
+
+        This does NOT close the turn early and does NOT change the delay: the
+        caller is still given the full silence window. It only moves the STT
+        pass inside that window, so the ~200 ms it costs is no longer added to
+        the caller's wait.
+
+        Skipped when there is no running loop (a synchronous caller, e.g. a
+        unit test driving feed_audio directly), because there is nothing to
+        schedule the transcription onto.
+        """
+        if self._spec_advance_ms <= 0 or self._spec_started:
+            return
+        trigger = self._silence_threshold - round(self._spec_advance_ms / 20)
+        if self._silence_count < trigger:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._spec_started = True
+        snapshot = b"".join(self._audio_buffer)
+        epoch = self._spec_epoch
+        self._spec_task = loop.create_task(self._speculative_stt(snapshot, epoch))
+
+    async def _speculative_stt(self, snapshot: bytes, epoch: int) -> None:
+        """Background transcription of a snapshot. Never raises into the caller."""
+        try:
+            audio = self._prepare_audio(snapshot)
+            self._spec_result = (epoch, snapshot) + await self._transcribe(audio)
+        except Exception:                       # noqa: BLE001
+            # A failed speculation is not an error -- the real pass still runs.
+            self.log_event("SPECULATIVE_STT_FAILED")
+            self._spec_result = None
+
+    def _consume_speculative(self) -> tuple[str, bool] | None:
+        """The speculative transcript, if it exists and is still this audio."""
+        res = self._spec_result
+        if res is None:
+            return None
+        epoch, snapshot, text, low_conf = res
+        if epoch != self._spec_epoch:
+            return None                          # a later utterance; stale
+        if snapshot != b"".join(self._audio_buffer):
+            return None                          # caller resumed; different audio
+        self.log_event("STT_FROM_SPECULATIVE", chars=len(text or ""))
+        return text, low_conf
+
+    def _prepare_audio(self, ulaw: bytes) -> np.ndarray:
+        """µ-law -> resampled 16 kHz int16, for Whisper.
+
+        Extracted so the speculative and the real pass preprocess IDENTICALLY.
+        Two copies of this would be two chances to transcribe the same audio
+        two different ways, and the bug would show up as an intermittent
+        transcript difference on a call.
+        """
+        pcm_bytes = ulaw_to_pcm(ulaw)
+        audio_8k = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        try:
+            from scipy.signal import resample
+
+            audio_16k = resample(audio_8k, int(len(audio_8k) * 16000 / 8000))
+        except Exception:
+            audio_16k = np.repeat(audio_8k, 2)
+        return (audio_16k * 32767).clip(-32768, 32767).astype(np.int16)
 
     def _noise_reply(self) -> str:
         """
@@ -358,9 +677,15 @@ class VoiceCallSession:
             self._audio_buffer.append(ulaw_chunk)
             self._silence_count = 0
             self._total_frames += 1
+            # The caller resumed: whatever was speculated is now the wrong
+            # audio, and a later pause in this same utterance may speculate
+            # again on the longer buffer.
+            self._spec_started = False
+            self._spec_result = None
         elif self._audio_buffer:
             # Silence AFTER speech — count trailing silence
             self._silence_count += 1
+            self._maybe_start_speculative_stt()
 
         # Trigger on trailing silence OR max utterance length
         if self._audio_buffer and (
@@ -368,6 +693,28 @@ class VoiceCallSession:
             or self._total_frames >= self._max_utterance
         ):
             self.log_event("USER_SPEECH_STOPPED", frames=self._total_frames)
+            # US-001: open a trace for this turn. vad_end is the zero point for
+            # processing_ms. The 600 ms the caller waited before this instant is
+            # endpointing_ms, which BRD-02 measures separately — do not conflate
+            # the two clocks. Guarded: tracing never breaks a call.
+            try:
+                from app.perf_trace import new_trace
+
+                self._trace = new_trace(self.call_id, self._turn)
+                self._trace.mark("vad_end")
+                self._trace.note(
+                    vad_frames=self._total_frames,
+                    endpoint_ms=self._silence_threshold * 20,
+                    # US-017 T-10: every caller turn is stamped with its work
+                    # class, so the priority rule ("zero background starts
+                    # during a voice turn") is countable from the records after
+                    # the fact rather than only observable live. A rule that
+                    # cannot be counted from the record is a rule that can only
+                    # be asserted.
+                    work_class="voice",
+                )
+            except Exception:
+                self._trace = None
             return True
         return False
 
@@ -398,33 +745,37 @@ class VoiceCallSession:
             self.reset_utterance()
             return [], "", False
 
-        # ── Step 1: Decode µ-law → PCM WAV bytes ─────────────────
+        # ── Step 1: Decode µ-law → 16 kHz mono for Whisper ────────
         combined_ulaw = b"".join(self._audio_buffer)
-        pcm_bytes = ulaw_to_pcm(combined_ulaw)
-
-        # Convert to 16 kHz mono for Whisper (resample from 8 kHz)
-        audio_8k = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-
-        # Resample 8k → 16k using scipy
-        try:
-            from scipy.signal import resample
-
-            target_len = int(len(audio_8k) * 16000 / 8000)
-            audio_16k = resample(audio_8k, target_len)
-        except Exception:
-            # Fallback: simple repeat
-            audio_16k = np.repeat(audio_8k, 2)
-
-        audio_16k_int16 = (audio_16k * 32767).clip(-32768, 32767).astype(np.int16)
+        audio_16k_int16 = self._prepare_audio(combined_ulaw)
 
         logger.info(
             f"VoiceCall: processing utterance ({len(self._audio_buffer)} chunks, "
-            f"{len(audio_8k)/8000:.1f}s at 8 kHz)"
+            f"{len(audio_16k_int16)/16000:.1f}s at 16 kHz)"
         )
 
         # ── Step 2: Whisper STT ───────────────────────────────────
-        self.log_event("STT_STARTED")
-        transcript, low_conf = await self._transcribe(audio_16k_int16)
+        # Prefer the pass that already ran during the endpointing window. It is
+        # the same audio and the same preprocessing, so the transcript is the
+        # same one -- but it cost the caller nothing.
+        spec = self._consume_speculative()
+        if spec is not None:
+            transcript, low_conf = spec
+            # STT DID happen for this turn -- it happened during the endpointing
+            # window, which is the whole point. The stage must still be closed
+            # here, or the record loses it: `stt_done` is marked inside
+            # `_transcribe`, which this path never calls, and a 200-turn run
+            # then reports `stages_seen: 6` with no STT stage at all. The trace's
+            # only job is to say where the time went, and a stage that silently
+            # vanishes from it is worse than a slow one.
+            if self._trace is not None:
+                self._trace.mark("stt_done")
+                self._trace.note(stt_chars=len(transcript),
+                                 stt_low_conf=bool(low_conf),
+                                 stt_from_speculative=True)
+        else:
+            self.log_event("STT_STARTED")
+            transcript, low_conf = await self._transcribe(audio_16k_int16)
         self.log_event("STT_FINAL", chars=len(transcript), low_conf=low_conf)
         self.reset_utterance()
 
@@ -439,7 +790,7 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
         logger.info(f"VoiceCall: transcript = \"{transcript[:120]}\"")
 
@@ -459,7 +810,7 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
         # Real speech decoded — reset the noise streak.
         self._noise_streak = 0
@@ -474,15 +825,23 @@ class VoiceCallSession:
             tts_pcm = await self._synthesise(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, True
-            return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, True
+            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, True
 
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         self.log_event("LLM_STARTED")
         answer = await self._query_llm(transcript)
         self.log_event("LLM_COMPLETED", chars=len(answer or ""))
         if not answer:
-            # Return transcript even if LLM fails — still useful for logging
+            # US-016 AC-5: the engine returned nothing. This used to return []
+            # -- silence on a live line. The caller now hears the fixed
+            # response, played from the asset set, so the turn ends in a
+            # sentence rather than in nothing. The record names it as a
+            # degraded turn, which is a different outcome from served, failed
+            # and refused and is never collapsed into any of them.
             dialogue = f"Caller: {transcript}\nAssistant: (no response)"
+            chunks = self._speak_fixed_response(reason="empty generation")
+            if chunks:
+                return chunks, dialogue, False
             return [], dialogue, False
 
         # ── Step 3b: D1 output boundary — strip leaked reasoning/meta
@@ -504,10 +863,17 @@ class VoiceCallSession:
         # ── Step 4: Kokoro TTS → PCM ──────────────────────────────
         tts_pcm = await self._synthesise(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
+            # US-016 AC-5, second branch: the synthesiser is the thing that
+            # failed. The fixed response needs no synthesiser, so the caller
+            # still hears a sentence rather than the tail of a dead turn.
+            dialogue = f"Caller: {transcript}\nAssistant: {answer}"
+            chunks = self._speak_fixed_response(reason="synthesis failed")
+            if chunks:
+                return chunks, dialogue, False
             return [], dialogue, False  # Transcript saved even if TTS fails
 
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
-        return self._pcm_to_ulaw_chunks(tts_pcm), dialogue, False
+        return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
 
     # ── Domain dictionary for phone audio corrections ──────────────
 
@@ -545,7 +911,11 @@ class VoiceCallSession:
         no_speech_prob exceeds STT_MAX_NO_SPEECH_PROB.
         """
         try:
-            model = _get_stt_model()
+            # `to_thread`, because this LOADS faster-whisper when cold -- the
+            # boot warmup normally makes it a cache hit, but a warmup that
+            # failed (or a model that was evicted) would otherwise load it on
+            # the event loop, mid-call, for every live call at once.
+            model = await asyncio.to_thread(_get_stt_model)
             # Convert int16 → float32 for faster-whisper
             audio_float = audio_16k_int16.astype(np.float32) / 32768.0
 
@@ -590,6 +960,9 @@ class VoiceCallSession:
                 f"min_logprob={f'{min_logprob:.2f}' if min_logprob is not None else 'n/a'}, "
                 f"low_conf={low_conf})"
             )
+            if self._trace is not None:
+                self._trace.mark("stt_done")
+                self._trace.note(stt_chars=len(transcript), stt_low_conf=bool(low_conf))
             return transcript, low_conf
         except Exception:
             logger.exception("VoiceCall: STT failed")
@@ -646,45 +1019,164 @@ class VoiceCallSession:
             else:
                 prompt = f"This is an {self.direction} call.\n{question}"
 
-            return await asyncio.to_thread(run_rag_query_sync, prompt) or ""
+            # US-001: llm_sent brackets retrieval + prefill + generation. The
+            # split between those three comes from the engine counters captured
+            # in app/llm_backend.py and the retrieval_done mark from app/rag.py.
+            # llm_first_token is deliberately NOT marked here: with a
+            # non-streaming call there is no first-token event, and marking this
+            # instant would fabricate a TTFT (TRD-21).
+            if self._trace is not None:
+                self._trace.mark("llm_sent")
+            answer = await asyncio.to_thread(run_rag_query_sync, prompt) or ""
+            if self._trace is not None:
+                self._trace.mark("llm_done")
+                self._trace.note(answer_chars=len(answer))
+            return answer
         except Exception:
             logger.exception("VoiceCall: LLM query failed")
             return ""
 
-    # Simple TTS cache — keyed by text hash, avoids re-synthesis of common phrases
-    _tts_cache: dict[int, tuple[np.ndarray, int]] = {}
+    #: TTS cache (DG-06 / US-012).
+    #:
+    #: These are CLASS attributes, so the cache is process-wide: every concurrent
+    #: caller shares one dict. That is the DG-06 "use-as-is" decision, and it is
+    #: conditional on the N=2 isolation test -- not on the argument that content
+    #: keys make sharing obviously safe.
+    #:
+    #: The key is (agent text, voice, speed) and nothing else -- never caller
+    #: speech, caller identity or transcript content (TAC-4). Voice and speed
+    #: joined the key when they became configurable in this same change: with
+    #: them outside it, editing KOKORO_VOICE or KOKORO_SPEED would have kept
+    #: serving audio rendered in the OLD voice from cache.
+    #:
+    #: The value carries the owning call_id. It is not part of the key and never
+    #: affects a lookup; it exists so that "caller B received audio synthesised
+    #: for caller A" is measurable rather than arguable (MOD-04 A.5.2).
+    _shared_tts_cache: dict[tuple, tuple[np.ndarray, int, str]] = {}
     _tts_cache_max = 50
 
     async def _synthesise(self, text: str) -> np.ndarray | None:
         """Run Kokoro TTS in a thread, return float32 PCM array. Cached for speed."""
         self.log_event("TTS_STARTED", chars=len(text))
         try:
-            kokoro = _get_tts_engine()
             tts_text = text[:500] if len(text) > 500 else text
 
+            # US-012: shared (DG-06 default) or per-call (the pre-decided
+            # fallback). Chosen by configuration only -- AC-4 requires the
+            # revert to be a setting, never a code change.
+            voice, speed = _tts_voice(), _tts_speed()
+            cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
+                     else VoiceCallSession._shared_tts_cache)
+            cache_key = (tts_text, voice, speed)
+
             # Check cache
-            cache_key = hash(tts_text)
-            if cache_key in self._tts_cache:
-                cached_audio, cached_sr = self._tts_cache[cache_key]
+            if cache_key in cache:
+                cached_audio, cached_sr, owner = cache[cache_key]
+                # A "cross-call hit" is caller B being served audio that was
+                # synthesised during caller A's session (MOD-04 A.5.2). It is
+                # recorded, not prevented -- measuring it is the whole point of
+                # US-012, and AC-4 pre-decides what a non-zero count means.
+                cross_call = bool(owner) and owner != self.call_id
                 logger.debug(f"TTS cache HIT: {tts_text[:60]}...")
-                self.log_event("TTS_COMPLETED", cached=1)
+                self.log_event("TTS_COMPLETED", cached=1, cross_call=int(cross_call))
+                # US-001: mark on EVERY return path. This one was missed on the
+                # first pass — the cached path returned before the mark, so a
+                # cache hit produced a trace with tts_done absent and the
+                # llm_done->first_audio segment unaccounted for. Found by
+                # running a live call, not by inspection.
+                if self._trace is not None:
+                    self._trace.mark("tts_done")
+                    self._trace.note(
+                        tts_cache_hit=True,
+                        tts_cache_scope=TTS_CACHE_SCOPE,
+                        tts_cache_cross_call=cross_call,
+                        tts_cache_owner=owner,
+                        tts_cache_key_sha=_cache_key_sha(cache_key),
+                    )
+                # Copy discipline: the caller gets its own buffer, so a later
+                # mutation of one caller's audio cannot reach the cache or any
+                # other caller (TAC-2).
                 return cached_audio.copy()
 
+            # Only a miss needs the model. Loading it inside the hit path meant a
+            # cache hit still touched the engine, which kept the isolation tests
+            # from running without a GPU.
+            #
+            # `to_thread` because this LOADS the Kokoro ONNX model when cold --
+            # and it was never pre-warmed at boot, so the first synthesis of the
+            # first call did exactly that, on the event loop, freezing every
+            # other live call for the duration. The boot warmup now loads it, so
+            # this is normally a cache hit; the thread hop is what makes a cold
+            # path survivable rather than fatal.
+            kokoro = await asyncio.to_thread(_get_tts_engine)
             audio, sr = await asyncio.to_thread(
-                kokoro.create, tts_text, voice="af_heart", speed=1.0
+                kokoro.create, tts_text, voice=voice, speed=speed
             )
-            # Store in cache
-            if len(self._tts_cache) >= self._tts_cache_max:
-                # Evict oldest
-                oldest = next(iter(self._tts_cache))
-                del self._tts_cache[oldest]
-            self._tts_cache[cache_key] = (audio.copy(), sr)
+            # Store in cache. Bound first, FIFO by insertion order (TAC-3):
+            # re-inserting an existing key keeps its original position, which is
+            # what makes the eviction order predictable.
+            if cache_key not in cache and len(cache) >= self._tts_cache_max:
+                oldest = next(iter(cache))
+                del cache[oldest]
+            cache[cache_key] = (audio.copy(), sr, self.call_id)
 
             logger.info(f"VoiceCall: TTS generated ({len(audio)/sr:.1f}s at {sr} Hz)")
+            if self._trace is not None:
+                self._trace.mark("tts_done")
+                self._trace.note(
+                    tts_cache_hit=False,
+                    tts_cache_scope=TTS_CACHE_SCOPE,
+                    tts_cache_cross_call=False,
+                    # The key is recorded on the MISS path too -- this line is
+                    # what establishes a key's owner. Without it only hits
+                    # carried a key, so nothing could attribute one and the
+                    # isolation analysis had no owner map to compare against.
+                    tts_cache_key_sha=_cache_key_sha(cache_key),
+                    audio_s=round(len(audio) / sr, 2),
+                )
+            # The cache holds its own copy, so the buffer handed back here is
+            # the caller's alone.
             return audio
         except Exception:
             logger.exception("VoiceCall: TTS failed")
             return None
+
+    def _speak_fixed_response(self, reason: str) -> list[bytes]:
+        """Return the pre-synthesised fixed response as µ-law chunks.
+
+        US-016 / BRD-13: a lost inference engine must end in a deterministic
+        fixed response rather than silence. "Deterministic" is literal -- the
+        bytes come off disk, so the same failure on two turns in two calls
+        produces byte-identical audio, and no model generated any part of it.
+
+        Nothing is synthesised here. That is why this still works when the
+        synthesiser is down at the same time as the engine, which is the case
+        AC-5 calls out explicitly.
+
+        Returns [] when no asset applies, and the caller then terminates the
+        turn cleanly rather than hanging in silence.
+        """
+        from app.admission import FIXED_RESPONSE_ASSET, REGISTRY
+
+        chunks = load_call_asset_ulaw(FIXED_RESPONSE_ASSET)
+        if not chunks:
+            logger.error(
+                "VoiceCall: fixed response unavailable (%s) and no asset to play. "
+                "Build the call assets: .venv/Scripts/python.exe "
+                "scripts/build_call_assets.py", reason)
+            # No asset applies, so this turn is a genuine failure rather than a
+            # degraded one. The caller's turn terminates cleanly and the record
+            # says which of the two it was.
+            REGISTRY.note_failed()
+            return []
+        REGISTRY.note_asset_played(FIXED_RESPONSE_ASSET, call_sid=self.call_id)
+        self.log_event("FIXED_RESPONSE", reason=reason, chunks=len(chunks))
+        if self._trace is not None:
+            # A degraded turn is its own outcome. It is not a failure: the
+            # caller heard a sentence and the call continued.
+            self._trace.note(outcome="degraded", degraded_reason=reason,
+                             fixed_response_played=True)
+        return chunks
 
     def _pcm_to_ulaw_chunks(self, audio: np.ndarray) -> list[bytes]:
         """

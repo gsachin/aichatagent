@@ -14,7 +14,12 @@ Contract (verified against the service's streamable-HTTP endpoint):
 
 Env (read lazily per call so tests can monkeypatch):
   RAG_MCP_URL       default http://127.0.0.1:8010/mcp
-  RAG_MCP_TIMEOUT   read timeout, default 2.5s (connect fixed at 1.0s)
+  RAG_MCP_TIMEOUT   read timeout, default 6.0s (connect fixed at 1.0s).
+                    Raised from 2.5s: under load ERC's embedding call queues
+                    behind Ollama generation, so a 2.5s read timeout fired on
+                    a service that answers in milliseconds -- and the fallback
+                    then paid for a SECOND embedding. Waiting is strictly
+                    cheaper than timing out and re-retrieving locally.
   RAG_MCP_COOLDOWN  circuit-breaker cooldown seconds, default 30
   USE_MCP_RAG       auto | on | off (dispatch lives in app/rag.py)
 """
@@ -32,13 +37,30 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
-def _timeout() -> httpx.Timeout:
-    return httpx.Timeout(
-        connect=1.0,
-        read=float(_env("RAG_MCP_TIMEOUT", "2.5")),
-        write=2.5,
-        pool=2.5,
-    )
+def _timeout(probe: bool = False) -> httpx.Timeout:
+    """Request budget. A half-open probe gets a fraction of the serving budget.
+
+    US-013 AC-2: the point of a probe is to learn cheaply whether the service is
+    back. Paying the full read timeout to rediscover "still down", once per
+    cooldown window for the length of an outage, is the cost this removes. The
+    floor keeps a probe from being so short that a merely-busy service reads as
+    dead.
+    """
+    read = float(_env("RAG_MCP_TIMEOUT", "6.0"))
+    if probe:
+        fraction = float(_env("RAG_MCP_PROBE_FRACTION", "0.25"))
+        read = max(read * fraction, 0.5)
+    else:
+        # US-013 AC-1: one failure must cost one budget, not two. The caller
+        # pays the primary read timeout AND then a full local re-retrieval, so
+        # the primary attempt has to leave room for the fallback inside the
+        # retrieval budget. The default budget (8 s) minus the reserve (1.5 s)
+        # is 6.5 s and does not bind on the tuned 6 s timeout -- it binds only
+        # when someone sets a tighter budget deliberately.
+        budget = float(_env("RAG_RETRIEVAL_BUDGET", "8.0"))
+        reserve = float(_env("RAG_FALLBACK_RESERVE", "1.5"))
+        read = max(min(read, budget - reserve), 0.5)
+    return httpx.Timeout(connect=1.0, read=read, write=2.5, pool=2.5)
 
 
 def _headers(session_id: str | None = None) -> dict[str, str]:
@@ -69,8 +91,39 @@ def _parse(r: httpx.Response) -> dict | None:
 
 # ── HTTP choke point (single monkeypatch target for tests) ─────────────────
 
+#: US-008 follow-on. The original built a NEW httpx.Client per request, so every
+#: `tools/call` paid a fresh TCP connection (plus a session re-check) against a
+#: 2.5 s read budget. Under two-caller load that is enough to cross the timeout
+#: on a service whose own handler answers in milliseconds — and the cost is paid
+#: TWICE, because the timeout is followed by a full local re-retrieval.
+#:
+#: REMOVED 2026-09-19: the shared-client helper and its module global.
+#:
+#: `US-008` introduced a module-level `httpx.Client` reused across requests to
+#: stop paying a fresh TCP connection per retrieval. It was **reverted** pending
+#: load evidence, and the revert left the helper behind: `_get_client()` and
+#: `_client` survived with **no call site anywhere in `app/`** — `_post` builds a
+#: per-request client instead, and says why in its own comment below.
+#:
+#: Dead code is not harmless here. `US-011`'s whole subject is configuration and
+#: code that reads as live and is not, and this was the same shape one layer down:
+#: a reader finding `_get_client` would reasonably conclude the pool is shared,
+#: which is exactly the claim the revert withdrew. Removed rather than left with a
+#: comment, because the file already carries the revert note where it matters.
+#:
+#: If `US-008` is re-adopted, restore the helper from `git show <rev>:app/rag_mcp.py`.
+
 def _post(payload: dict, session_id: str | None = None) -> httpx.Response:
-    with httpx.Client(timeout=_timeout()) as client:
+    # REVERTED 2026-09-19 for a controlled test. The module-level client above
+    # was introduced to stop paying a fresh TCP connection per request, but it
+    # was never confirmed under load — and it shares one connection pool across
+    # every worker thread. With the read timeout raised to 6 s, a stalled call
+    # now holds a pool slot six times longer than before, and the pool has
+    # max_connections=8. The long-run failures (both sessions dropped at 28
+    # samples on a keepalive ping timeout) postdate both changes, so this
+    # restores the per-request client while KEEPING the 6 s timeout — isolating
+    # one variable at a time.
+    with httpx.Client(timeout=_timeout(probe=_probe_in_flight())) as client:
         return client.post(
             _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
             json=payload,
@@ -269,25 +322,133 @@ class MCPRetriever(BaseRetriever):
 
 # ── Circuit breaker ────────────────────────────────────────────────────────
 
-_breaker: dict = {"failed_at": None, "last_error": None}
+#: US-013 / BRD-14. Three states, not two.
+#:
+#: The original breaker had only closed and open, so once the cooldown elapsed
+#: the NEXT caller sent a full-timeout request to a service that was probably
+#: still dead -- paying the maximum to learn nothing, once per window, for the
+#: whole outage. `half_open` replaces that blind retry with one cheap probe.
+#:
+#:   closed     normal serving
+#:   open       a call failed; callers take the local rung until the cooldown
+#:   half_open  cooldown elapsed; exactly ONE caller may probe at a fraction of
+#:              the read timeout, and its result decides the next state
+_breaker: dict = {
+    "failed_at": None,
+    "last_error": None,
+    "probing": False,   # a probe is in flight (single-flight, AC-3)
+    "probe_claimed_at": None,
+    "opens": 0,         # times the breaker opened
+    "probes": 0,        # probes actually issued
+}
 
 
 def _record_failure(error: str) -> None:
+    was_closed = _breaker["failed_at"] is None
     _breaker["failed_at"] = time.monotonic()
     _breaker["last_error"] = error
+    _breaker["probing"] = False
+    _breaker["probe_claimed_at"] = None
+    if was_closed:
+        _breaker["opens"] += 1
 
 
 def _clear_failure() -> None:
     _breaker["failed_at"] = None
     _breaker["last_error"] = None
+    _breaker["probing"] = False
+    _breaker["probe_claimed_at"] = None
+
+
+def breaker_mode() -> str:
+    """`probe` (shipped) or `flat` (the pre-US-013 behaviour).
+
+    US-013's revert is a SETTING, not a code change (`BRD-15`). The first
+    version of the rollback demonstration reconstructed the old two-state logic
+    by hand, which proved the arithmetic of the defect but was my reconstruction
+    rather than the code — a weaker claim than the five stories whose reverts
+    are genuine setting flips. `RAG_BREAKER_MODE=flat` puts the old behaviour
+    back for real.
+
+    Read per call, like the cooldown, so the flip takes effect without an import
+    and a restart.
+
+      probe  closed / open / half_open — one cheap probe per cooldown window
+      flat   closed / open           — an elapsed cooldown serves the primary
+                                       again at the FULL timeout, blind
+    """
+    return "flat" if os.environ.get("RAG_BREAKER_MODE", "probe").strip().lower() == "flat" \
+        else "probe"
+
+
+def breaker_state() -> str:
+    """`closed`, `open` or `half_open` (US-013 AC-2).
+
+    In `flat` mode `half_open` is never returned: the cooldown elapsing reads as
+    `closed`, so the next caller is admitted to the primary at the full timeout.
+    That is precisely the defect US-013 removed, and it is reachable again by
+    configuration rather than by editing code.
+    """
+    if _breaker["failed_at"] is None:
+        return "closed"
+    cooldown = float(_env("RAG_MCP_COOLDOWN", "30"))
+    elapsed = (time.monotonic() - _breaker["failed_at"]) >= cooldown
+    if breaker_mode() == "flat":
+        return "closed" if elapsed else "open"
+    return "half_open" if elapsed else "open"
+
+
+def _probe_in_flight() -> bool:
+    """True only for the request that holds the probe slot.
+
+    `_post` reads this to pick the short budget, so only the probe pays a
+    reduced timeout -- a healthy serving call keeps the full one.
+
+    A slot older than the full serving budget plus a second is treated as
+    abandoned. Without that, one code path returning without recording a
+    verdict would hold the slot forever and `auto` mode would stop probing
+    permanently -- a worse failure than the one this story fixes.
+    """
+    if not _breaker["probing"]:
+        return False
+    claimed = _breaker.get("probe_claimed_at")
+    if claimed is None:
+        return True
+    budget = float(_env("RAG_MCP_TIMEOUT", "6.0")) + 1.0
+    if (time.monotonic() - claimed) > budget:
+        _breaker["probing"] = False
+        _breaker["probe_claimed_at"] = None
+        return False
+    return True
+
+
+def claim_probe() -> bool:
+    """Claim the single half-open probe slot, or refuse.
+
+    AC-3: the probe is not duplicated per caller. Two callers meeting the same
+    recovered-or-not service produce one probe and one local-rung answer, not
+    two probes competing for the same dead service.
+    """
+    # There is no probe in `flat` mode -- that is what the mode removes.
+    if breaker_mode() != "probe":
+        return False
+    if breaker_state() != "half_open" or _probe_in_flight():
+        return False
+    _breaker["probing"] = True
+    _breaker["probe_claimed_at"] = time.monotonic()
+    _breaker["probes"] += 1
+    return True
+
+
+def release_probe() -> None:
+    """Give the slot back without changing the breaker's verdict."""
+    _breaker["probing"] = False
+    _breaker["probe_claimed_at"] = None
 
 
 def mcp_available() -> bool:
-    """True unless a recent failure put the breaker into cooldown."""
-    if _breaker["failed_at"] is None:
-        return True
-    cooldown = float(_env("RAG_MCP_COOLDOWN", "30"))
-    return (time.monotonic() - _breaker["failed_at"]) >= cooldown
+    """True when a caller may attempt the primary (closed, or probe-eligible)."""
+    return breaker_state() != "open"
 
 
 def mcp_rag_status() -> dict:
@@ -297,5 +458,10 @@ def mcp_rag_status() -> dict:
         "url": _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
         "session_ok": _state["session_id"] is not None,
         "last_error": _breaker["last_error"],
-        "cooldown_active": not mcp_available(),
+        "cooldown_active": breaker_state() == "open",
+        "breaker_state": breaker_state(),
+        "breaker_mode": breaker_mode(),
+        "breaker_opens": _breaker["opens"],
+        "breaker_probes": _breaker["probes"],
+        "probe_read_timeout_s": round(_timeout(probe=True).read, 3),
     }
