@@ -132,7 +132,7 @@ flowchart TB
   - `MOD-02` / `app/rag.py` — the dispatcher composes the primary attempt and the fallback inside **one** budget instead of charging them in sequence; the ladder and its order are unchanged (`MOD-02` B.2: deadline → keyword-only → breaker open, local serves).
   - `MOD-02` / `app/rag_legacy.py` — the fallback path is cheap enough to be reached inside a shared budget (`US-008` reuses the client rather than rebuilding it per call).
   - `MOD-07` — the bound and the probe interval are configuration with documented defaults, and their effective values are reported (`US-011`), so an outage's numbers are attributable.
-  - `MOD-06` — the record carries the rung that served, the breaker state, and the wall time charged to a dead dependency, so the outage cost is measurable rather than inferred.
+  - `MOD-06` — **claim NOT implemented as written (found 2026-09-19).** This says the record carries the rung that served, the breaker state, and the wall time charged to a dead dependency. It does not: `retrieval_rung`, `retrieval_breaker` and `retrieval_dead_dependency_ms` appear nowhere in `app/` — zero matches across `perf_trace.py`, `voice_handler.py` and `rag.py`. What exists is the breaker's *aggregate* counters via `mcp_rag_status()` (`breaker_state`, `breaker_opens`, `breaker_probes`), which are process-lifetime totals and cannot attribute cost to a turn. So the outage cost is **inferred, not measured**, which is the opposite of what this line claims and of what `BRD-01` requires. The DoD box below says as much in its own words. Closing it means adding the three fields to the trace, which is a change to the record schema and is not done here.
 - **Interaction summary:**
   1. A turn issues retrieval; if the circuit is closed the primary attempt runs under the operation's bound.
   2. The primary succeeds: chunks are fused, formatted and returned — the healthy path is unchanged.
@@ -229,7 +229,7 @@ async def retrieve_context(question: str) -> RetrievalResult: ...
 | T-8 | unit | The embedding hop failing degrades to keyword-only under the same bound — not exempt | Dependency failure |
 | T-9 | unit | A malformed response takes the degraded rung and never returns an empty context | Invalid input |
 | T-10 | integration | Primary killed: a turn completes on the local rung and its wall time stays inside one budget, not two sequential costs (TAC-1) | Timeout |
-| T-11 | integration | The record shows the rung, the breaker state and the wall time charged to the dead dependency (TAC-4) | Partial data |
+| T-11 | integration | ~~The record shows the rung, the breaker state and the wall time charged to the dead dependency (TAC-4)~~ | **GAP — no test, and nothing to test.** The fields do not exist in the record (`grep` for `retrieval_rung`/`retrieval_breaker`/`retrieval_dead_dependency_ms` across `app/`: zero matches). The scenario cannot be satisfied without a schema change |
 | T-12 | integration | Service restarted: the probe closes the circuit and a later turn takes the primary rung with no intervention | Recovery |
 | T-13 | integration | Two callers in the same outage window: both on the local rung, one probe, neither delayed by the other's failure (TAC-7) | Concurrent operation |
 | T-14 | integration | All rungs unavailable: the turn ends in a spoken outcome and the other caller's turn is unaffected (TAC-8) | Dependency failure |
