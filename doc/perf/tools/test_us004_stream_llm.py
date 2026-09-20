@@ -80,6 +80,25 @@ check("AC-2   a price is never cut (digit before the boundary)",
       whole is not None and "$1,700. And more follows." in whole.text,
       str(whole))
 
+# REGRESSION (2026-09-20, run T043413Z): a short first clause whose boundary
+# was re-created on the merge made feed() re-match the SAME boundary forever,
+# freezing the event loop (py-spy: MainThread inside feed()). This is the
+# exact shape that fired it.
+c3 = ClauseCutter()
+out = c3.feed("Sure. ")
+out += c3.feed("The fee is $14,500 per year.")
+final = c3.flush()
+check("AC-2   a short leading clause merges AND the cutter terminates",
+      len(out) == 0 and final is not None
+      and final.text == "Sure.The fee is $14,500 per year.",
+      f"out={out} final={final}")
+# The merge keeps the period (the spoken pause); the dropped whitespace is
+# what stops the boundary from re-matching -- and the sentence splitter uses
+# the same boundary rule, so the merged clause synthesises as one chunk.
+check("AC-2   the merged clause is one sentence for the TTS splitter",
+      __import__("app.voice_handler", fromlist=["_split_sentences"])
+      ._split_sentences(final.text) == [final.text])
+
 # ── AC-1 / generate_stream: deltas then exactly one EngineCounters ─────────
 FAKE_CHUNKS = [
     {"message": {"content": "Tuition is "}},

@@ -406,7 +406,9 @@ class ClauseCutter:
     def feed(self, delta: str) -> list[Clause]:
         self._buf += delta
         out: list[Clause] = []
-        while True:
+        guard = 0
+        while guard < 10_000:
+            guard += 1
             m = self._BOUNDARY.search(self._buf)
             if not m:
                 break
@@ -415,9 +417,21 @@ class ClauseCutter:
             if len(text) >= self.MIN_CLAUSE_CHARS:
                 out.append(Clause(text=text, is_final=False))
             else:
-                # Too short to speak alone: keep it at the head of the buffer
-                # so it is spoken as part of the next clause.
-                self._buf = text + " " + self._buf
+                # Too short to speak alone: keep it for the next clause.
+                # CRITICAL: re-join WITHOUT re-adding the whitespace the
+                # boundary consumed -- re-adding it re-creates the same match,
+                # and `search` then finds the SAME boundary forever. That
+                # infinite loop froze the event loop live (2026-09-20, run
+                # T043413Z: a short first clause like "Sure. " hung the
+                # whole process; py-spy caught MainThread inside feed()).
+                # Without the space the boundary regex cannot match there
+                # again, and the fragment rides into the next clause.
+                self._buf = text + self._buf
+        if guard >= 10_000:
+            # Never reached with the merge above; the guard turns a future
+            # non-progress bug into a loud defect instead of a hung loop.
+            logger.error("ClauseCutter: guard tripped; dropping buffer")
+            self._buf = ""
         return out
 
     def flush(self) -> Clause | None:
