@@ -97,21 +97,21 @@ def _parse(r: httpx.Response) -> dict | None:
 #: on a service whose own handler answers in milliseconds — and the cost is paid
 #: TWICE, because the timeout is followed by a full local re-retrieval.
 #:
-#: One client, reused. httpx.Client is thread-safe for requests, and _post runs
-#: on worker threads, so a module-level client is correct here.
-_client: "httpx.Client | None" = None
-
-
-def _get_client() -> httpx.Client:
-    """The shared client. Created once, with the configured timeout."""
-    global _client
-    if _client is None:
-        _client = httpx.Client(
-            timeout=_timeout(),
-            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
-        )
-    return _client
-
+#: REMOVED 2026-09-19: the shared-client helper and its module global.
+#:
+#: `US-008` introduced a module-level `httpx.Client` reused across requests to
+#: stop paying a fresh TCP connection per retrieval. It was **reverted** pending
+#: load evidence, and the revert left the helper behind: `_get_client()` and
+#: `_client` survived with **no call site anywhere in `app/`** — `_post` builds a
+#: per-request client instead, and says why in its own comment below.
+#:
+#: Dead code is not harmless here. `US-011`'s whole subject is configuration and
+#: code that reads as live and is not, and this was the same shape one layer down:
+#: a reader finding `_get_client` would reasonably conclude the pool is shared,
+#: which is exactly the claim the revert withdrew. Removed rather than left with a
+#: comment, because the file already carries the revert note where it matters.
+#:
+#: If `US-008` is re-adopted, restore the helper from `git show <rev>:app/rag_mcp.py`.
 
 def _post(payload: dict, session_id: str | None = None) -> httpx.Response:
     # REVERTED 2026-09-19 for a controlled test. The module-level client above

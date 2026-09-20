@@ -68,7 +68,20 @@ STAGES = (
     "stt_done",
     "llm_sent",
     "retrieval_done",
-    "llm_first_token",
+    # "llm_first_token" REMOVED 2026-09-19 -- declared here and emitted by
+    # NOTHING, so every full turn reported `stages_seen: 7` against
+    # `stages_expected: 8`, measured over 200 consecutive turns.
+    #
+    # That is worse than a missing mark. An absent mark is a fact about one turn;
+    # a declared-but-unemittable stage makes the count permanently short on EVERY
+    # turn, so a consumer cannot tell "this feature has not shipped" from "a stage
+    # silently failed" -- and the count that exists precisely to make absence
+    # visible becomes noise. `test_us001_tracer.py:102` asserts the RECORD lacks
+    # the key, which is correct for a non-streaming engine, while this tuple
+    # counted it as expected. The two disagreed and the tuple was wrong.
+    #
+    # US-004 (streaming) is where it comes back, WITH an emitter. Re-add it then,
+    # not before: this tuple is a claim about what a turn can produce.
     "llm_done",
     "tts_done",
     "first_audio_sent",
