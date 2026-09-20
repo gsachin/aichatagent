@@ -26,8 +26,11 @@ import json
 import logging
 import os
 import platform as _platform
+import re
 import sys
 import urllib.request
+from dataclasses import dataclass
+from typing import Any, AsyncIterator
 
 # Bypass AppLocker-style DLL blocks — same class of issue as hf_xet.dll
 os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "0")
@@ -50,6 +53,13 @@ DEFAULT_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 OLLAMA_NUM_CTX = DEFAULT_NUM_CTX  # backward-compat alias
 OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE", "")  # "" = ollama default
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+
+#: US-004 (streaming LLM, PO build-approved 2026-09-19): the generation is
+#: consumed as token deltas and cut into clauses, so TTS can start on the
+#: first clause while the model still decodes. Behind a flag; the batch path
+#: (`_chat_ollama` non-streamed) is retained unchanged as the BRD-15 revert.
+LLM_STREAM = os.environ.get("LLM_STREAM", "0").strip().lower() in (
+    "1", "true", "yes", "on")
 
 # ── MLX config (macOS Apple Silicon) ───────────────────────────────────
 
@@ -284,6 +294,26 @@ def chat(
 
 # ── Model discovery ────────────────────────────────────────────────────
 
+#: US-004 / TRD-10: /api/tags is resolved ONCE per process. The round trip
+#: ran per utterance before (pick_model on every generation); the tag list
+#: cannot change under a running stack, and a failed read retries on the
+#: next call rather than pinning an empty list forever.
+_tags_cache: list[str] | None = None
+
+
+def _cached_tags() -> list[str]:
+    global _tags_cache
+    if _tags_cache is None:
+        try:
+            req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                _tags_cache = [m.get("name", "")
+                               for m in json.loads(resp.read()).get("models", [])]
+        except Exception:
+            return []
+    return _tags_cache
+
+
 def pick_model(preferred=None) -> str:
     """
     Best available model for the active backend.
@@ -296,12 +326,8 @@ def pick_model(preferred=None) -> str:
         return MLX_MODEL
 
     prefs = list(preferred or [])
-    try:
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-        models = [m.get("name", "") for m in data.get("models", [])]
-
+    models = _cached_tags()
+    if models:
         for preference in prefs:
             if preference in models:
                 return preference
@@ -309,8 +335,6 @@ def pick_model(preferred=None) -> str:
         qwen_models = [m for m in models if "qwen" in m.lower()]
         if qwen_models:
             return qwen_models[0]
-    except Exception:
-        logger.debug("Model discovery failed — using default", exc_info=True)
 
     return OLLAMA_MODEL
 
@@ -329,6 +353,172 @@ def list_models() -> list[str]:
         return [m.get("name", "") for m in data.get("models", [])]
     except Exception:
         return []
+
+
+# ── US-004: streamed generation, clause cutting, per-process model cache ──
+
+
+@dataclass(frozen=True)
+class EngineCounters:
+    """The engine's own account of a generation (UC-07 E1: absent = None,
+    never a fabricated 0)."""
+
+    prompt_eval_count: int | None
+    eval_count: int | None
+    prompt_eval_duration_ns: int | None
+    eval_duration_ns: int | None
+
+
+@dataclass(frozen=True)
+class Clause:
+    """One complete, speakable piece of the answer."""
+
+    text: str
+    is_final: bool
+
+
+class GenerationFailed(Exception):
+    """The stream produced nothing usable; MOD-01 speaks the fallback."""
+
+
+class GenerationCancelled(Exception):
+    """The caller hung up (or the handler died) mid-generation."""
+
+
+class ClauseCutter:
+    """Accumulates token deltas and emits complete clauses.
+
+    A clause ends at sentence punctuation followed by whitespace and a
+    capital, and never right after a digit -- the SAME boundary rule
+    `_split_sentences` uses in voice_handler, so a clause handed to the
+    per-sentence TTS stream is never re-split. Clauses shorter than
+    MIN_CLAUSE_CHARS are re-merged into the next one rather than spoken
+    alone; a trailing partial clause is dropped by flush() unless it meets
+    the minimum (a half-sentence is never spoken).
+    """
+
+    MIN_CLAUSE_CHARS = 12
+    _BOUNDARY = re.compile(r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])")
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, delta: str) -> list[Clause]:
+        self._buf += delta
+        out: list[Clause] = []
+        while True:
+            m = self._BOUNDARY.search(self._buf)
+            if not m:
+                break
+            text = self._buf[:m.end()].strip()
+            self._buf = self._buf[m.end():]
+            if len(text) >= self.MIN_CLAUSE_CHARS:
+                out.append(Clause(text=text, is_final=False))
+            else:
+                # Too short to speak alone: keep it at the head of the buffer
+                # so it is spoken as part of the next clause.
+                self._buf = text + " " + self._buf
+        return out
+
+    def flush(self) -> Clause | None:
+        text = self._buf.strip()
+        if len(text) >= self.MIN_CLAUSE_CHARS:
+            self._buf = ""
+            return Clause(text=text, is_final=True)
+        return None
+
+
+async def generate_stream(
+    prompt: str,
+    *,
+    model: str | None = None,
+    num_ctx: int | None = None,
+    temperature: float | None = None,
+    cancel: "asyncio.Event | None" = None,
+) -> AsyncIterator[str | EngineCounters]:
+    """US-004: yield str deltas from a streamed generation, then exactly one
+    `EngineCounters` as the final item.
+
+    The blocking `ollama.chat(stream=True)` iterator runs in a worker thread;
+    deltas cross to the event loop through a queue, so the loop never blocks
+    on a decode step. Raises `GenerationFailed` when the stream errors or
+    produces nothing, and `GenerationCancelled` when `cancel` is set
+    mid-stream (the underlying stream is abandoned).
+    """
+    import asyncio as _asyncio
+    import threading as _threading
+
+    import ollama
+
+    if model is None:
+        model = pick_model(default_model(("qwen2.5:7b-instruct-q3_K_M",)))
+    options: dict[str, Any] = {"num_ctx": int(num_ctx or DEFAULT_NUM_CTX)}
+    if temperature is not None:
+        options["temperature"] = float(temperature)
+
+    queue: "asyncio.Queue[tuple[str, Any]]" = _asyncio.Queue()
+
+    def _pump() -> None:
+        counters: dict[str, Any] = {}
+        any_piece = False
+        try:
+            stream = ollama.chat(
+                model=model, messages=[{"role": "user", "content": prompt}],
+                options=options, keep_alive=KEEP_ALIVE, stream=True,
+            )
+            for chunk in stream:
+                if cancel is not None and cancel.is_set():
+                    queue.put_nowait(("cancelled", None))
+                    return
+                piece = str((chunk.get("message") or {}).get("content", ""))
+                for key in ("prompt_eval_count", "eval_count",
+                            "prompt_eval_duration", "eval_duration"):
+                    if chunk.get(key) is not None:
+                        counters[key] = chunk.get(key)
+                if piece:
+                    any_piece = True
+                    queue.put_nowait(("delta", piece))
+                if chunk.get("done"):
+                    break
+            if not any_piece:
+                # An empty generation must never reach synthesis (TRD-04).
+                queue.put_nowait(("error", "empty generation stream"))
+                return
+            queue.put_nowait(("counters", EngineCounters(
+                prompt_eval_count=counters.get("prompt_eval_count"),
+                eval_count=counters.get("eval_count"),
+                prompt_eval_duration_ns=counters.get("prompt_eval_duration"),
+                eval_duration_ns=counters.get("eval_duration"),
+            )))
+        except Exception as exc:                        # noqa: BLE001 — thread boundary
+            queue.put_nowait(("error", f"{type(exc).__name__}: {exc}"))
+        finally:
+            queue.put_nowait(("eof", None))
+
+    _threading.Thread(target=_pump, name="llm-stream", daemon=True).start()
+
+    yielded = False
+    while True:
+        kind, payload = await queue.get()
+        if kind == "delta":
+            yielded = True
+            yield payload
+        elif kind == "counters":
+            yield payload
+            return
+        elif kind == "cancelled":
+            raise GenerationCancelled("generation cancelled mid-stream")
+        elif kind == "error":
+            if yielded:
+                # Partial answer exists; the caller decides (flush() drops the
+                # trailing half-sentence). Signal by raising -- partial text is
+                # already with the cutter.
+                raise GenerationFailed(payload)
+            raise GenerationFailed(payload)
+        else:                                            # eof without counters
+            if not yielded:
+                raise GenerationFailed("empty generation stream")
+            return
 
 
 def is_ready() -> bool:

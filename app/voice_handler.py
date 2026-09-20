@@ -860,7 +860,17 @@ class VoiceCallSession:
 
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         self.log_event("LLM_STARTED")
-        answer = await self._query_llm(transcript)
+        from app.llm_backend import LLM_STREAM
+
+        streamed_chunks: list[bytes] = []
+        if LLM_STREAM:
+            # US-004: clauses are spoken as the model decodes (the overlap
+            # happens only when TTS_STREAM is on too -- without it the clauses
+            # accumulate and the batch synthesis below is unchanged).
+            answer, streamed_chunks = await self._query_llm_streamed(
+                transcript, chunk_sink if TTS_STREAM else None)
+        else:
+            answer = await self._query_llm(transcript)
         self.log_event("LLM_COMPLETED", chars=len(answer or ""))
         if not answer:
             # US-016 AC-5: the engine returned nothing. This used to return []
@@ -897,6 +907,10 @@ class VoiceCallSession:
         # reaches the socket while later clauses are still synthesising. The
         # batch path below is the unchanged BRD-15 revert (flag off).
         if TTS_STREAM:
+            if LLM_STREAM and streamed_chunks:
+                # The clauses were already synthesised and sent as they were
+                # cut; nothing left to do but record the turn.
+                return _turn_outcome(streamed_chunks), dialogue, False
             tts_chunks = await self._synthesise_streamed(answer, chunk_sink)
             if tts_chunks is None or not tts_chunks:
                 # US-016 AC-5, second branch: the synthesiser failed before
@@ -1022,51 +1036,7 @@ class VoiceCallSession:
         try:
             from app.pipeline import run_rag_query_sync
 
-            # Include recent conversation for context
-            if self._conversation_history:
-                context = "\n".join(self._conversation_history[-6:])
-                prompt = (
-                    f"This is an {self.direction} call.\n"
-                    f"Previous conversation:\n{context}\n\n"
-                    f"The caller just said: \"{question}\"\n"
-                    f"Answer naturally as a university admissions advisor. "
-                    f"Keep responses concise for voice (under 3 sentences). "
-                    f"NEVER ask the same or similar clarifying question twice "
-                    f"in a row. If the caller repeats a similar answer, STOP "
-                    f"asking — state your best interpretation and answer with "
-                    f"concrete information from the university profile, then "
-                    f"invite the caller to correct you."
-                )
-                # Deterministic loop-breaker: if the assistant's own last
-                # two+ turns were clarification questions, rebuild the
-                # prompt with caller-only history and force a grounded
-                # answer — quantized models sometimes ignore prompt-only
-                # guidance when they can see their own question pattern.
-                assistant_turns = [
-                    h for h in self._conversation_history if h.startswith("Assistant: ")
-                ]
-                clarify_streak = 0
-                for h in reversed(assistant_turns):
-                    if _is_clarification(h):
-                        clarify_streak += 1
-                    else:
-                        break
-                if clarify_streak >= 2:
-                    caller_turns = [
-                        h for h in self._conversation_history if h.startswith("Caller: ")
-                    ]
-                    prompt = (
-                        f"This is an {self.direction} call.\n"
-                        f"Caller's recent replies:\n" + "\n".join(caller_turns[-4:]) +
-                        f"\n\nThe caller just said: \"{question}\"\n"
-                        f"You have already asked for clarification too many "
-                        f"times. Do NOT ask any question. Answer now with "
-                        f"concrete program information from the university "
-                        f"profile — duration, fees, eligibility — and let "
-                        f"the caller correct you."
-                    )
-            else:
-                prompt = f"This is an {self.direction} call.\n{question}"
+            prompt = self._build_llm_prompt(question)
 
             # US-001: llm_sent brackets retrieval + prefill + generation. The
             # split between those three comes from the engine counters captured
@@ -1084,6 +1054,131 @@ class VoiceCallSession:
         except Exception:
             logger.exception("VoiceCall: LLM query failed")
             return ""
+
+    async def _query_llm_streamed(
+        self,
+        question: str,
+        chunk_sink: Callable | None,
+        cancel: "asyncio.Event | None" = None,
+    ) -> tuple[str, list[bytes]]:
+        """US-004: the generation is consumed as clauses, and (with a sink and
+        TTS_STREAM) each clause is synthesised while the model still decodes —
+        the LLM/TTS overlap. Returns (answer_text, ulaw_chunks).
+
+        The first clause's audio can reach the socket while the model is still
+        producing the rest; `llm_first_token` is marked at the FIRST delta, so
+        the trace carries a real TTFT for streamed turns.
+        """
+        try:
+            from app.llm_backend import ClauseCutter, GenerationFailed
+            from app.rag import query_rag_stream
+
+            prompt = self._build_llm_prompt(question)
+            cutter = ClauseCutter()
+            parts: list[str] = []
+            chunks: list[bytes] = []
+            any_audio = False
+            first_delta = True
+            counters = None
+            if self._trace is not None:
+                self._trace.mark("llm_sent")
+
+            async def _speak_clause(text: str) -> None:
+                nonlocal any_audio
+                scrubbed = scrub_meta_leak(text)
+                if not scrubbed:
+                    return
+                parts.append(scrubbed)
+                if chunk_sink is None:
+                    return
+                frames = await self._synthesise_streamed(scrubbed, chunk_sink)
+                if frames:
+                    chunks.extend(frames)
+                    any_audio = True
+
+            try:
+                async for item in query_rag_stream(prompt, cancel=cancel):
+                    if isinstance(item, str):
+                        if first_delta:
+                            first_delta = False
+                            self.log_event("LLM_FIRST_TOKEN")
+                            if self._trace is not None:
+                                self._trace.mark("llm_first_token")
+                        for clause in cutter.feed(item):
+                            await _speak_clause(clause.text)
+                    else:
+                        counters = item
+            except GenerationFailed:
+                logger.warning("VoiceCall: streamed generation failed")
+            # A complete trailing clause is spoken; a half-sentence never is.
+            tail = cutter.flush()
+            if tail is not None:
+                await _speak_clause(tail.text)
+
+            answer = " ".join(parts)
+            if self._trace is not None:
+                self._trace.mark("llm_done")
+                self._trace.note(answer_chars=len(answer))
+                if counters is not None:
+                    self._trace.note(
+                        prompt_eval_count=counters.prompt_eval_count,
+                        eval_count=counters.eval_count,
+                    )
+            if not answer and any_audio is False:
+                return "", []
+            return answer, chunks
+        except Exception:
+            logger.exception("VoiceCall: streamed LLM query failed")
+            return "", []
+
+    def _build_llm_prompt(self, question: str) -> str:
+        """The prompt the serving path sends (shared by batch and stream)."""
+        # Include recent conversation for context
+        if self._conversation_history:
+            context = "\n".join(self._conversation_history[-6:])
+            prompt = (
+                f"This is an {self.direction} call.\n"
+                f"Previous conversation:\n{context}\n\n"
+                f"The caller just said: \"{question}\"\n"
+                f"Answer naturally as a university admissions advisor. "
+                f"Keep responses concise for voice (under 3 sentences). "
+                f"NEVER ask the same or similar clarifying question twice "
+                f"in a row. If the caller repeats a similar answer, STOP "
+                f"asking — state your best interpretation and answer with "
+                f"concrete information from the university profile, then "
+                f"invite the caller to correct you."
+            )
+            # Deterministic loop-breaker: if the assistant's own last
+            # two+ turns were clarification questions, rebuild the
+            # prompt with caller-only history and force a grounded
+            # answer — quantized models sometimes ignore prompt-only
+            # guidance when they can see their own question pattern.
+            assistant_turns = [
+                h for h in self._conversation_history if h.startswith("Assistant: ")
+            ]
+            clarify_streak = 0
+            for h in reversed(assistant_turns):
+                if _is_clarification(h):
+                    clarify_streak += 1
+                else:
+                    break
+            if clarify_streak >= 2:
+                caller_turns = [
+                    h for h in self._conversation_history if h.startswith("Caller: ")
+                ]
+                prompt = (
+                    f"This is an {self.direction} call.\n"
+                    f"Caller's recent replies:\n" + "\n".join(caller_turns[-4:]) +
+                    f"\n\nThe caller just said: \"{question}\"\n"
+                    f"You have already asked for clarification too many "
+                    f"times. Do NOT ask any question. Answer now with "
+                    f"concrete program information from the university "
+                    f"profile — duration, fees, eligibility — and let "
+                    f"the caller correct you."
+                )
+        else:
+            prompt = f"This is an {self.direction} call.\n{question}"
+        return prompt
 
     #: TTS cache (DG-06 / US-012).
     #:

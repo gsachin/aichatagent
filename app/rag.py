@@ -19,9 +19,11 @@ identical to the legacy pipeline.
 
 import logging
 import os
+from typing import AsyncIterator
 
 from app import rag_legacy
 from app import rag_mcp
+from app.llm_backend import EngineCounters
 
 logger = logging.getLogger("rag_module")
 
@@ -241,6 +243,59 @@ def query_rag(question: str, *, mode: str = "voice") -> str | None:
     except Exception:
         logger.exception("LLM query failed")
         return None
+
+
+async def query_rag_stream(
+    question: str, *, mode: str = "voice",
+    cancel: "asyncio.Event | None" = None,
+) -> AsyncIterator[str | EngineCounters]:
+    """US-004: `query_rag` streamed. Identical retrieval and prompt assembly;
+    the generation is consumed as token deltas (llm_backend.generate_stream)
+    so the caller can synthesise the first clause while the model decodes.
+    The retrieval itself is synchronous, so it runs in a worker thread.
+
+    Yields str deltas, then exactly one EngineCounters; raises
+    GenerationFailed on an empty/errored stream.
+    """
+    import asyncio
+
+    from app.llm_backend import GenerationFailed, generate_stream
+
+    if not question.strip():
+        raise GenerationFailed("empty question")
+
+    if RAG_SIMILARITY_THRESHOLD > 0:
+        dist = _threshold_distance(question)
+        if dist is not None and dist > RAG_SIMILARITY_THRESHOLD:
+            yield "I don't have that specific information in the university profile."
+            return
+
+    # Step 1: Retrieve context (sync client; off the loop). `retrieve_context`
+    # marks retrieval_done on every return path itself, exactly as the batch
+    # path gets it.
+    context = await asyncio.to_thread(retrieve_context, question)
+
+    # Step 2: Build prompt (byte-identical to query_rag)
+    if mode == "chat":
+        prompt = SYSTEM_PROMPT.format(
+            context=context
+            or "(No university profile information was retrieved for this question.)"
+        )
+    else:
+        from app.voice_system_prompt import build_voice_system_prompt
+
+        prompt = build_voice_system_prompt(context)
+    prompt += f"\n\nStudent's question: {question}"
+
+    # Step 3: streamed generation
+    model = rag_legacy._get_available_model()
+    logger.info(f"RAG query (stream): model={model}, context_chars={len(context)}")
+    async for item in generate_stream(
+        prompt, model=model, num_ctx=OLLAMA_NUM_CTX,
+        temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
+        cancel=cancel,
+    ):
+        yield item
 
 
 # ── Startup warm-up (FastAPI lifespan) ─────────────────────────────────────

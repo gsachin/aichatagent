@@ -63,6 +63,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -1207,9 +1208,13 @@ class WebsocketsTransport(Transport):
             "open_timeout": self.open_timeout,
             "close_timeout": 5,
             "max_queue": 64,
+            # Phase 0.4: pass ping_interval EXPLICITLY. Omitting it lets the
+            # library default (20 s) apply, which is not "disabled" -- the
+            # first streamed run died on this exact bug (observed 2026-09-20:
+            # the harness pinged despite the flag being off).
+            "ping_interval": self.ping_interval,
         }
         if self.ping_interval is not None:
-            kwargs["ping_interval"] = self.ping_interval
             kwargs["ping_timeout"] = self.ping_timeout
         self._ws = await connect(self.url, **kwargs)
 
@@ -3416,6 +3421,13 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
                            ws_ping_interval=10.0, ws_ping_timeout=30.0)
     out["ws_ping_explicit_interval_is_honored"] = (
         pinged.transport.ping_interval == 10.0 and pinged.transport.ping_timeout == 30.0)
+    # The connect() call must pass ping_interval EXPLICITLY even when None:
+    # omitting it would let the websockets default (20 s) apply, which is not
+    # "disabled" (observed live 2026-09-20 -- the first streamed run died on
+    # a 1011 from pings that were supposed to be off).
+    out["ws_ping_connect_passes_none_explicitly"] = (
+        '"ping_interval": self.ping_interval' in inspect.getsource(
+            WebsocketsTransport.connect))
     out["ws_ping_disabled_recorded_in_summary"] = (
         d.get("ws_ping_interval") is None and d["ws_ping_timeout"] == 20.0
         and "DISABLED" in d["ws_ping_basis"]
