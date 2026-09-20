@@ -102,13 +102,14 @@ def main() -> int:
     try:
         import chromadb
         from app.llm_backend import get_embedding_function
+        from app.rag_legacy import RAG_COLLECTION_NAME
 
         client = chromadb.PersistentClient(path=str(TARGET))
         ef = get_embedding_function()
-        collections = client.list_collections()
-        first = collections[0]
-        coll_name = first if isinstance(first, str) else first.name
-        col = client.get_collection(coll_name, embedding_function=ef)
+        # C3: scan the CONFIGURED collection, not "the first one" — a canary
+        # over an arbitrary collection passes vacuously when more than one
+        # exists (blue/green collections make that a live hazard).
+        col = client.get_collection(RAG_COLLECTION_NAME, embedding_function=ef)
         got = col.get(include=["documents"])
         docs = got.get("documents") or []
         blob = "\n".join(docs).lower()

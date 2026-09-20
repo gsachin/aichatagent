@@ -194,24 +194,33 @@ def _threshold_distance(query: str) -> float | None:
     return rag_legacy._best_distance(query)
 
 
-def query_rag(question: str, *, mode: str = "voice") -> str | None:
+def query_rag(question: str, *, mode: str = "voice",
+              retrieval_query: str | None = None) -> str | None:
     """
     Full RAG pipeline: retrieve context -> build prompt -> query LLM.
     Identical behavior to the legacy pipeline; only the context source is
     dispatched (MCP-first). Returns the answer string, or None on failure.
+
+    C3 (N1 fix): callers that pre-build a full instruction prompt (the voice
+    handler passes conversation history + style rules) previously had that
+    whole prompt embedded as the retrieval query — the dense vector was
+    dominated by boilerplate. ``retrieval_query`` decouples the two: it is
+    what gets embedded and retrieved on; ``question`` stays in the prompt
+    tail, byte-identical to before.
     """
     if not question.strip():
         return None
+    rq = (retrieval_query or question).strip() or question
 
     # Optional gate: refuse to answer when the best match is too distant
     if RAG_SIMILARITY_THRESHOLD > 0:
-        dist = _threshold_distance(question)
+        dist = _threshold_distance(rq)
         if dist is not None and dist > RAG_SIMILARITY_THRESHOLD:
             logger.info(f"RAG threshold gate: distance {dist:.3f} > {RAG_SIMILARITY_THRESHOLD}")
             return "I don't have that specific information in the university profile."
 
     # Step 1: Retrieve context
-    context = retrieve_context(question)
+    context = retrieve_context(rq)
 
     # Step 2: Build prompt (byte-identical to legacy)
     if mode == "chat":
@@ -248,11 +257,15 @@ def query_rag(question: str, *, mode: str = "voice") -> str | None:
 async def query_rag_stream(
     question: str, *, mode: str = "voice",
     cancel: "asyncio.Event | None" = None,
+    retrieval_query: str | None = None,
 ) -> AsyncIterator[str | EngineCounters]:
     """US-004: `query_rag` streamed. Identical retrieval and prompt assembly;
     the generation is consumed as token deltas (llm_backend.generate_stream)
     so the caller can synthesise the first clause while the model decodes.
     The retrieval itself is synchronous, so it runs in a worker thread.
+
+    retrieval_query (C3/N1): embedded for retrieval when the caller passes a
+    pre-built instruction prompt (see query_rag).
 
     Yields str deltas, then exactly one EngineCounters; raises
     GenerationFailed on an empty/errored stream.
@@ -263,9 +276,10 @@ async def query_rag_stream(
 
     if not question.strip():
         raise GenerationFailed("empty question")
+    rq = (retrieval_query or question).strip() or question
 
     if RAG_SIMILARITY_THRESHOLD > 0:
-        dist = _threshold_distance(question)
+        dist = _threshold_distance(rq)
         if dist is not None and dist > RAG_SIMILARITY_THRESHOLD:
             yield "I don't have that specific information in the university profile."
             return
@@ -273,7 +287,7 @@ async def query_rag_stream(
     # Step 1: Retrieve context (sync client; off the loop). `retrieve_context`
     # marks retrieval_done on every return path itself, exactly as the batch
     # path gets it.
-    context = await asyncio.to_thread(retrieve_context, question)
+    context = await asyncio.to_thread(retrieve_context, rq)
 
     # Step 2: Build prompt (byte-identical to query_rag)
     if mode == "chat":

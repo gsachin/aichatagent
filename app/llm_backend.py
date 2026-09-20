@@ -626,17 +626,23 @@ def get_embedding_function():
         # embed model to the server's 5-minute default and the next caller
         # paid a cold embed load (~1-3 s on this box, observed in the Ollama
         # server log). The subclass pins the same lease the chat path holds.
+        # C3 (2026-09-20): E5 regression fix — the legacy /api/embeddings
+        # endpoint takes "prompt" and returns a singular "embedding" key;
+        # posting {"input": ...} there returns 200 with {"embedding": []} and
+        # the KeyError on ["embeddings"] was swallowed, silently killing the
+        # hybrid path (dense-MMR only despite RAG_SEARCH_MODE=hybrid). Post to
+        # the modern batch /api/embed instead and read "embeddings".
         class _HeldEmbeddingFunction(OllamaEmbeddingFunction):
             def __call__(self, input):
                 import httpx
 
                 base = self._base_url.rstrip("/")
-                url = (base if base.endswith("/api/embeddings")
-                       else f"{base}/api/embeddings")
+                texts = [input] if isinstance(input, str) else list(input)
+                url = base if base.endswith("/api/embed") else f"{base}/api/embed"
                 with httpx.Client(timeout=60) as client:
                     resp = client.post(
                         url,
-                        json={"model": self.model_name, "input": input,
+                        json={"model": self.model_name, "input": texts,
                               "keep_alive": KEEP_ALIVE},
                     )
                     resp.raise_for_status()

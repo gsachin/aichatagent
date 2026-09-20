@@ -47,6 +47,12 @@ CHROMA_DB_PATH = Path(os.environ.get(
     str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
 ))
 
+# C3 (Meridian KB repopulation): the collection name is configuration, not a
+# magic literal. The legacy default "langchain" stays the default for
+# backward compatibility, but nothing may take "the first collection" anymore
+# (see _build_raw_chromadb and scripts/rebuild_rag_index.py).
+RAG_COLLECTION_NAME = os.environ.get("RAG_COLLECTION_NAME", "langchain")
+
 # Single source of truth for the knowledge base (Meridian).
 # Append entries here when new document types are added.
 SOURCES = [
@@ -172,6 +178,7 @@ def _load_with_langchain():
     return Chroma(
         persist_directory=str(CHROMA_DB_PATH),
         embedding_function=get_langchain_embeddings(),
+        collection_name=RAG_COLLECTION_NAME,
     )
 
 
@@ -249,12 +256,18 @@ def build_vector_store(dest_dir=None):
         documents=all_chunks,
         embedding=embeddings,
         persist_directory=str(dest),
+        collection_name=RAG_COLLECTION_NAME,
         collection_metadata={"hnsw:space": "cosine"},
     )
 
 
 def _build_raw_chromadb():
-    """Fallback: load existing ChromaDB without LangChain dependency."""
+    """Fallback: load existing ChromaDB without LangChain dependency.
+
+    C3: the collection is explicit (RAG_COLLECTION_NAME) — never "the first
+    collection", which silently served an arbitrary store when more than one
+    existed (blue/green collections make that a live hazard).
+    """
     import chromadb
     try:
         from app.llm_backend import get_embedding_function
@@ -263,13 +276,16 @@ def _build_raw_chromadb():
         embed_fn = None
 
     client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-    collections = client.list_collections()
-    if not collections:
+    try:
+        collection = client.get_collection(RAG_COLLECTION_NAME,
+                                           embedding_function=embed_fn)
+    except Exception:
+        logger.warning(
+            "Raw ChromaDB load: collection %r not found at %s — "
+            "no retrieval store available (build it first)",
+            RAG_COLLECTION_NAME, CHROMA_DB_PATH,
+        )
         return None
-
-    first = collections[0]
-    coll_name = first if isinstance(first, str) else first.name
-    collection = client.get_collection(coll_name, embedding_function=embed_fn)
     # Wrap in a simple object that mimics the LangChain interface we need
     return _RawChromaWrapper(collection)
 
@@ -408,7 +424,7 @@ def retrieve_context_hybrid(query: str, top_k: int = MMR_K, fetch_k: int = MMR_F
 
     client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
     ef = get_embedding_function()
-    col = client.get_collection("langchain", embedding_function=ef)
+    col = client.get_collection(RAG_COLLECTION_NAME, embedding_function=ef)
 
     # ── Dense side: Chroma KNN ──────────────────────────────────────
     dense_res = col.query(query_texts=[query], n_results=fetch_k, include=["documents"])
@@ -500,7 +516,7 @@ def _best_distance(query: str) -> float | None:
 
         client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
         ef = get_embedding_function()
-        col = client.get_collection("langchain", embedding_function=ef)
+        col = client.get_collection(RAG_COLLECTION_NAME, embedding_function=ef)
         r = col.query(query_texts=[query], n_results=1, include=["distances"])
         dists = (r.get("distances") or [[None]])[0]
         return dists[0] if dists else None

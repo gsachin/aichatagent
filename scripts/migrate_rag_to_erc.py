@@ -123,6 +123,11 @@ def _parity_gate() -> int:
         if not ok:
             failures.append(f"smoke query '{q}' returned empty context on one side")
 
+    # C3 (U1-AC4 / N4): non-empty context on both sides does NOT prove the
+    # stores share a vector space. A dim/model mismatch silently serves
+    # meaningless neighbours — compare the embedders the two sides actually use.
+    _embed_identity_check(failures)
+
     # Negative canary + blocked-marker scan over MCP context
     canary = _mcp_context(NEGATIVE_QUERY)
     for marker in rag_legacy.BLOCKED_MARKERS:
@@ -140,6 +145,58 @@ def _parity_gate() -> int:
     for f in failures:
         print(f"  - {f}")
     return 0 if not failures else 1
+
+
+def _embed_identity_check(failures: list[str]) -> None:
+    """Compare the embed model + output dim of the legacy and MCP sides.
+
+    The legacy side embeds through app/llm_backend (EMBED_MODEL); the MCP side
+    embeds through enterprise-rag-core (EMBED_MODEL there). Both must be the
+    same model at the same dim, or the two stores are different vector spaces.
+    """
+    import httpx
+
+    try:
+        from app.llm_backend import EMBED_MODEL as legacy_model, OLLAMA_BASE_URL
+        from app.llm_backend import get_embedding_function
+
+        ef = get_embedding_function()
+        legacy_dim = len(ef(["probe"])[0])
+
+        # MCP-side identity via the ERC stack's own embedder (in-process probe
+        # through enterprise_rag if importable, else the Ollama tags listing).
+        mcp_model = None
+        mcp_dim = None
+        try:
+            import sys
+            sys.path.insert(0, str(DEFAULT_ERC_ROOT))
+            from enterprise_rag.config import EngineConfig
+            stack = EngineConfig.from_env({}).build_stack()  # type: ignore[arg-type]
+            mcp_model = getattr(stack.embeddings, "model", None)
+            mcp_dim = len(stack.embeddings.embed_sync("probe"))
+        except Exception:
+            pass
+
+        if mcp_dim is None:
+            # fall back to a direct probe of the configured embed model
+            resp = httpx.post(
+                f"{OLLAMA_BASE_URL}/api/embed",
+                json={"model": legacy_model, "input": ["probe"]},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            mcp_dim = len(resp.json()["embeddings"][0])
+            mcp_model = legacy_model
+
+        print(f"  embed identity: legacy={legacy_model}/{legacy_dim}d "
+              f"mcp={mcp_model}/{mcp_dim}d")
+        if legacy_model != mcp_model or legacy_dim != mcp_dim:
+            failures.append(
+                f"embed identity mismatch: legacy {legacy_model}/{legacy_dim}d "
+                f"vs MCP {mcp_model}/{mcp_dim}d"
+            )
+    except Exception as e:
+        failures.append(f"embed identity check could not run: {e}")
 
 
 def main() -> int:

@@ -99,8 +99,11 @@ def test_d2_loop_breaker_rebuilds_prompt(monkeypatch):
     s._conversation_history = _intake_history()
     captured = {}
 
-    def fake_sync(prompt):
+    def fake_sync(prompt, mode="voice", retrieval_query=None):
+        # C3/N1: the voice path now passes the utterance separately so the
+        # retrieval query is not the whole instruction prompt.
         captured["q"] = prompt
+        captured["retrieval_query"] = retrieval_query
         return "MBA: 2-year, $18,500/yr."
 
     monkeypatch.setattr(pl, "run_rag_query_sync", fake_sync)
@@ -121,6 +124,8 @@ def test_d2_loop_breaker_rebuilds_prompt(monkeypatch):
     assert "Do NOT ask any question" in q
     assert "Caller's recent replies" in q
     assert "Fall, Spring" not in q  # the assistant's own question pattern is gone
+    # C3/N1: retrieval must see the utterance, not the instruction prompt
+    assert captured["retrieval_query"] == "MBA program"
 
 
 # ── D4: no-signal escalation ladder ──────────────────────────────────

@@ -1046,7 +1046,12 @@ class VoiceCallSession:
             # instant would fabricate a TTFT (TRD-21).
             if self._trace is not None:
                 self._trace.mark("llm_sent")
-            answer = await asyncio.to_thread(run_rag_query_sync, prompt) or ""
+            # C3/N1: retrieval embeds the caller's actual utterance, not the
+            # assembled instruction prompt (history + style rules dominated
+            # the dense vector and diluted the question).
+            answer = await asyncio.to_thread(
+                run_rag_query_sync, prompt, "voice", question
+            ) or ""
             if self._trace is not None:
                 self._trace.mark("llm_done")
                 self._trace.note(answer_chars=len(answer))
@@ -1097,7 +1102,10 @@ class VoiceCallSession:
                     any_audio = True
 
             try:
-                async for item in query_rag_stream(prompt, cancel=cancel):
+                # C3/N1: same retrieval-query decoupling as the batch path.
+                async for item in query_rag_stream(
+                    prompt, cancel=cancel, retrieval_query=question
+                ):
                     if isinstance(item, str):
                         if first_delta:
                             first_delta = False

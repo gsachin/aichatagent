@@ -297,13 +297,17 @@ def _bg_priority_enabled() -> bool:
         "0", "false", "off", "no")
 
 
-def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
+def run_rag_query_sync(user_text: str, mode: str = "voice",
+                       retrieval_query: str | None = None) -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
     Uses shared RAG module for consistent quality across all interfaces.
 
     mode: "voice" (default, phone calls) or "chat" (text UIs — Markdown
     SYSTEM_PROMPT, same style as the Streamlit chat).
+
+    retrieval_query (C3/N1): when the caller pre-builds an instruction prompt,
+    retrieval embeds this instead of the whole prompt.
 
     US-017 / BRD-20: `mode` already distinguished the two callers, so it is
     also the admission key. A voice turn holds the gate open for its whole
@@ -314,7 +318,7 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     """
     from app.rag import query_rag
     if not _bg_priority_enabled():
-        return query_rag(user_text, mode=mode)
+        return query_rag(user_text, mode=mode, retrieval_query=retrieval_query)
 
     from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
@@ -322,10 +326,10 @@ def run_rag_query_sync(user_text: str, mode: str = "voice") -> str | None:
     if work_class == VOICE:
         label = "voice" if defect is None else f"unclassified:{mode}"
         with GATE.voice_turn(label=label):
-            return query_rag(user_text, mode=mode)
+            return query_rag(user_text, mode=mode, retrieval_query=retrieval_query)
     try:
         with GATE.background_unit(label="background", mode=mode):
-            return query_rag(user_text, mode=mode)
+            return query_rag(user_text, mode=mode, retrieval_query=retrieval_query)
     except BackgroundDeferred:
         # Refused because the line stayed busy past its budget. It answers
         # nothing rather than being interleaved -- and this is NOT a
