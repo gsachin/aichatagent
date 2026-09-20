@@ -1,6 +1,6 @@
 {
-  "run_id": "20260919T093509Z",
-  "condition": "N=2",
+  "run_id": "20260919T055457Z",
+  "condition": "N=1",
   "thermal_state": "cold",
   "turn_count": 0,
   "first_audio_n": 0,
@@ -64,9 +64,9 @@
   "turns_without_response": 0,
   "turns_timed_out": 0,
   "partial": true,
-  "dropped_turns": 4,
-  "discarded": false,
-  "discard_reason": null,
+  "dropped_turns": 2,
+  "discarded": true,
+  "discard_reason": "no usable first-audio samples: the run produced nothing to measure (0 turn observation(s)) [A1 post-hoc re-evaluation]",
   "stack_readiness": "not checked (warm_gate=False)",
   "readiness": {
     "stack_readiness": "not checked (warm_gate=False)"
@@ -87,54 +87,17 @@
         "frames_dropped": 0,
         "frames_reordered": 0,
         "frames_late_gt_5ms": 0,
-        "frames_late_gt_5ms_from_clamp": 0,
-        "frames_late_gt_5ms_unexplained": 0,
         "frames_slot_clamped": 0,
         "max_slot_deviation_ms": null,
-        "p50_slot_deviation_ms": null,
         "p95_slot_deviation_ms": null,
-        "p99_slot_deviation_ms": null,
         "profile_attributed_delay_ms": 0.0,
         "profile_attributed_jitter_ms": 0.0,
-        "max_harness_deviation_ms": null,
-        "p95_harness_deviation_ms": null,
-        "frames_harness_late_gt_5ms": 0,
         "harness_fault": false,
-        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
         "tac1_holds": true,
-        "tac1_pacing_is_sound": true,
-        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
         "spin_margin_ms": 1.5,
         "wake_lead_ms": 6.0,
-        "timer_resolution_1ms": true,
-        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
-      },
-      "B": {
-        "frames_emitted": 0,
-        "frames_dropped": 0,
-        "frames_reordered": 0,
-        "frames_late_gt_5ms": 0,
-        "frames_late_gt_5ms_from_clamp": 0,
-        "frames_late_gt_5ms_unexplained": 0,
-        "frames_slot_clamped": 0,
-        "max_slot_deviation_ms": null,
-        "p50_slot_deviation_ms": null,
-        "p95_slot_deviation_ms": null,
-        "p99_slot_deviation_ms": null,
-        "profile_attributed_delay_ms": 0.0,
-        "profile_attributed_jitter_ms": 0.0,
-        "max_harness_deviation_ms": null,
-        "p95_harness_deviation_ms": null,
-        "frames_harness_late_gt_5ms": 0,
-        "harness_fault": false,
-        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
-        "tac1_holds": true,
-        "tac1_pacing_is_sound": true,
-        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
-        "spin_margin_ms": 1.5,
-        "wake_lead_ms": 6.0,
-        "timer_resolution_1ms": true,
-        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+        "timer_resolution_1ms": false,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile)"
       }
     },
     "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
@@ -149,40 +112,7 @@
       "error": "connect: TimeoutError: timed out during opening handshake",
       "dropped_by_harness": false,
       "stream_sids": [
-        "MZe7a61f06d4ce7a0fd8dcd59822961d"
-      ],
-      "reconnects": 0,
-      "reconnect_events": [],
-      "warm": {
-        "n": 0,
-        "p50": null,
-        "p95": null,
-        "worst": null,
-        "min": null
-      },
-      "cold": {
-        "n": 0,
-        "p50": null,
-        "p95": null,
-        "worst": null,
-        "min": null
-      },
-      "turns_over_3000ms": 0,
-      "turns_without_response": 0,
-      "greeting_seen": true,
-      "events_seen": {},
-      "turns": []
-    },
-    {
-      "label": "B",
-      "turn_count": 0,
-      "planned_turns": 2,
-      "completed": false,
-      "connected": false,
-      "error": "connect: TimeoutError: timed out during opening handshake",
-      "dropped_by_harness": false,
-      "stream_sids": [
-        "MZac7c9269edcf8c6ddc9a3ce6b42ecc"
+        "MZ5218daa70d34bfaf654ae706bb50e2"
       ],
       "reconnects": 0,
       "reconnect_events": [],
@@ -210,11 +140,11 @@
   "target_turns_per_session": 2,
   "powered": false,
   "url": "ws://127.0.0.1:8000/ws/twilio",
-  "started_at": "2026-09-19T09:35:09Z",
-  "ended_at": "2026-09-19T09:35:24Z",
-  "wall_seconds": 15.07,
+  "started_at": "2026-09-19T05:54:57Z",
+  "ended_at": "2026-09-19T05:55:12Z",
+  "wall_seconds": 15.12,
   "harness_version": "us002-harness/1.0.0",
-  "harness_sha256": "5fcd3d4d4c47d46d91960be807ed6ea9b4afca724979c1ddc76207bccd9b0c0c",
+  "harness_sha256": "38023d6f6db06a905b989b337a6560e70d02791f924a1ad0b16b73a1d8e5270b",
   "app_contract_check": {
     "checked": [
       {
@@ -259,6 +189,7 @@
   },
   "notes": [
     "The app emitted no DAT-07 trace rows for this window, so the N=2 record-separation assertion (TAC-3) is NOT evidenced by this run. Harness-observed first-audio figures still stand.",
-    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline.",
+    "A1 re-evaluation 2026-09-19: discarded post-hoc by the A1 rule (empty/partial runs must not read as clean)."
   ]
 }

@@ -1,0 +1,807 @@
+{
+  "run_id": "20260919T182610Z",
+  "condition": "N=2",
+  "thermal_state": "cold",
+  "turn_count": 2,
+  "first_audio_n": 0,
+  "fixture_sha256": "4071e6e4b55795c1de21f6512dad3d79796695b85feaab32d563199766d61516",
+  "fixtures": [
+    "deadlines-02",
+    "eligibility-03",
+    "escalation-04",
+    "fees-01"
+  ],
+  "fixture_hashes": {
+    "deadlines-02": "d2ba439268f91da1946193ec820f0b8fe54cc21886d2828c4edb86fd9b187623",
+    "eligibility-03": "68f6bcc69ac7bb8f532c7fd599a10932df6352158ce47a80b023f7f26444645d",
+    "escalation-04": "230713c049e90415204c4417be0e3f3ef26080b5902a5f2bf7b3f911780a1139",
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
+  },
+  "fixture_version": {
+    "deadlines-02": 1,
+    "eligibility-03": 1,
+    "escalation-04": 1,
+    "fees-01": 1
+  },
+  "network_profile": "clean",
+  "profile_parameters": {
+    "frame_delay_ms": 0.0,
+    "jitter_ms": 0.0,
+    "loss_percent": 0.0,
+    "reorder_percent": 0.0,
+    "disconnect_at_turns": []
+  },
+  "profile_description": "carrier framing, no injection",
+  "injected_condition": false,
+  "first_audio_ms": {
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "n": 0,
+    "bucket": "cold"
+  },
+  "cold_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "warm_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "carrier_boundary_excluded": true,
+  "records_separated": null,
+  "separation": {
+    "records_separated": null,
+    "separation_basis": "absent",
+    "trace_rows_in_window": 0,
+    "trace_rows_unattributable": 0,
+    "distinct_call_ids": 0,
+    "reasons": [
+      "the app emitted no trace rows for this window (DAT-07 absent)"
+    ],
+    "detail": "Separation is a property of the app's trace stream and could not be checked. A figure from this run is harness-observed first-audio only; the app-side per-stage decomposition is NOT available and the N=2 separation assertion (TAC-3) is NOT evidenced by this run."
+  },
+  "turns_over_3000ms": 0,
+  "cap_exceeded": false,
+  "cap_basis": "first_audio_ms > 3000 (BRD-05 per-turn ceiling)",
+  "turns_without_response": 2,
+  "turns_timed_out": 2,
+  "partial": true,
+  "dropped_turns": 198,
+  "discarded": true,
+  "discard_reason": "no usable first-audio samples: the run produced nothing to measure (2 turn observation(s)) [A1 post-hoc re-evaluation]",
+  "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report",
+  "readiness": {
+    "url": "ws://127.0.0.1:8000/ws/twilio",
+    "checks": [
+      {
+        "check": "quality-eval lock",
+        "path": "D:\\project\\universityDemo\\eval\\.eval_in_progress",
+        "result": "no lock file present",
+        "note": "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock"
+      },
+      {
+        "check": "tcp reachability",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "result": "listening"
+      }
+    ],
+    "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report"
+  },
+  "frame_audit": {
+    "frames_emitted": 440,
+    "frames_dropped": 0,
+    "frames_reordered": 0,
+    "frames_late_gt_5ms": 0,
+    "frames_slot_clamped": 0,
+    "max_slot_deviation_ms": 3.646,
+    "worst_session_p95_slot_deviation_ms": 0.988,
+    "harness_fault": false,
+    "tac1_holds": true,
+    "per_session": {
+      "A": {
+        "frames_emitted": 208,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 0,
+        "frames_late_gt_5ms_from_clamp": 0,
+        "frames_late_gt_5ms_unexplained": 0,
+        "frames_slot_clamped": 0,
+        "max_slot_deviation_ms": 3.567,
+        "p50_slot_deviation_ms": 0.324,
+        "p95_slot_deviation_ms": 0.988,
+        "p99_slot_deviation_ms": 1.544,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 3.567,
+        "p95_harness_deviation_ms": 0.988,
+        "frames_harness_late_gt_5ms": 0,
+        "harness_fault": false,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": true,
+        "tac1_pacing_is_sound": true,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      },
+      "B": {
+        "frames_emitted": 232,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 0,
+        "frames_late_gt_5ms_from_clamp": 0,
+        "frames_late_gt_5ms_unexplained": 0,
+        "frames_slot_clamped": 0,
+        "max_slot_deviation_ms": 3.646,
+        "p50_slot_deviation_ms": 0.3,
+        "p95_slot_deviation_ms": 0.701,
+        "p99_slot_deviation_ms": 1.174,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 3.646,
+        "p95_harness_deviation_ms": 0.701,
+        "frames_harness_late_gt_5ms": 0,
+        "harness_fault": false,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": true,
+        "tac1_pacing_is_sound": true,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      }
+    },
+    "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
+  },
+  "per_session": [
+    {
+      "label": "A",
+      "turn_count": 1,
+      "planned_turns": 100,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZf239e9403995cf9567bc92ed658565"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "turns_over_3000ms": 0,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 389
+      },
+      "turns": [
+        {
+          "session_label": "A",
+          "turn_index": 0,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "cold",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 265048.171,
+          "stream_sid": "MZf239e9403995cf9567bc92ed658565",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    },
+    {
+      "label": "B",
+      "turn_count": 1,
+      "planned_turns": 100,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ47378dbc5078d329e5e5fccc1c88ba"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "turns_over_3000ms": 0,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 389
+      },
+      "turns": [
+        {
+          "session_label": "B",
+          "turn_index": 0,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 0,
+          "intent": "Admission process / eligibility",
+          "thermal": "cold",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 232,
+          "speech_frames": 120,
+          "segment_s": 4.64,
+          "t_speech_end": 265049.109,
+          "stream_sid": "MZ47378dbc5078d329e5e5fccc1c88ba",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    }
+  ],
+  "target_turns_per_session": 100,
+  "powered": false,
+  "url": "ws://127.0.0.1:8000/ws/twilio",
+  "started_at": "2026-09-19T18:26:10Z",
+  "ended_at": "2026-09-19T18:28:26Z",
+  "wall_seconds": 136.18,
+  "harness_version": "us002-harness/1.0.0",
+  "harness_sha256": "f7b78897cd9684bbc1ec433ceab73c1f8c6d66d4f7fa8843a96affd28babcb76",
+  "extra_load": {
+    "background_units": {
+      "submitted": 0,
+      "answered": 0,
+      "refused_or_empty": 0,
+      "errors": [
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+        "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received"
+      ],
+      "error_count": 40,
+      "basis": "text queries driven through /ws/voice/text during a live call pair; the app classifies them as background"
+    },
+    "app_records": {
+      "computed": true,
+      "refusals": 0,
+      "admitted": 0,
+      "asset_plays": 0,
+      "live_sessions_after": 0,
+      "bg_units": 1,
+      "bg_deferrals": 0,
+      "bg_refusals": 0,
+      "bg_started_during_voice": 0,
+      "bg_max_concurrent": 1,
+      "voice_turns": 2,
+      "classification_defects": 0
+    },
+    "app_records_raw": {
+      "admission": {
+        "enabled": true,
+        "max_concurrent_calls": 2,
+        "assets": {
+          "busy.wav": {
+            "present": true,
+            "sha256": "8f95c7d09cd83a6900cb15de4b0758f1fb9c14f0a05ed11cf81c09c2725dfa74"
+          },
+          "fixed_response.wav": {
+            "present": true,
+            "sha256": "337ebb36616b2817aa9f877b184416a49e2b31568fceafd90c2f798d4c5f8375"
+          }
+        },
+        "asset_drift": null,
+        "outcomes": {
+          "served": 522,
+          "degraded": 11,
+          "failed": 0,
+          "refused": 40
+        },
+        "decisions": 40,
+        "admitted": 0,
+        "decision_records": [
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "cdf65074239b",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837857.1760268
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "d3f849086aa6",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837857.8431323
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "c1dde757e084",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837858.5091105
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "a8b70c5b6791",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837860.5053995
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839577.3270466
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839579.3196476
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9d9fd042b6c2",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839581.3218856
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "07b854c87197",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839584.7005851
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839936.5134392
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839937.4824886
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9d9fd042b6c2",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839938.1553447
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "07b854c87197",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839938.8303273
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "2c0fbab9a257",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839939.5022306
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "0a43d1190800",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839940.1766684
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "b6e310288436",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839940.8510687
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "1863cd3ddee8",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839945.5016205
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "cdf65074239b",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839946.1717293
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "d3f849086aa6",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839946.8518937
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "c1dde757e084",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839948.4805646
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "a8b70c5b6791",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789839949.6825566
+          }
+        ],
+        "asset_plays": 51,
+        "asset_play_records": [
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838971.983941
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838989.9103637
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789839005.842469
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "9585bd51d767",
+            "ts": 1789839577.3270466
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "327d31f461dd",
+            "ts": 1789839579.3196476
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "9d9fd042b6c2",
+            "ts": 1789839581.3218856
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "07b854c87197",
+            "ts": 1789839584.7005851
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "9585bd51d767",
+            "ts": 1789839936.5134392
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "327d31f461dd",
+            "ts": 1789839937.4824886
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "9d9fd042b6c2",
+            "ts": 1789839938.1553447
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "07b854c87197",
+            "ts": 1789839938.8303273
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "2c0fbab9a257",
+            "ts": 1789839939.5022306
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "0a43d1190800",
+            "ts": 1789839940.1766684
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "b6e310288436",
+            "ts": 1789839940.8510687
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "1863cd3ddee8",
+            "ts": 1789839945.5016205
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "cdf65074239b",
+            "ts": 1789839946.1717293
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "d3f849086aa6",
+            "ts": 1789839946.8518937
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "c1dde757e084",
+            "ts": 1789839948.4805646
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "a8b70c5b6791",
+            "ts": 1789839949.6825566
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "5b9cc9accbe4",
+            "ts": 1789841249.1605978
+          }
+        ],
+        "engine_calls_at_refusal": 0,
+        "synthesis_calls_at_refusal": 0,
+        "live_sessions": 0,
+        "live_ids": [],
+        "limit": 2
+      },
+      "work_priority": {
+        "max_background": 1,
+        "defer_timeout_s": 30.0,
+        "enabled": true,
+        "voice_turns": 533,
+        "background_units": 87,
+        "deferrals": 29,
+        "deferral_records": [
+          {
+            "label": "text",
+            "waited_ms": 2719.0,
+            "ts": 1789838882.7009027
+          },
+          {
+            "label": "text",
+            "waited_ms": 4328.0,
+            "ts": 1789838892.3568566
+          },
+          {
+            "label": "text",
+            "waited_ms": 2610.0,
+            "ts": 1789838898.724437
+          },
+          {
+            "label": "text",
+            "waited_ms": 7531.0,
+            "ts": 1789838910.100517
+          },
+          {
+            "label": "text",
+            "waited_ms": 3218.0,
+            "ts": 1789838917.2936332
+          },
+          {
+            "label": "text",
+            "waited_ms": 3859.0,
+            "ts": 1789838926.3669066
+          },
+          {
+            "label": "text",
+            "waited_ms": 2718.0,
+            "ts": 1789838933.6144412
+          },
+          {
+            "label": "text",
+            "waited_ms": 3890.0,
+            "ts": 1789838941.3745327
+          },
+          {
+            "label": "text",
+            "waited_ms": 1969.0,
+            "ts": 1789838947.7144866
+          },
+          {
+            "label": "text",
+            "waited_ms": 3297.0,
+            "ts": 1789838955.0797942
+          },
+          {
+            "label": "text",
+            "waited_ms": 2687.0,
+            "ts": 1789838961.668752
+          },
+          {
+            "label": "text",
+            "waited_ms": 4485.0,
+            "ts": 1789838970.0203254
+          },
+          {
+            "label": "text",
+            "waited_ms": 8719.0,
+            "ts": 1789838987.9429216
+          },
+          {
+            "label": "text",
+            "waited_ms": 7312.0,
+            "ts": 1789839003.8366501
+          },
+          {
+            "label": "text",
+            "waited_ms": 2406.0,
+            "ts": 1789839030.8930418
+          },
+          {
+            "label": "text",
+            "waited_ms": 5000.0,
+            "ts": 1789841247.2055204
+          },
+          {
+            "label": "text",
+            "waited_ms": 7906.0,
+            "ts": 1789841266.8415275
+          },
+          {
+            "label": "text",
+            "waited_ms": 3985.0,
+            "ts": 1789841281.6571183
+          },
+          {
+            "label": "text",
+            "waited_ms": 2109.0,
+            "ts": 1789841290.2201884
+          },
+          {
+            "label": "text",
+            "waited_ms": 4297.0,
+            "ts": 1789841298.3200963
+          }
+        ],
+        "refusals": 0,
+        "refusal_records": [],
+        "classification_defects": 0,
+        "classification_defect_records": [],
+        "background_starts_during_voice": 0,
+        "background_start_violation_records": [],
+        "max_background_concurrent": 1,
+        "voice_active": 0,
+        "background_active": 0
+      }
+    },
+    "verdicts": {
+      "US-017 TAC-2 zero background starts during a voice turn": {
+        "holds": true,
+        "detail": "0 violation(s), 2 voice turn(s) in the window"
+      },
+      "US-017 TAC-3 background concurrency never exceeds one": {
+        "holds": true,
+        "detail": "peak background concurrency 1"
+      },
+      "US-017 TAC-6 deferral is recorded, not silent": {
+        "holds": true,
+        "detail": "0 submitted, 0 deferred, 0 refused, 0 answered"
+      },
+      "US-017 TAC-1 classification is total": {
+        "holds": true,
+        "detail": "0 unclassified unit(s)"
+      }
+    }
+  },
+  "app_contract_check": {
+    "checked": [
+      {
+        "file": "voice_handler.py",
+        "name": "silence_threshold_frames",
+        "harness": 30,
+        "app": 30,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "max_utterance_frames",
+        "harness": 300,
+        "app": 300,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "MIN_UTTERANCE_FRAMES",
+        "harness": 15,
+        "app": 15,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "RMS gate",
+        "harness": 80,
+        "app": 80,
+        "status": "ok"
+      }
+    ],
+    "drift": [],
+    "ok": true
+  },
+  "json_path": "",
+  "disclosures": {
+    "carrier_boundary": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
+    "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
+    "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (1308 rows present before the run)"
+  },
+  "notes": [
+    "The app emitted no DAT-07 trace rows for this window, so the N=2 record-separation assertion (TAC-3) is NOT evidenced by this run. Harness-observed first-audio figures still stand.",
+    "BRD-12 RAM: 68% (ceiling 80%) - met",
+    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline.",
+    "A1 re-evaluation 2026-09-19: discarded post-hoc by the A1 rule (empty/partial runs must not read as clean)."
+  ]
+}

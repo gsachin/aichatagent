@@ -1,0 +1,1452 @@
+{
+  "run_id": "20260919T172653Z",
+  "condition": "N=2",
+  "thermal_state": "warm",
+  "turn_count": 32,
+  "first_audio_n": 28,
+  "fixture_sha256": "4071e6e4b55795c1de21f6512dad3d79796695b85feaab32d563199766d61516",
+  "fixtures": [
+    "deadlines-02",
+    "eligibility-03",
+    "escalation-04",
+    "fees-01"
+  ],
+  "fixture_hashes": {
+    "deadlines-02": "d2ba439268f91da1946193ec820f0b8fe54cc21886d2828c4edb86fd9b187623",
+    "eligibility-03": "68f6bcc69ac7bb8f532c7fd599a10932df6352158ce47a80b023f7f26444645d",
+    "escalation-04": "230713c049e90415204c4417be0e3f3ef26080b5902a5f2bf7b3f911780a1139",
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
+  },
+  "fixture_version": {
+    "deadlines-02": 1,
+    "eligibility-03": 1,
+    "escalation-04": 1,
+    "fees-01": 1
+  },
+  "network_profile": "clean",
+  "profile_parameters": {
+    "frame_delay_ms": 0.0,
+    "jitter_ms": 0.0,
+    "loss_percent": 0.0,
+    "reorder_percent": 0.0,
+    "disconnect_at_turns": []
+  },
+  "profile_description": "carrier framing, no injection",
+  "injected_condition": false,
+  "first_audio_ms": {
+    "p50": 9414.5,
+    "p95": 14125.7,
+    "worst": 16640.0,
+    "n": 28,
+    "bucket": "warm"
+  },
+  "cold_first_audio_ms": {
+    "n": 2,
+    "p50": 8757.5,
+    "p95": 9453.6,
+    "worst": 9531.0,
+    "min": 7984.0
+  },
+  "warm_first_audio_ms": {
+    "n": 28,
+    "p50": 9414.5,
+    "p95": 14125.7,
+    "worst": 16640.0,
+    "min": 344.0
+  },
+  "carrier_boundary_excluded": true,
+  "records_separated": true,
+  "separation": {
+    "records_separated": true,
+    "separation_basis": "logs/perf_turns.jsonl",
+    "trace_rows_in_window": 29,
+    "trace_rows_unattributable": 0,
+    "distinct_call_ids": 2,
+    "reasons": [],
+    "detail": "rows attributed by call_id to the session that opened that streamSid; no row unattributed, no call_id shared between sessions, no repeated turn_id"
+  },
+  "turns_over_3000ms": 26,
+  "cap_exceeded": true,
+  "cap_basis": "first_audio_ms > 3000 (BRD-05 per-turn ceiling)",
+  "turns_without_response": 2,
+  "turns_timed_out": 2,
+  "partial": true,
+  "dropped_turns": 168,
+  "discarded": true,
+  "discard_reason": "turn cap exceeded (>3000 ms first audio): A turn 0 = 7984 ms, A turn 1 = 11734 ms, A turn 2 = 11859 ms, A turn 3 = 14328 ms, A turn 4 = 12125 ms (+21 more)",
+  "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report",
+  "readiness": {
+    "url": "ws://127.0.0.1:8000/ws/twilio",
+    "checks": [
+      {
+        "check": "quality-eval lock",
+        "path": "D:\\project\\universityDemo\\eval\\.eval_in_progress",
+        "result": "no lock file present",
+        "note": "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock"
+      },
+      {
+        "check": "tcp reachability",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "result": "listening"
+      }
+    ],
+    "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report"
+  },
+  "frame_audit": {
+    "frames_emitted": 5987,
+    "frames_dropped": 0,
+    "frames_reordered": 0,
+    "frames_late_gt_5ms": 41,
+    "frames_slot_clamped": 5,
+    "max_slot_deviation_ms": 46.813,
+    "worst_session_p95_slot_deviation_ms": 1.122,
+    "harness_fault": true,
+    "tac1_holds": false,
+    "per_session": {
+      "A": {
+        "frames_emitted": 2839,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 15,
+        "frames_late_gt_5ms_from_clamp": 2,
+        "frames_late_gt_5ms_unexplained": 13,
+        "frames_slot_clamped": 3,
+        "max_slot_deviation_ms": 46.239,
+        "p50_slot_deviation_ms": 0.322,
+        "p95_slot_deviation_ms": 1.122,
+        "p99_slot_deviation_ms": 3.202,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 46.239,
+        "p95_harness_deviation_ms": 1.104,
+        "frames_harness_late_gt_5ms": 13,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": false,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      },
+      "B": {
+        "frames_emitted": 3148,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 26,
+        "frames_late_gt_5ms_from_clamp": 2,
+        "frames_late_gt_5ms_unexplained": 24,
+        "frames_slot_clamped": 2,
+        "max_slot_deviation_ms": 46.813,
+        "p50_slot_deviation_ms": 0.301,
+        "p95_slot_deviation_ms": 1.084,
+        "p99_slot_deviation_ms": 3.666,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 46.813,
+        "p95_harness_deviation_ms": 1.075,
+        "frames_harness_late_gt_5ms": 24,
+        "harness_fault": true,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": false,
+        "tac1_pacing_is_sound": false,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      }
+    },
+    "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
+  },
+  "per_session": [
+    {
+      "label": "A",
+      "turn_count": 13,
+      "planned_turns": 100,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ607b9376b8c374380f48971f3b84f1"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 11,
+        "p50": 12344.0,
+        "p95": 14039.0,
+        "worst": 14328.0,
+        "min": 7828.0
+      },
+      "cold": {
+        "n": 1,
+        "p50": 7984.0,
+        "p95": 7984.0,
+        "worst": 7984.0,
+        "min": 7984.0
+      },
+      "turns_over_3000ms": 12,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 4193
+      },
+      "turns": [
+        {
+          "session_label": "A",
+          "turn_index": 0,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "cold",
+          "first_audio_ms": 7984.0,
+          "turn_total_ms": 7984.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 261489.156,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 1,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 1,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": 11734.0,
+          "turn_total_ms": 11734.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 308,
+          "speech_frames": 170,
+          "segment_s": 6.16,
+          "t_speech_end": 261503.109,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 2,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 0,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 11859.0,
+          "turn_total_ms": 11859.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 219,
+          "speech_frames": 140,
+          "segment_s": 4.38,
+          "t_speech_end": 261519.031,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 3,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 1,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 14328.0,
+          "turn_total_ms": 14328.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 142,
+          "speech_frames": 100,
+          "segment_s": 2.84,
+          "t_speech_end": 261533.515,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 4,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": 12125.0,
+          "turn_total_ms": 12125.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 261551.812,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 5,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 1,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": 13156.0,
+          "turn_total_ms": 13156.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 308,
+          "speech_frames": 170,
+          "segment_s": 6.16,
+          "t_speech_end": 261569.89,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 6,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 0,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 12344.0,
+          "turn_total_ms": 12344.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 219,
+          "speech_frames": 140,
+          "segment_s": 4.38,
+          "t_speech_end": 261587.265,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 7,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 1,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 12703.0,
+          "turn_total_ms": 12703.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 142,
+          "speech_frames": 100,
+          "segment_s": 2.84,
+          "t_speech_end": 261602.265,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 8,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": 7828.0,
+          "turn_total_ms": 7828.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 261618.968,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 9,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 1,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": 9000.0,
+          "turn_total_ms": 9000.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 308,
+          "speech_frames": 170,
+          "segment_s": 6.16,
+          "t_speech_end": 261632.781,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 10,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 0,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 13750.0,
+          "turn_total_ms": 13750.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 219,
+          "speech_frames": 140,
+          "segment_s": 4.38,
+          "t_speech_end": 261645.968,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 11,
+          "fixture_id": "escalation-04",
+          "fixture_turn_index": 1,
+          "intent": "Escalation / handoff to human",
+          "thermal": "warm",
+          "first_audio_ms": 13281.0,
+          "turn_total_ms": 13281.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 142,
+          "speech_frames": 100,
+          "segment_s": 2.84,
+          "t_speech_end": 261662.359,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "A",
+          "turn_index": 12,
+          "fixture_id": "deadlines-02",
+          "fixture_turn_index": 0,
+          "intent": "Important dates / deadlines",
+          "thermal": "warm",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 208,
+          "speech_frames": 120,
+          "segment_s": 4.16,
+          "t_speech_end": 261679.609,
+          "stream_sid": "MZ607b9376b8c374380f48971f3b84f1",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    },
+    {
+      "label": "B",
+      "turn_count": 19,
+      "planned_turns": 100,
+      "completed": false,
+      "connected": true,
+      "error": "reader: ConnectionClosedError: received 1011 (internal error) keepalive ping timeout; then sent 1011 (internal error) keepalive ping timeout",
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZ7f840490789fff9756cd63ab46c628"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 17,
+        "p50": 5704.0,
+        "p95": 12390.4,
+        "worst": 16640.0,
+        "min": 344.0
+      },
+      "cold": {
+        "n": 1,
+        "p50": 9531.0,
+        "p95": 9531.0,
+        "worst": 9531.0,
+        "min": 9531.0
+      },
+      "turns_over_3000ms": 14,
+      "turns_without_response": 1,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 12703
+      },
+      "turns": [
+        {
+          "session_label": "B",
+          "turn_index": 0,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 0,
+          "intent": "Admission process / eligibility",
+          "thermal": "cold",
+          "first_audio_ms": 9531.0,
+          "turn_total_ms": 9531.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 232,
+          "speech_frames": 120,
+          "segment_s": 4.64,
+          "t_speech_end": 261490.078,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 1,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 1,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 1906.0,
+          "turn_total_ms": 1906.0,
+          "exceeded_cap": false,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 93,
+          "speech_frames": 10,
+          "segment_s": 1.86,
+          "t_speech_end": 261501.25,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 2,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 9391.0,
+          "turn_total_ms": 9391.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 261507.046,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 3,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 1,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 344.0,
+          "turn_total_ms": 344.0,
+          "exceeded_cap": false,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 168,
+          "speech_frames": 110,
+          "segment_s": 3.36,
+          "t_speech_end": 261519.593,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 4,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 2,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 11328.0,
+          "turn_total_ms": 11328.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 120,
+          "speech_frames": 90,
+          "segment_s": 2.4,
+          "t_speech_end": 261522.156,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 5,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 0,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 11063.0,
+          "turn_total_ms": 11063.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 232,
+          "speech_frames": 120,
+          "segment_s": 4.64,
+          "t_speech_end": 261537.921,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 6,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 1,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 5109.0,
+          "turn_total_ms": 5109.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 93,
+          "speech_frames": 10,
+          "segment_s": 1.86,
+          "t_speech_end": 261550.656,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 7,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 5704.0,
+          "turn_total_ms": 5704.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 261559.671,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 8,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 1,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 2860.0,
+          "turn_total_ms": 2860.0,
+          "exceeded_cap": false,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 168,
+          "speech_frames": 110,
+          "segment_s": 3.36,
+          "t_speech_end": 261568.593,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 9,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 2,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 9438.0,
+          "turn_total_ms": 9438.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 120,
+          "speech_frames": 90,
+          "segment_s": 2.4,
+          "t_speech_end": 261573.671,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 10,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 0,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 3062.0,
+          "turn_total_ms": 3062.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 232,
+          "speech_frames": 120,
+          "segment_s": 4.64,
+          "t_speech_end": 261587.578,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 11,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 1,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 6453.0,
+          "turn_total_ms": 6453.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 93,
+          "speech_frames": 10,
+          "segment_s": 1.86,
+          "t_speech_end": 261592.328,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 12,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 10937.0,
+          "turn_total_ms": 10937.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 261602.656,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 13,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 1,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 3812.0,
+          "turn_total_ms": 3812.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 168,
+          "speech_frames": 110,
+          "segment_s": 3.36,
+          "t_speech_end": 261616.859,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 14,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 2,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 4875.0,
+          "turn_total_ms": 4875.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 120,
+          "speech_frames": 90,
+          "segment_s": 2.4,
+          "t_speech_end": 261622.921,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 15,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 0,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 2437.0,
+          "turn_total_ms": 2437.0,
+          "exceeded_cap": false,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 232,
+          "speech_frames": 120,
+          "segment_s": 4.64,
+          "t_speech_end": 261632.25,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 16,
+          "fixture_id": "eligibility-03",
+          "fixture_turn_index": 1,
+          "intent": "Admission process / eligibility",
+          "thermal": "warm",
+          "first_audio_ms": 7421.0,
+          "turn_total_ms": 7421.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 93,
+          "speech_frames": 10,
+          "segment_s": 1.86,
+          "t_speech_end": 261636.375,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 17,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": 16640.0,
+          "turn_total_ms": 16640.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 261647.703,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": ""
+        },
+        {
+          "session_label": "B",
+          "turn_index": 18,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 1,
+          "intent": "Fees structure",
+          "thermal": "warm",
+          "first_audio_ms": null,
+          "turn_total_ms": null,
+          "exceeded_cap": false,
+          "responded": false,
+          "timed_out": true,
+          "responses_seen": 0,
+          "expected_responses": 1,
+          "sent_frames": 168,
+          "speech_frames": 110,
+          "segment_s": 3.36,
+          "t_speech_end": 261667.578,
+          "stream_sid": "MZ7f840490789fff9756cd63ab46c628",
+          "new_session": false,
+          "note": "no response within 45000 ms - the turn was played but the app produced no audio for it"
+        }
+      ]
+    }
+  ],
+  "target_turns_per_session": 100,
+  "powered": false,
+  "url": "ws://127.0.0.1:8000/ws/twilio",
+  "started_at": "2026-09-19T17:26:53Z",
+  "ended_at": "2026-09-19T17:31:35Z",
+  "wall_seconds": 281.99,
+  "harness_version": "us002-harness/1.0.0",
+  "harness_sha256": "becc65dfb499c592f450e9605beb36f6a44a03f594e177377ee33cd232b408f8",
+  "extra_load": {
+    "background_units": {
+      "submitted": 40,
+      "answered": 40,
+      "refused_or_empty": 0,
+      "errors": [],
+      "error_count": 0,
+      "basis": "text queries driven through /ws/voice/text during a live call pair; the app classifies them as background"
+    },
+    "app_records": {
+      "refusals": 0,
+      "admitted": 0,
+      "asset_plays": 9,
+      "live_sessions_after": 0,
+      "bg_units": 40,
+      "bg_deferrals": 19,
+      "bg_refusals": 0,
+      "bg_started_during_voice": 0,
+      "bg_max_concurrent": 1,
+      "voice_turns": 30,
+      "classification_defects": 0
+    },
+    "app_records_raw": {
+      "admission": {
+        "enabled": true,
+        "max_concurrent_calls": 2,
+        "assets": {
+          "busy.wav": {
+            "present": true,
+            "sha256": "8f95c7d09cd83a6900cb15de4b0758f1fb9c14f0a05ed11cf81c09c2725dfa74"
+          },
+          "fixed_response.wav": {
+            "present": true,
+            "sha256": "337ebb36616b2817aa9f877b184416a49e2b31568fceafd90c2f798d4c5f8375"
+          }
+        },
+        "asset_drift": null,
+        "outcomes": {
+          "served": 290,
+          "degraded": 10,
+          "failed": 0,
+          "refused": 24
+        },
+        "decisions": 24,
+        "admitted": 0,
+        "decision_records": [
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789836180.8221312
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789836184.673215
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9d9fd042b6c2",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789836187.3521652
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837174.9566076
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837179.4346855
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837466.615274
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837471.494568
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9d9fd042b6c2",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837474.1564057
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9585bd51d767",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837850.3544686
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "327d31f461dd",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837851.0238335
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "9d9fd042b6c2",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837851.6797087
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "07b854c87197",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837852.3476753
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "2c0fbab9a257",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837853.020141
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "0a43d1190800",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837854.8509834
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "b6e310288436",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837855.546776
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "1863cd3ddee8",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837856.509377
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "cdf65074239b",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837857.1760268
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "d3f849086aa6",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837857.8431323
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "c1dde757e084",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837858.5091105
+          },
+          {
+            "outcome": "refused",
+            "live_at_decision": 2,
+            "limit": 2,
+            "caller_ref": "a8b70c5b6791",
+            "reason": "2 session(s) live at the 2-call limit",
+            "ts": 1789837860.5053995
+          }
+        ],
+        "asset_plays": 34,
+        "asset_play_records": [
+          {
+            "asset": "busy.wav",
+            "caller_ref": "327d31f461dd",
+            "ts": 1789837851.0238335
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "9d9fd042b6c2",
+            "ts": 1789837851.6797087
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "07b854c87197",
+            "ts": 1789837852.3476753
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "2c0fbab9a257",
+            "ts": 1789837853.020141
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "0a43d1190800",
+            "ts": 1789837854.8509834
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "b6e310288436",
+            "ts": 1789837855.546776
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "1863cd3ddee8",
+            "ts": 1789837856.509377
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "cdf65074239b",
+            "ts": 1789837857.1760268
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "d3f849086aa6",
+            "ts": 1789837857.8431323
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "c1dde757e084",
+            "ts": 1789837858.5091105
+          },
+          {
+            "asset": "busy.wav",
+            "caller_ref": "a8b70c5b6791",
+            "ts": 1789837860.5053995
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838827.3413947
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838861.0854177
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838878.0429528
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838894.140448
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "625570c2d358",
+            "ts": 1789838928.978736
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838957.000863
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838971.983941
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789838989.9103637
+          },
+          {
+            "asset": "fixed_response.wav",
+            "caller_ref": "3f469da1ef18",
+            "ts": 1789839005.842469
+          }
+        ],
+        "engine_calls_at_refusal": 0,
+        "synthesis_calls_at_refusal": 0,
+        "live_sessions": 0,
+        "live_ids": [],
+        "limit": 2
+      },
+      "work_priority": {
+        "max_background": 1,
+        "defer_timeout_s": 30.0,
+        "enabled": true,
+        "voice_turns": 300,
+        "background_units": 46,
+        "deferrals": 24,
+        "deferral_records": [
+          {
+            "label": "text",
+            "waited_ms": 1938.0,
+            "ts": 1789836435.8535945
+          },
+          {
+            "label": "text",
+            "waited_ms": 3610.0,
+            "ts": 1789838825.3597312
+          },
+          {
+            "label": "text",
+            "waited_ms": 7937.0,
+            "ts": 1789838842.173514
+          },
+          {
+            "label": "text",
+            "waited_ms": 8000.0,
+            "ts": 1789838858.9962318
+          },
+          {
+            "label": "text",
+            "waited_ms": 7234.0,
+            "ts": 1789838876.1371527
+          },
+          {
+            "label": "text",
+            "waited_ms": 2719.0,
+            "ts": 1789838882.7009027
+          },
+          {
+            "label": "text",
+            "waited_ms": 4328.0,
+            "ts": 1789838892.3568566
+          },
+          {
+            "label": "text",
+            "waited_ms": 2610.0,
+            "ts": 1789838898.724437
+          },
+          {
+            "label": "text",
+            "waited_ms": 7531.0,
+            "ts": 1789838910.100517
+          },
+          {
+            "label": "text",
+            "waited_ms": 3218.0,
+            "ts": 1789838917.2936332
+          },
+          {
+            "label": "text",
+            "waited_ms": 3859.0,
+            "ts": 1789838926.3669066
+          },
+          {
+            "label": "text",
+            "waited_ms": 2718.0,
+            "ts": 1789838933.6144412
+          },
+          {
+            "label": "text",
+            "waited_ms": 3890.0,
+            "ts": 1789838941.3745327
+          },
+          {
+            "label": "text",
+            "waited_ms": 1969.0,
+            "ts": 1789838947.7144866
+          },
+          {
+            "label": "text",
+            "waited_ms": 3297.0,
+            "ts": 1789838955.0797942
+          },
+          {
+            "label": "text",
+            "waited_ms": 2687.0,
+            "ts": 1789838961.668752
+          },
+          {
+            "label": "text",
+            "waited_ms": 4485.0,
+            "ts": 1789838970.0203254
+          },
+          {
+            "label": "text",
+            "waited_ms": 8719.0,
+            "ts": 1789838987.9429216
+          },
+          {
+            "label": "text",
+            "waited_ms": 7312.0,
+            "ts": 1789839003.8366501
+          },
+          {
+            "label": "text",
+            "waited_ms": 2406.0,
+            "ts": 1789839030.8930418
+          }
+        ],
+        "refusals": 0,
+        "refusal_records": [],
+        "classification_defects": 0,
+        "classification_defect_records": [],
+        "background_starts_during_voice": 0,
+        "background_start_violation_records": [],
+        "max_background_concurrent": 1,
+        "voice_active": 0,
+        "background_active": 0
+      }
+    },
+    "verdicts": {
+      "US-017 TAC-2 zero background starts during a voice turn": {
+        "holds": true,
+        "detail": "0 violation(s), 30 voice turn(s) in the window"
+      },
+      "US-017 TAC-3 background concurrency never exceeds one": {
+        "holds": true,
+        "detail": "peak background concurrency 1"
+      },
+      "US-017 TAC-6 deferral is recorded, not silent": {
+        "holds": true,
+        "detail": "40 submitted, 19 deferred, 0 refused, 40 answered"
+      },
+      "US-017 TAC-1 classification is total": {
+        "holds": true,
+        "detail": "0 unclassified unit(s)"
+      }
+    }
+  },
+  "app_contract_check": {
+    "checked": [
+      {
+        "file": "voice_handler.py",
+        "name": "silence_threshold_frames",
+        "harness": 30,
+        "app": 30,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "max_utterance_frames",
+        "harness": 300,
+        "app": 300,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "MIN_UTTERANCE_FRAMES",
+        "harness": 15,
+        "app": 15,
+        "status": "ok"
+      },
+      {
+        "file": "voice_handler.py",
+        "name": "RMS gate",
+        "harness": 80,
+        "app": 80,
+        "status": "ok"
+      }
+    ],
+    "drift": [],
+    "ok": true
+  },
+  "json_path": "",
+  "disclosures": {
+    "carrier_boundary": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
+    "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
+    "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (1049 rows present before the run)"
+  },
+  "notes": [
+    "DISCARDED RUN - no latency claim may be taken from it (a discarded run is not a passing run).",
+    "BRD-12 RAM: 80% (ceiling 80%) - met",
+    "UNDERPOWERED: 28 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+  ]
+}

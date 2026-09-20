@@ -2072,6 +2072,30 @@ def build_summary(
     reasons: list[str] = []
     if separation.get("records_separated") is False:
         reasons.extend(separation.get("reasons") or ["trace records interleaved"])
+
+    # A run that measured nothing is not a passing run. Both conditions below were
+    # previously invisible to this rule, which keyed only on the turn cap and on
+    # record separation. The consequence was observed, not hypothetical: the only
+    # two harness-clean N=2 runs in the store (`20260919T181605Z`, `20260919T182610Z`
+    # -- `harness_fault: false`, `tac1_holds: true`, zero late frames) carry
+    # `first_audio_n: 0`, `dropped_turns: 200`, `partial: true` -- and
+    # `discarded: false`. Both sessions died on a 1011 keepalive ping timeout, so
+    # enumerating the store for `discarded != true` returned two empty runs as the
+    # only valid evidence in it. An empty run must never read as a clean one.
+    if not headline:
+        reasons.append(
+            "no usable first-audio samples: the run produced nothing to measure "
+            f"({len(turns)} turn observation(s) across {len(results)} session(s))"
+        )
+    elif partial:
+        detail: list[str] = []
+        if dropped:
+            detail.append(f"{dropped} planned turn(s) never arrived")
+        unfinished = [r.label for r in results if not r.completed]
+        if unfinished:
+            detail.append("session(s) did not complete: " + ", ".join(unfinished))
+        reasons.append("partial run: " + "; ".join(detail))
+
     if cap_hits:
         reasons.append(
             "turn cap exceeded (>"
@@ -3186,6 +3210,10 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     out["t18_profile_named_beside_the_hash"] = (
         d["network_profile"] == "loss_2pct" and d["profile_parameters"]["loss_percent"] == 2.0)
     out["tac9_injected_run_is_flagged"] = d["injected_condition"] is True
+    # A1 (2026-09-19): provenance. Every summary self-records the hash of the file that
+    # built it; a summary whose hash differs was produced by a different harness revision.
+    out["a1_fresh_summary_records_current_harness_hash"] = (
+        d["harness_sha256"] == _file_sha256(Path(__file__)))
     out["clean_profile_states_clean"] = build(
         [result("A", [obs("A", "warm", 900.0)])],
         clean_sep).network_profile in PROFILES
@@ -3211,6 +3239,34 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     absent = build([result("A", [obs("A", "warm", 900.0)])], {"records_separated": None,
                                                              "reasons": [], "trace_rows_in_window": 0})
     out["absent_trace_rows_are_unknown_not_separated"] = absent.records_separated is None
+
+    # ── A1 (2026-09-19): a run that measured nothing must not read as a clean run.
+    # The two harness-clean runs in the store are exactly this shape.
+    empty = build([result("A", [])], clean_sep)
+    out["a1_empty_run_is_discarded"] = (
+        empty.discarded and empty.first_audio_n == 0
+        and "no usable first-audio samples" in (empty.discard_reason or ""))
+
+    short = SessionResult(label="A", turns=[obs("A", "warm", 900.0)], stream_sids=["MZA"],
+                          connected=True, planned_turns=3, completed=True)
+    dropped_run = build([short], clean_sep)
+    out["a1_dropped_turns_discard_the_run"] = (
+        dropped_run.partial and dropped_run.discarded
+        and "partial run" in (dropped_run.discard_reason or "")
+        and "never arrived" in (dropped_run.discard_reason or ""))
+
+    aborted = SessionResult(label="B", turns=[obs("B", "warm", 900.0)], stream_sids=["MZB"],
+                            connected=True, planned_turns=1, completed=False)
+    aborted_run = build([aborted], clean_sep)
+    out["a1_incomplete_session_discards_the_run"] = (
+        aborted_run.partial and aborted_run.discarded
+        and "did not complete" in (aborted_run.discard_reason or ""))
+
+    # NEGATIVE CONTROL: the rule must not discard a run that did measure something,
+    # or it would retire the entire store. `s` above is a clean, powered, complete run.
+    out["a1_clean_run_is_not_discarded"] = (
+        not s.discarded and s.first_audio_n > 0 and not s.partial
+        and s.discard_reason is None)
     return out
 
 

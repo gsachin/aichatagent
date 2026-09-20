@@ -1,21 +1,18 @@
 {
-  "run_id": "20260919T061216Z",
+  "run_id": "20260919T093509Z",
   "condition": "N=2",
   "thermal_state": "cold",
   "turn_count": 0,
   "first_audio_n": 0,
-  "fixture_sha256": "57c12ef9d96a56f08ec453d5661b8fa2bc577bf809acd904c196442665dc4abc",
+  "fixture_sha256": "46fb579d34a3d59b97917aa58f50e4b295e35ff273a257f43c3cfbd389aaed5d",
   "fixtures": [
-    "fees-01",
-    "deadlines-02"
+    "fees-01"
   ],
   "fixture_hashes": {
-    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce",
-    "deadlines-02": "d2ba439268f91da1946193ec820f0b8fe54cc21886d2828c4edb86fd9b187623"
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
   },
   "fixture_version": {
-    "fees-01": 1,
-    "deadlines-02": 1
+    "fees-01": 1
   },
   "network_profile": "clean",
   "profile_parameters": {
@@ -68,26 +65,11 @@
   "turns_timed_out": 0,
   "partial": true,
   "dropped_turns": 4,
-  "discarded": false,
-  "discard_reason": null,
-  "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report",
+  "discarded": true,
+  "discard_reason": "no usable first-audio samples: the run produced nothing to measure (0 turn observation(s)) [A1 post-hoc re-evaluation]",
+  "stack_readiness": "not checked (warm_gate=False)",
   "readiness": {
-    "url": "ws://127.0.0.1:8000/ws/twilio",
-    "checks": [
-      {
-        "check": "quality-eval lock",
-        "path": "D:\\project\\universityDemo\\eval\\.eval_in_progress",
-        "result": "no lock file present",
-        "note": "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock"
-      },
-      {
-        "check": "tcp reachability",
-        "host": "127.0.0.1",
-        "port": 8000,
-        "result": "listening"
-      }
-    ],
-    "stack_readiness": "assumed - no readiness surface exists (US-007 is NOT STARTED; the app exposes no /health or /ready endpoint), so this run cannot certify the stack was warm. Treat 'warm' figures from it as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report"
+    "stack_readiness": "not checked (warm_gate=False)"
   },
   "frame_audit": {
     "frames_emitted": 0,
@@ -167,7 +149,7 @@
       "error": "connect: TimeoutError: timed out during opening handshake",
       "dropped_by_harness": false,
       "stream_sids": [
-        "MZd0a7484645447a6ad588c69c7a9de8"
+        "MZe7a61f06d4ce7a0fd8dcd59822961d"
       ],
       "reconnects": 0,
       "reconnect_events": [],
@@ -200,7 +182,7 @@
       "error": "connect: TimeoutError: timed out during opening handshake",
       "dropped_by_harness": false,
       "stream_sids": [
-        "MZ32a726e13c72a9312ab4f1ba527bc0"
+        "MZac7c9269edcf8c6ddc9a3ce6b42ecc"
       ],
       "reconnects": 0,
       "reconnect_events": [],
@@ -228,11 +210,11 @@
   "target_turns_per_session": 2,
   "powered": false,
   "url": "ws://127.0.0.1:8000/ws/twilio",
-  "started_at": "2026-09-19T06:12:16Z",
-  "ended_at": "2026-09-19T06:12:31Z",
-  "wall_seconds": 15.04,
+  "started_at": "2026-09-19T09:35:09Z",
+  "ended_at": "2026-09-19T09:35:24Z",
+  "wall_seconds": 15.07,
   "harness_version": "us002-harness/1.0.0",
-  "harness_sha256": "46b2e29b11b098c4824518ed4a34a1b5f972a71af34ef9431885e2f8097cefed",
+  "harness_sha256": "5fcd3d4d4c47d46d91960be807ed6ea9b4afca724979c1ddc76207bccd9b0c0c",
   "app_contract_check": {
     "checked": [
       {
@@ -273,10 +255,11 @@
     "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
     "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
     "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
-    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (3 rows present before the run)"
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (file absent at run start)"
   },
   "notes": [
     "The app emitted no DAT-07 trace rows for this window, so the N=2 record-separation assertion (TAC-3) is NOT evidenced by this run. Harness-observed first-audio figures still stand.",
-    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+    "UNDERPOWERED: 0 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline.",
+    "A1 re-evaluation 2026-09-19: discarded post-hoc by the A1 rule (empty/partial runs must not read as clean)."
   ]
 }
