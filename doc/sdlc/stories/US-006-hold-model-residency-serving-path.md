@@ -2,7 +2,7 @@
 
 # US-006 — Hold model residency on the serving path [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified; BRD-15 demonstrated** · `test_us006_residency.py` 11/11 · DoD 5/8 · LLD mapping and the latency TACs are open
+- **Status:** **IMPLEMENTED - ACs verified; BRD-15 demonstrated** · `test_us006_residency.py` 12/12 · DoD 5/8 · LLD mapping and the latency TACs are open
 
 - **Story:** As a **caller who dials after the service has been idle**, I want **the model to still be in VRAM when my call arrives**, so that **I am not the person who waits 33 seconds of silence for a load that the operator already paid for at boot**.
 - **Business value:** The cold load is the single largest stall in the system: a measured **32,919 ms** to load and **67,349 ms** to first token. It is long enough that a caller hangs up. `BRD-17` says the prompt prefix shall be resident before the first call is accepted; `BRD-03` says the first turn of a call shall fall within the same p95 as a warm turn.

@@ -417,7 +417,28 @@ def get_embedding_function():
     if provider_name() == "ollama":
         from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
-        return OllamaEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
+        # A5 (2026-09-19): chromadb's OllamaEmbeddingFunction posts
+        # /api/embeddings WITHOUT keep_alive, so every retrieval reset the
+        # embed model to the server's 5-minute default and the next caller
+        # paid a cold embed load (~1-3 s on this box, observed in the Ollama
+        # server log). The subclass pins the same lease the chat path holds.
+        class _HeldEmbeddingFunction(OllamaEmbeddingFunction):
+            def __call__(self, input):
+                import httpx
+
+                base = self._base_url.rstrip("/")
+                url = (base if base.endswith("/api/embeddings")
+                       else f"{base}/api/embeddings")
+                with httpx.Client(timeout=60) as client:
+                    resp = client.post(
+                        url,
+                        json={"model": self.model_name, "input": input,
+                              "keep_alive": KEEP_ALIVE},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()["embeddings"]
+
+        return _HeldEmbeddingFunction(model_name=EMBED_MODEL, url=OLLAMA_BASE_URL)
 
     global _st_embedding_function
     if _st_embedding_function is None:
@@ -444,7 +465,10 @@ def get_langchain_embeddings():
     if provider_name() == "ollama":
         from langchain_ollama import OllamaEmbeddings
 
-        return OllamaEmbeddings(model=EMBED_MODEL)
+        # A5 (2026-09-19): keep_alive is passed explicitly -- without it every
+        # embed request resets the model to the server's 5-minute default and
+        # the next retrieval pays a cold embed load.
+        return OllamaEmbeddings(model=EMBED_MODEL, keep_alive=KEEP_ALIVE)
 
     from langchain_core.embeddings import Embeddings
 

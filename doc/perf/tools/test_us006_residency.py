@@ -22,7 +22,34 @@ PROJ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 sys.path.insert(0, PROJ)
 os.chdir(PROJ)
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
+def _serving_model() -> str:
+    """The model the serving path actually resolves, never a test-side guess.
+
+    Resolution order mirrors the app: the environment, then `.env` (loaded at
+    boot by `boot_readiness.load_env`), then the app's shipped default. The old
+    fallback here was the literal ``"qwen2.5:14b"`` (A5, 2026-09-19): this suite
+    runs under `test_doc_truth.py` as a bare subprocess with no `.env`, so every
+    doc-truth run loaded 9 GB of a model no code path requests, pinned it with
+    keep_alive=-1, and left it resident -- exactly the orphan A5 exists to kill.
+    """
+    val = os.environ.get("OLLAMA_MODEL", "").strip()
+    if val:
+        return val
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(os.path.join(PROJ, ".env"))
+        val = os.environ.get("OLLAMA_MODEL", "").strip()
+    except Exception:
+        pass
+    if val:
+        return val
+    import app.llm_backend as lb
+
+    return lb.OLLAMA_MODEL
+
+
+MODEL = _serving_model()
 passed = failed = 0
 
 
@@ -64,6 +91,8 @@ def unload(model=MODEL):
 
 # --- TAC-3 (static half): the serving path always sends a keep-alive ---------
 import app.llm_backend as lb                                     # noqa: E402
+check("A5 the suite drives the app's own model resolution, never a guess",
+      MODEL == lb.OLLAMA_MODEL, f"suite={MODEL!r} app={lb.OLLAMA_MODEL!r}")
 check("T-5/TAC-3 KEEP_ALIVE resolves from config", lb.KEEP_ALIVE not in (None, ""),
       repr(lb.KEEP_ALIVE))
 # Regression guard for the bug this test found: a .env value is always a string,
@@ -91,7 +120,11 @@ check("T-4/TAC-4 model is NOT resident before the test (clean floor)",
 print("  [probe] one generation through the serving path...")
 t0 = time.time()
 try:
-    lb.chat([{"role": "user", "content": "Say OK."}], model=MODEL, num_ctx=2048)
+    # num_ctx omitted deliberately (A5): the serving path uses the configured
+    # DEFAULT_NUM_CTX, and a request with a different ctx would spawn a SECOND
+    # Ollama instance beside the resident one -- measuring a path the caller
+    # never hits while paying a thrash the serving path never pays.
+    lb.chat([{"role": "user", "content": "Say OK."}], model=MODEL)
     call_ok = True
 except Exception as exc:
     call_ok = False
@@ -117,7 +150,7 @@ if row:
 
 # --- TAC-6: re-warm is idempotent -------------------------------------------
 before = ps_row()
-lb.chat([{"role": "user", "content": "Say OK again."}], model=MODEL, num_ctx=2048)
+lb.chat([{"role": "user", "content": "Say OK again."}], model=MODEL)
 after = ps_row()
 check("T-6/TAC-6 a second call does not evict or duplicate residency",
       before is not None and after is not None)

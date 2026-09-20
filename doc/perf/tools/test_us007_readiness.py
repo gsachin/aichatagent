@@ -86,6 +86,12 @@ def baseline():
     stub_warm()
     stub_config()
     stub_gpu()          # awake by default; the GPU cases override it
+    # A5: the embed-residency check reads /api/ps directly. Stubbed so this
+    # suite stays hermetic (no network, no model) -- the REAL read is what
+    # the live gate performs, and check_embed_residency's parsing is what the
+    # A5 checks below exercise.
+    br.ollama_ps = lambda base_url="http://127.0.0.1:11434": [
+        {"name": "qwen2.5:14b"}, {"name": "nomic-embed-text:latest"}]
 
 
 print("\nUS-007 readiness gate\n")
@@ -278,6 +284,28 @@ check("TAC-1    a refresh that finds an unread key flips NOT READY",
 check("Phase 1.1  a bare assessment reports the harness's status word",
       br.refresh_payload({}, br.assess(do_warm=False))["status"] in
       ("ready", "not_ready"))
+
+# ── A5 / the embed model's residency is asserted (reported, not blocking) ──
+# The retrieval embed model (nomic-embed-text) used to carry the server's
+# 5-minute lease on every request, so the first retrieval of each session paid
+# a cold embed load that nothing reported. The gate now reads its residency
+# from the engine and names a lapse as a degradation -- never a block, because
+# a cold embed slows retrieval rather than failing it (TAC-7 philosophy).
+baseline()
+r = br.assess()
+check("A5  a resident embed model is reported from the engine",
+      r.embed.get("resident") is True and "nomic" in r.embed.get("model", ""))
+check("A5  the operator's report carries the embed residency line",
+      "embed model" in br.render(r))
+
+baseline()
+br.ollama_ps = lambda base_url="http://127.0.0.1:11434": [{"name": "qwen2.5:14b"}]
+r = br.assess()
+check("A5  a lapsed embed model is NAMED and degrades, never blocks",
+      r.embed.get("resident") is False
+      and any("embed model" in d for d in r.degraded)
+      and r.clauses.get("residency") is True
+      and r.ready is True)
 
 print(f"\n{passed} passed, {failed} failed\n")
 sys.exit(1 if failed else 0)

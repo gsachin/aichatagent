@@ -71,6 +71,7 @@ class Readiness:
     services: list = field(default_factory=list)
     model: dict = field(default_factory=dict)
     prefix: dict = field(default_factory=dict)
+    embed: dict = field(default_factory=dict)
     gpu: dict = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     missing: list = field(default_factory=list)
@@ -358,6 +359,31 @@ def effective_config_rows() -> list[dict]:
 
 # ── The gate ───────────────────────────────────────────────────────────────
 
+def check_embed_residency(base_url: str = "http://127.0.0.1:11434") -> dict:
+    """The retrieval embed model's residency, from the engine (A5, 2026-09-19).
+
+    Every retrieval depends on `EMBED_MODEL` (nomic-embed-text), and its lease
+    used to be the server's 5-minute default on every embed request, so the
+    first retrieval of each session paid a cold embed load (~1-3 s on this
+    box) that nothing reported. The lease is now held on the embed path; this
+    check asserts residency so a lapse is a named, visible degradation instead
+    of an invisible first-turn cost. Reported, never blocking: a cold embed
+    slows retrieval, it does not fail it (TAC-7 philosophy).
+    """
+    from app.llm_backend import EMBED_MODEL
+
+    out: dict = {"model": EMBED_MODEL, "resident": False, "detail": None}
+    ps = ollama_ps(base_url)
+    hit = next((m for m in ps if str(m.get("name", "")).split(":")[0]
+                == EMBED_MODEL.split(":")[0]), None)
+    out["resident"] = hit is not None
+    if hit:
+        out["detail"] = {"expires_at": hit.get("expires_at"),
+                         "size_bytes": hit.get("size"),
+                         "size_vram": hit.get("size_vram")}
+    return out
+
+
 def assess(do_warm: bool = True) -> Readiness:
     """Evaluate all four clauses. Never raises; never assumes success."""
     load_env()
@@ -445,6 +471,15 @@ def assess(do_warm: bool = True) -> Readiness:
     except Exception as exc:                          # noqa: BLE001
         r.degraded.append(f"call assets: check failed ({type(exc).__name__}: {exc})")
 
+    # A5 (2026-09-19): the retrieval embed model is asserted too -- reported,
+    # never blocking (a cold embed slows the first retrieval, it does not fail
+    # it). The chat model's residency remains the blocking clause 2.
+    r.embed = check_embed_residency()
+    if not r.embed.get("resident"):
+        r.degraded.append(
+            f"embed model {r.embed.get('model')} is NOT resident per /api/ps — "
+            f"the first retrieval of the next call pays a cold embed load")
+
     r.ready = all(r.clauses.values())
     return r
 
@@ -493,6 +528,10 @@ def render(r: Readiness) -> str:
                   "confirm_prefill_ms", "speedup", "warm", "error"):
             if k in r.prefix:
                 lines.append(f"    {k:<18} {r.prefix[k]}")
+    if r.embed:
+        verdict = "resident" if r.embed.get("resident") else "NOT RESIDENT"
+        lines.append(f"  embed model: {r.embed.get('model')} -> {verdict} "
+                     f"(reported; degrades the first retrieval when cold)")
     if r.gpu:
         g = r.gpu
         if g.get("available"):
