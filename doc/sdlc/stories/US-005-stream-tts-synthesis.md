@@ -2,7 +2,7 @@
 
 # US-005 — Stream TTS synthesis onto the first-audio path [Lens: PO]
 
-- **Status:** **BLOCKED - `DG-03` (adoption); BUILD APPROVED behind flags (2026-09-19, Phase 4a PO ruling)** — timing-only change (`TTS_STREAM` flag), batch path retained for BRD-15; adoption still gated on `DG-03` (changes what the caller hears)
+- **Status:** **PARTIAL — BUILT BEHIND `TTS_STREAM` (2026-09-20); adoption BLOCKED - `DG-03` (changes what the caller hears)** · `test_us005_stream_tts.py` 25/25 · batch path retained for BRD-15 (the flag is the revert) · Live N=2 warm, stream on: first-audio **p50 2,250 ms** (batch 2,453), **p90 3,360** (batch 3,891), over-cap **13%** (batch 27%); `llm_done → tts_first_chunk` **p50 438 ms** (target ≤400) · Known limit, recorded: kokoro's own stream batches a whole short answer into ONE chunk, so streaming synthesises PER SENTENCE (`_split_sentences`); sentence 2+ synthesise after sentence 1's frames are written, not in true parallel — the full overlap arrives with US-004's clause cutter, whose interface this stream already is
 
 - **Story:** As a **caller listening for a reply**, I want **the assistant's voice to start as soon as the first sentence is ready**, so that **I hear an answer forming rather than a single long silence followed by a whole paragraph**.
 - **Business value:** The synthesis term is owned here and `06-architecture.md` §2 names it: "kokoro `create()` — batch API; the streaming variant exists in the installed library and is unused." The caller currently waits for a complete audio buffer before a single frame is written to the carrier.

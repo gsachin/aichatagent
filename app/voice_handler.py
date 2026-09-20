@@ -34,6 +34,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+from typing import AsyncIterator, Callable
 
 logger = logging.getLogger("voice_handler")
 
@@ -186,6 +187,13 @@ TTS_SPEED = _parse_tts_speed(os.environ.get("KOKORO_SPEED", "1.0"))
 #: callers); "per_call" bounds the cache to a single session's utterances and
 #: gives up cross-caller reuse in exchange for isolation that needs no argument.
 TTS_CACHE_SCOPE = os.environ.get("TTS_CACHE_SCOPE", "shared").strip().lower()
+
+#: US-005 (streaming TTS, PO build-approved 2026-09-19): the FIRST audio chunk
+#: of an answer is sent while the rest is still being synthesised. Behind a
+#: flag because adoption is gated on DG-03; the batch path (`_synthesise`) is
+#: retained unchanged as the BRD-15 revert (flip the flag, no code change).
+TTS_STREAM = os.environ.get("TTS_STREAM", "0").strip().lower() in (
+    "1", "true", "yes", "on")
 
 
 def _cache_key_sha(cache_key: tuple) -> str:
@@ -489,6 +497,28 @@ def is_noise_fragment(text: str) -> bool:
     return len(t.split()) == 1 and t in _NOISE_WORDS
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split answer text at sentence boundaries for per-sentence streaming.
+
+    kokoro's `create_stream` splits phonemes into batches up to
+    MAX_PHONEME_LENGTH (~510 phonemes) and prefers punctuation boundaries —
+    but a typical answer (~150-250 chars) is ONE batch, so the stream yields
+    one chunk equal to the whole answer and streaming buys nothing (measured
+    live 2026-09-20: tts_first_chunk -> tts_done = 0 ms). Synthesising
+    sentence by sentence is what makes the first chunk small: the first
+    sentence's audio exists while later ones are still being synthesised.
+
+    Conservative split: only on `.` `!` `?` `;` followed by whitespace and a
+    capital letter, and never right after a digit -- so a price like
+    "$1,700. Scholarships" stays intact while real sentence boundaries
+    split. (An abbreviation like "Dr. Smith" still splits into two synthesis
+    chunks; that costs a clause boundary of silence, never correctness --
+    and US-004's clause cutter replaces this splitter when it lands.)
+    """
+    parts = re.split(r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])", text.strip())
+    return [p for p in (p.strip() for p in parts) if p]
+
+
 class VoiceCallSession:
     """
     Handles a single outbound (or inbound) voice call.
@@ -718,7 +748,8 @@ class VoiceCallSession:
             return True
         return False
 
-    async def process_utterance(self) -> tuple[list[bytes], str, bool]:
+    async def process_utterance(self, chunk_sink: Callable | None = None
+                                ) -> tuple[list[bytes], str, bool]:
         """
         Run the full pipeline on the accumulated audio:
 
@@ -861,6 +892,24 @@ class VoiceCallSession:
         dialogue = f"Caller: {transcript}\nAssistant: {answer}"
 
         # ── Step 4: Kokoro TTS → PCM ──────────────────────────────
+        # US-005 (streaming, behind TTS_STREAM): chunks are converted and
+        # forwarded through `chunk_sink` as they are produced, so first audio
+        # reaches the socket while later clauses are still synthesising. The
+        # batch path below is the unchanged BRD-15 revert (flag off).
+        if TTS_STREAM:
+            tts_chunks = await self._synthesise_streamed(answer, chunk_sink)
+            if tts_chunks is None or not tts_chunks:
+                # US-016 AC-5, second branch: the synthesiser failed before
+                # anything audible existed. The fixed response needs no
+                # synthesiser, so the caller still hears a sentence.
+                chunks = self._speak_fixed_response(reason="synthesis failed")
+                if chunks:
+                    if chunk_sink is not None:
+                        await chunk_sink(chunks)
+                    return chunks, dialogue, False
+                return [], dialogue, False
+            return _turn_outcome(tts_chunks), dialogue, False
+
         tts_pcm = await self._synthesise(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
             # US-016 AC-5, second branch: the synthesiser is the thing that
@@ -1140,6 +1189,142 @@ class VoiceCallSession:
         except Exception:
             logger.exception("VoiceCall: TTS failed")
             return None
+
+    def _chunk_to_ulaw_frames(self, audio: np.ndarray, sr: int) -> list[bytes]:
+        """One synthesiser chunk -> 20 ms µ-law frames (US-005 streaming leg).
+
+        Resamples from the chunk's own sample rate (the stream reports it per
+        chunk, so a provider change never silently misresamples) and snaps to
+        a whole frame: the sub-frame tail of a MID-STREAM chunk is dropped
+        rather than padded, because padding a mid-stream chunk would insert a
+        silence gap into the middle of a sentence. The loss is < 20 ms of
+        audio at a clause boundary -- inaudible next to the clause pause.
+        """
+        from scipy.signal import resample
+
+        target = int(len(audio) * 8000 / sr)
+        target -= target % 160                      # snap to a whole 20 ms frame
+        if target <= 0:
+            return []
+        audio_8k = resample(audio, target)
+        int16 = (audio_8k * 32767).clip(-32768, 32767).astype(np.int16)
+        return [pcm_to_ulaw(int16[i:i + 160].tobytes())
+                for i in range(0, len(int16), 160)]
+
+    async def synthesise_stream(self, text: str, *, voice: str | None = None,
+                                speed: float | None = None
+                                ) -> AsyncIterator[tuple[np.ndarray, int]]:
+        """US-005: yield (audio_f32, sample_rate) chunks as Kokoro produces them.
+
+        Cache hit -> the cached copy is yielded once, immediately. Cache miss ->
+        `kokoro.create_stream()` is delegated to a thread per chunk-free await
+        (the generator itself runs on the loop; kokoro's async generator does
+        the waiting, and the model load stays a to_thread hop). The full audio
+        is still assembled and cached so the DAT-11 entry shape is unchanged.
+
+        The first yield marks `tts_first_chunk` on the trace -- the instant
+        the first audible audio of the answer existed. A failure BEFORE the
+        first chunk re-raises (the caller falls back to the fixed response);
+        a failure mid-stream ends the stream (the caller already heard the
+        beginning, and the turn is logged degraded, never silent).
+        """
+        self.log_event("TTS_STARTED", chars=len(text))
+        tts_text = text[:500] if len(text) > 500 else text
+        voice = voice if voice is not None else _tts_voice()
+        speed = speed if speed is not None else _tts_speed()
+        cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
+                 else VoiceCallSession._shared_tts_cache)
+        cache_key = (tts_text, voice, speed)
+
+        if cache_key in cache:
+            cached_audio, cached_sr, owner = cache[cache_key]
+            cross_call = bool(owner) and owner != self.call_id
+            logger.debug(f"TTS cache HIT (stream): {tts_text[:60]}...")
+            self.log_event("TTS_COMPLETED", cached=1, cross_call=int(cross_call))
+            if self._trace is not None:
+                # The audio exists in full now: both marks are true at once.
+                self._trace.mark("tts_first_chunk")
+                self._trace.mark("tts_done")
+                self._trace.note(
+                    tts_cache_hit=True,
+                    tts_cache_scope=TTS_CACHE_SCOPE,
+                    tts_cache_cross_call=cross_call,
+                    tts_cache_key_sha=_cache_key_sha(cache_key),
+                )
+            yield cached_audio.copy(), cached_sr
+            return
+
+        kokoro = await asyncio.to_thread(_get_tts_engine)
+        parts: list[np.ndarray] = []
+        sr_out: int | None = None
+        first = True
+        try:
+            # Per SENTENCE, not per answer: kokoro's internal batching makes a
+            # typical answer one chunk (measured: tts_first_chunk -> tts_done
+            # = 0 ms live), which streams nothing. A sentence at a time makes
+            # the first chunk the first sentence -- small, and produced while
+            # the rest of the answer is still to come (US-004's clause cutter
+            # will replace this splitter when it lands; the stream interface
+            # here does not change).
+            for sentence in _split_sentences(tts_text):
+                async for audio, sr in kokoro.create_stream(
+                        sentence, voice=voice, speed=speed):
+                    if first:
+                        first = False
+                        self.log_event("TTS_FIRST_CHUNK", samples=int(len(audio)))
+                        if self._trace is not None:
+                            self._trace.mark("tts_first_chunk")
+                    sr_out = sr
+                    parts.append(audio)
+                    yield audio, sr
+        except Exception:
+            logger.exception("VoiceCall: streaming TTS failed")
+            if first:
+                raise           # nothing audible was produced -> fallback path
+            return              # partial audio heard; end the turn, degraded
+
+        # Stream complete: assemble and cache, so a repeat pays nothing and
+        # the DAT-11 entry shape is unchanged by streaming.
+        if parts and sr_out:
+            audio_full = np.concatenate(parts)
+            if cache_key not in cache and len(cache) >= self._tts_cache_max:
+                oldest = next(iter(cache))
+                del cache[oldest]
+            cache[cache_key] = (audio_full.copy(), sr_out, self.call_id)
+            logger.info(f"VoiceCall: TTS streamed ({len(audio_full) / sr_out:.1f}s "
+                        f"at {sr_out} Hz)")
+            if self._trace is not None:
+                self._trace.mark("tts_done")
+                self._trace.note(
+                    tts_cache_hit=False,
+                    tts_cache_scope=TTS_CACHE_SCOPE,
+                    tts_cache_cross_call=False,
+                    tts_cache_key_sha=_cache_key_sha(cache_key),
+                    audio_s=round(len(audio_full) / sr_out, 2),
+                )
+
+    async def _synthesise_streamed(self, text: str, sink: Callable | None
+                                   ) -> list[bytes] | None:
+        """Drive the stream, convert per chunk, forward through the sink.
+
+        Returns the full µ-law chunk list (the batch-path contract, so the
+        caller's record-keeping is unchanged) or None when the synthesiser
+        failed before any audible chunk existed. The sink is awaited per
+        chunk; it is what sends the frames to the socket as produced.
+        """
+        chunks: list[bytes] = []
+        any_audio = False
+        try:
+            async for audio, sr in self.synthesise_stream(text):
+                any_audio = True
+                frames = self._chunk_to_ulaw_frames(audio, sr)
+                chunks.extend(frames)
+                if sink is not None and frames:
+                    await sink(frames)
+        except Exception:
+            logger.exception("VoiceCall: streaming TTS failed")
+            return chunks if any_audio else None
+        return chunks
 
     def _speak_fixed_response(self, reason: str) -> list[bytes]:
         """Return the pre-synthesised fixed response as µ-law chunks.

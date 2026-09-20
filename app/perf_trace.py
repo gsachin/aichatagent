@@ -83,6 +83,14 @@ STAGES = (
     # US-004 (streaming) is where it comes back, WITH an emitter. Re-add it then,
     # not before: this tuple is a claim about what a turn can produce.
     "llm_done",
+    # "tts_first_chunk" (US-005, streaming TTS) — the instant the FIRST audio
+    # chunk of the answer left the synthesiser. Absent on the batch path (a
+    # fact about that turn, like any skipped stage); present on streamed
+    # turns, where llm_done->tts_first_chunk is the wait the caller pays for
+    # the first audible audio and tts_first_chunk->first_audio_sent is the
+    # framing/socket leg. Emitted only by the streaming emitter, never counted
+    # without one (the llm_first_token lesson above).
+    "tts_first_chunk",
     "tts_done",
     "first_audio_sent",
 )

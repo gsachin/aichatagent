@@ -823,9 +823,48 @@ async def websocket_twilio(websocket: WebSocket):
                 utterance_ready = session.feed_audio(ulaw_bytes)
 
                 if utterance_ready:
-                    # Process the utterance through the full AI pipeline
+                    # Process the utterance through the full AI pipeline.
+                    # US-005: under TTS_STREAM the synthesiser hands chunks out
+                    # as produced and the sink sends them mid-pipeline, so
+                    # first audio reaches the socket while later clauses are
+                    # still synthesising. The batch path sends after return,
+                    # exactly as before (BRD-15: the flag is the revert).
+                    tts_playing = True
+                    _marked_first_frame = False
+                    sent = {"n": 0}
+
+                    async def _send_chunks(frames: list[bytes]) -> None:
+                        nonlocal _marked_first_frame
+                        for chunk in frames:
+                            out_payload = base64.b64encode(chunk).decode("ascii")
+                            response = json.dumps({
+                                "event": "media",
+                                "streamSid": stream_sid or "",
+                                "media": {"payload": out_payload},
+                            })
+                            if not await _ws_send(websocket, response):
+                                raise WebSocketDisconnect(code=1000)
+                            sent["n"] += 1
+                            # US-001: first_audio_sent is taken at the socket
+                            # write, not at the end of synthesis — this is the
+                            # end of BRD-02's measured segment.
+                            if not _marked_first_frame:
+                                _marked_first_frame = True
+                                _t = getattr(session, "_trace", None)
+                                if _t is not None:
+                                    _t.mark("first_audio_sent")
+                                    _t.emit()
+
+                    stream = False
                     try:
-                        tts_chunks, dialogue, end_call = await session.process_utterance()
+                        from app.voice_handler import TTS_STREAM
+
+                        stream = TTS_STREAM
+                        tts_chunks, dialogue, end_call = await session.process_utterance(
+                            chunk_sink=_send_chunks if stream else None)
+                    except WebSocketDisconnect:
+                        tts_playing = False
+                        raise  # stream is dead — exit the handler cleanly
                     except Exception:
                         logger.exception("VoiceCall: pipeline failed")
                         tts_chunks, dialogue, end_call = [], "", False
@@ -853,32 +892,17 @@ async def websocket_twilio(websocket: WebSocket):
                                 label=f"crm link for call {stream_sid}",
                             )
 
-                    # Send TTS audio chunks back through the WebSocket
-                    session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
-                    tts_playing = True
-                    _marked_first_frame = False
+                    # Send TTS audio chunks back through the WebSocket. The
+                    # batch path sends everything here; a streamed turn already
+                    # went out through the sink, chunk by chunk, mid-pipeline.
                     try:
-                        for chunk in tts_chunks:
-                            out_payload = base64.b64encode(chunk).decode("ascii")
-                            response = json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid or "",
-                                "media": {"payload": out_payload},
-                            })
-                            if not await _ws_send(websocket, response):
-                                raise WebSocketDisconnect(code=1000)
-                            # US-001: first_audio_sent is taken at the socket
-                            # write, not at the end of synthesis — this is the
-                            # end of BRD-02's measured segment.
-                            if not _marked_first_frame:
-                                _marked_first_frame = True
-                                _t = getattr(session, "_trace", None)
-                                if _t is not None:
-                                    _t.mark("first_audio_sent")
-                                    _t.emit()
+                        session.log_event("AGENT_SPEECH_STARTED",
+                                          chunks=len(tts_chunks) - sent["n"])
+                        for chunk in tts_chunks[sent["n"]:]:
+                            await _send_chunks([chunk])
+                        session.log_event("AGENT_SPEECH_STOPPED")
                     finally:
                         tts_playing = False
-                    session.log_event("AGENT_SPEECH_STOPPED")
 
                     # Deterministic hangup: caller sign-off detected → end call
                     if end_call:
