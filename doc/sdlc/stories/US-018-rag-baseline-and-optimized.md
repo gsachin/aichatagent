@@ -327,6 +327,62 @@ class AdoptionVerdict:
 - Related stories: `US-003` (the frozen golden set — the second gate, and the reason this story's adoption half is blocked); `US-009` (the relevance floor and the single round trip — its implementation is what makes this story's threshold measurement honest); `US-010` (store consolidation — it moves the corpus under the baseline, which is why comparability is version-anchored rather than assumed); `US-015` (the funnel and RAG sweep that propose the candidate; this story owns the contract the candidate must satisfy, not the sweep itself); `US-001`/`US-007` (the trace and the warm state the characterisation depends on)
 - Honest boundary: the retrieval relevance set is **derived, not approved**. It is sufficient to compare retrieval configurations and insufficient to justify what a caller hears; the story says so wherever the metric is reported, and the adoption gate is the frozen set with PO-approved ground truth. A retrieval metric presented as a quality result is the specific misreading this story's vocabulary section exists to prevent
 
+## D4 verification — the "unblocked today" claim, checked 2026-09-19
+
+The remediation plan's D4 says to **verify this story's claim before starting
+it**, and the claim is that the characterisation half needs no golden set. It
+holds, and both prerequisites the story names for starting are now satisfied.
+
+**1. The two sequencing dependencies are met.** The priority note says this
+story sequences after `US-001`/`US-007` "for one narrow reason — retrieval
+latency is unattributable until the retrieval mark `TRD-21` requires exists".
+That mark exists (`retrieval_done`, `app/perf_trace.py`), and it is the stage
+`DEF-001` was found through — it has already produced a finding. `US-007`'s gate
+is implemented and exits 0.
+
+**2. The baseline the story names is accurate.** This story warns against its own
+subject matter — `REC-07` records that a prior document asserted wrong values for
+these settings — so the values were checked rather than assumed:
+
+| Story claims | Live | |
+|---|---|---|
+| `TOP_K=5` | `RAG_TOP_K=5` (`.env:239`) | ✓ |
+| `FETCH_K=20` | `RAG_FETCH_K=20` (`.env:240`) | ✓ |
+| 600/90 chunking | `RAG_CHUNK_SIZE=600`, `RAG_CHUNK_OVERLAP=90` (`rag_legacy.py:70-71`) | ✓ |
+| hybrid on | `RAG_SEARCH_MODE=hybrid` (`.env:141`) | ✓ |
+| threshold disabled | `RAG_SIMILARITY_THRESHOLD=0.0` (`.env:152`) | ✓ |
+| reranker loaded-unused | absent from the retrieval path; a boot cost per `REC-04` | ✓ |
+
+Six for six. `REC-07`'s warning applies to some other document, not this one.
+
+**3. Nothing is implemented yet, which is exactly what the story says.** No
+`app/rag_config.py`, no `eval/rag_baseline.json`, and `RAG-Baseline` /
+`rag_optimized` / `recall_at_k` / `ndcg` / `tokens_injected` appear in no `.py`
+file in the repository. `DAT-14` is still "Missing — no versioning concept
+exists".
+
+### Scope for the build, so it is not re-derived
+
+Four deliverables, in dependency order, all unblocked:
+
+1. **Name the configuration.** A module that returns the incumbent values as a
+   named, inspectable object — not new behaviour, a name for what runs. The six
+   values above are the contents and they are already verified.
+2. **Record the baseline.** Emit the named configuration to
+   `eval/rag_baseline.json` with a timestamp and the corpus identity, so a later
+   `RAG-Optimized` has something to be non-inferior *to*.
+3. **Define the relevance set.** The story derives it from the KB's section
+   structure (`DAT-01`). This is the one item needing judgement rather than
+   transcription, and it is the item `DG-03` would otherwise have covered.
+4. **Define the metrics.** `recall@k`, `MRR`, `nDCG`, tokens injected, latency —
+   declared and computed, even if only against the relevance set above.
+
+**Deliberately not started.** Steps 1–2 are mechanical and steps 3–4 need
+judgement about what "relevant" means, which is closer to the ground-truth
+question `DG-03` exists for. Starting 1–2 without 3–4 would produce a baseline
+nobody can score, which is the half-built state `US-003` already demonstrates the
+cost of.
+
 ## Definition of Done
 - [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-10)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-18)
