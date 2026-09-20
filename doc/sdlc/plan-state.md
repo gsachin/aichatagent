@@ -43,8 +43,8 @@ Every story file now carries a `**Status:**` line and a ticked Definition of Don
 | **Implemented — acceptance suite passes** | **8 / 18** | A named suite passes, **measured 2026-09-19**: US-001 (24/24), US-006 (11/11), US-007 (30/30), US-011 (17/17), US-012 (36/36 +1 skip), US-013 (46/46), US-016 (56/56), US-017 (53/53). 333 checks, all exit 0 |
 | **…and every AC/TAC traced** | **0 / 8** | **None.** All eight leave criteria cited by no test — see the traceability row below. "Suite passes" and "ACs verified" are different claims and this register previously ran them together |
 | **Partial, no acceptance suite** | **1 / 18** | US-008 — its `app/`-side change (the shared `httpx.Client`) was **deliberately reverted** pending load evidence, so the app side is already rolled back; the ERC side is in a separate repository |
-| **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-007 at 6/8 |
-| **DoD boxes ticked, all 18 stories** | **34 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass, 30/147 before the 2026-09-19 module reconciliation |
+| **Fully Definition-of-Done complete** | **0 / 18** | **No story has every DoD box ticked.** Best is US-006/US-007/US-012 at 5/8 |
+| **DoD boxes ticked, all 18 stories** | **33 / 147** | Counted mechanically from the checklists, not estimated. Was 14/147 before the Task 3.1 pass. It went 30 -> 34 across the 2026-09-19 reconciliation and then **down to 33**, because a box on US-007 was unticked once it was read against the code |
 | **AC/TAC traceability** | **42 AC · 106 TAC untraced** | `test_ac_traceability.py`, 2026-09-19. Of 83 ACs and 155 TACs declared, those are cited by no test. **The gate FAILS** — that is the honest state, not a defect in the gate |
 
 **Two counts that were stale and are now measured rather than copied.** The
@@ -57,7 +57,7 @@ day by ticking boxes without updating the line that quotes the count.
 
 **Recount as of 2026-09-19** (mechanical, `\[( |x)\]` over each story's DoD
 section): US-001 4/6 · US-002 0/7 · US-003 0/7 · US-004 0/7 · US-005 0/7 ·
-US-006 5/8 · US-007 6/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8 ·
+US-006 5/8 · US-007 5/8 · US-008 1/7 · US-009 0/7 · US-010 0/8 · US-011 4/8 ·
 US-012 5/8 · US-013 2/8 · US-014 0/9 · US-015 0/12 · US-016 3/10 · US-017 4/10 ·
 US-018 0/10.
 
