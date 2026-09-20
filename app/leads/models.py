@@ -28,22 +28,14 @@ from datetime import datetime, timezone
 logger = logging.getLogger("leads.models")
 
 # ── Database connection helpers ──────────────────────────────────────
-
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "admissions")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+# Resolved through app/config.py, not read from os.environ here: this module
+# does not load .env, so a direct read made the target depend on import order.
 
 
 def _connection_string() -> str:
-    if DATABASE_URL:
-        return DATABASE_URL
-    return (
-        f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
-        f"user={DB_USER} password={DB_PASSWORD}"
-    )
+    from app.config import database_dsn
+
+    return database_dsn()
 
 
 @contextmanager

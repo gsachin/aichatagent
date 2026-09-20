@@ -40,24 +40,17 @@ from datetime import datetime, timezone
 logger = logging.getLogger("voice_db")
 
 # ── Configuration ────────────────────────────────────────────────────
-
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "admissions")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+# The connection target comes from the single resolution point in
+# app/config.py. This module used to read the six DB_* keys straight from
+# os.environ at import time, without loading .env itself — so the database it
+# targeted depended on import order (US-011 TAC-1).
 
 
 def _connection_string() -> str:
     """Build a PostgreSQL connection string from config."""
-    if DATABASE_URL:
-        return DATABASE_URL
-    return (
-        f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
-        f"user={DB_USER} password={DB_PASSWORD}"
-    )
+    from app.config import database_dsn
+
+    return database_dsn()
 
 
 # ── Schema ───────────────────────────────────────────────────────────
@@ -114,9 +107,11 @@ async def init_db() -> bool:
         logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True
     except Exception:
+        from app.config import database_target
+
         logger.warning(
             "PostgreSQL not available — running without database. "
-            f"Connection: {_connection_string()}"
+            f"Connection: {database_target()}"
         )
         return False
 

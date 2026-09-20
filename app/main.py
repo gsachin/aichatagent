@@ -2907,24 +2907,13 @@ async def api_get_call_queue_status(lead_id: str = ""):
     # Query the most recent call_queue entry for this lead
     try:
         import psycopg2
-        import os as _os
 
-        DATABASE_URL = _os.environ.get("DATABASE_URL", "")
-        DB_HOST = _os.environ.get("DB_HOST", "localhost")
-        DB_PORT = _os.environ.get("DB_PORT", "5432")
-        DB_NAME = _os.environ.get("DB_NAME", "admissions")
-        DB_USER = _os.environ.get("DB_USER", "postgres")
-        DB_PASSWORD = _os.environ.get("DB_PASSWORD", "")
+        # One resolution point (US-011 TAC-1). This block carried its own
+        # copy of the six DB_* reads under an `import os as _os` alias — the
+        # alias is why the reader sweep's `os.environ` patterns never saw it.
+        from app.config import database_dsn
 
-        if DATABASE_URL:
-            conn_str = DATABASE_URL
-        else:
-            conn_str = (
-                f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
-                f"user={DB_USER} password={DB_PASSWORD}"
-            )
-
-        conn = psycopg2.connect(conn_str)
+        conn = psycopg2.connect(database_dsn())
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(

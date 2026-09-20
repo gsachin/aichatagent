@@ -8,6 +8,7 @@ Loads from .env file if present (python-dotenv), with defaults for development.
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -203,3 +204,57 @@ class Settings:
 
 # Module-level singleton
 settings = Settings()
+
+
+# ── Derived values ──────────────────────────────────────────────────
+# Resolution helpers for values assembled FROM settings. They live here so
+# there is one place a connection target is decided (US-011 TAC-1: `.env` is
+# the authority, resolved once through app/config.py).
+
+
+def database_dsn() -> str:
+    """
+    PostgreSQL connection string, from the resolved settings.
+
+    One home for what used to be four byte-identical copies of the same six
+    `os.environ` reads (app/database.py, app/leads/models.py,
+    app/sentiment/models.py, and an inline block in app/main.py's call-queue
+    endpoint). Those copies read the environment at *their own* import time,
+    and nothing in those modules loads `.env` — so which value was in force
+    depended on whether something else had already imported app.config.
+    Importing app.leads.models first left DATABASE_URL unset and silently
+    fell back to the localhost/postgres defaults, a different database from
+    the one the operator configured. Resolving through `settings` makes the
+    answer independent of import order, because loading `.env` is part of
+    resolving it.
+
+    `DATABASE_URL` wins when set; otherwise the discrete `DB_*` keys are
+    assembled into a libpq string, exactly as the four copies did.
+    """
+    if settings.DATABASE_URL:
+        return settings.DATABASE_URL
+    return (
+        f"host={settings.DB_HOST} port={settings.DB_PORT} "
+        f"dbname={settings.DB_NAME} user={settings.DB_USER} "
+        f"password={settings.DB_PASSWORD}"
+    )
+
+
+def database_target() -> str:
+    """
+    The connection target with the password removed — safe to log (TAC-4).
+
+    The fallback path used to log `database_dsn()` verbatim on a connection
+    failure, which would have written the credential into logs/ (not observed
+    in the current logs, so this is a latent path closed rather than a
+    leak cleaned up). Sensitivity is decided the same way config_truth does
+    it, so the two cannot disagree about what counts as a secret.
+    """
+    if settings.DATABASE_URL:
+        # scheme://user:password@host -> scheme://user@host
+        return re.sub(r"://([^:/@]+):[^@]*@", r"://\1@", settings.DATABASE_URL)
+    return (
+        f"host={settings.DB_HOST} port={settings.DB_PORT} "
+        f"dbname={settings.DB_NAME} user={settings.DB_USER} "
+        f"password=<redacted>"
+    )
