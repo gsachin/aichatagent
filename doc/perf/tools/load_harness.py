@@ -1240,12 +1240,20 @@ class TurnObservation:
     t_speech_end: float                # monotonic, session-local
     stream_sid: str
     new_session: bool                  # first turn after a profile disconnect
+    # A2 (2026-09-19): the app's own clock, joined from the DAT-07 trace row for this
+    # (call_id, turn_id). The app's zero point is vad_end, which is explicitly NOT
+    # caller speech end -- the difference between the two clocks is the endpointing
+    # wait, and both are emitted per turn so the cap question can be settled on data.
+    first_audio_from_vad_end_ms: float | None = None
+    endpointing_ms: float | None = None
     note: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         d = dict(self.__dict__)
         for k in ("t_speech_end",):
             d[k] = round(d[k], 6)
+        # The harness clock, named explicitly beside the app clock (A2).
+        d["first_audio_from_speech_end_ms"] = d["first_audio_ms"]
         return d
 
 
@@ -1958,6 +1966,10 @@ class RunSummary:
     first_audio_n: int = 0
     warm: dict[str, Any] = field(default_factory=dict)
     cold: dict[str, Any] = field(default_factory=dict)
+    # A2 (2026-09-19): the app's vad_end clock and the endpointing delta, summarised
+    # beside the harness clock so both appear in every run summary.
+    vad_end: dict[str, Any] = field(default_factory=dict)
+    endpointing: dict[str, Any] = field(default_factory=dict)
     turns_without_response: int = 0
     turns_timed_out: int = 0
     turns_over_3000ms: int = 0
@@ -2048,10 +2060,37 @@ def build_summary(
     app_contract: dict[str, Any],
     prior_rows: int,
     extra_load: dict[str, Any] | None = None,
+    app_rows: Sequence[dict[str, Any]] = (),
 ) -> RunSummary:
     turns: list[TurnObservation] = [t for r in results for t in r.turns]
     warm_values = [t.first_audio_ms for t in turns if t.thermal == "warm" and t.first_audio_ms is not None]
     cold_values = [t.first_audio_ms for t in turns if t.thermal == "cold" and t.first_audio_ms is not None]
+
+    # A2 (2026-09-19): join each turn against the app's DAT-07 trace row and record
+    # both clocks. The app's zero point is vad_end; the harness's is caller speech
+    # end, so endpointing_ms = harness - app is the observed endpointing wait. A turn
+    # with no matching app row keeps None for both -- unknown, never zero.
+    app_clock: dict[tuple[str, str], float] = {}
+    for r in app_rows:
+        cid, tid, ms = r.get("call_id"), r.get("turn_id"), r.get("first_audio_sent_ms")
+        if isinstance(cid, str) and tid is not None and isinstance(ms, (int, float)):
+            app_clock[(cid, str(tid))] = float(ms)
+    for t in turns:
+        app_ms = app_clock.get((t.stream_sid, str(t.turn_index)))
+        if app_ms is not None and t.first_audio_ms is not None:
+            t.first_audio_from_vad_end_ms = round(app_ms, 3)
+            t.endpointing_ms = round(t.first_audio_ms - app_ms, 3)
+
+    vad_end_values = [t.first_audio_from_vad_end_ms for t in turns
+                      if t.thermal == "warm" and t.first_audio_from_vad_end_ms is not None]
+    endpointing_values = [t.endpointing_ms for t in turns
+                          if t.thermal == "warm" and t.endpointing_ms is not None]
+    if not vad_end_values:
+        vad_end_values = [t.first_audio_from_vad_end_ms for t in turns
+                          if t.first_audio_from_vad_end_ms is not None]
+    if not endpointing_values:
+        endpointing_values = [t.endpointing_ms for t in turns
+                              if t.endpointing_ms is not None]
 
     # AC-2: cold and warm are separate buckets and are never averaged together.
     # The headline p50/p95 is the warm bucket when a warm bucket exists; the cold
@@ -2134,11 +2173,18 @@ def build_summary(
         first_audio_n=len(headline),
         warm=summarise(warm_values),
         cold=summarise(cold_values),
+        vad_end=summarise(vad_end_values),
+        endpointing=summarise(endpointing_values),
         turns_without_response=len(no_response),
         turns_timed_out=len(timed_out),
         turns_over_3000ms=len(cap_hits),
         cap_exceeded=bool(cap_hits),
-        cap_basis=f"first_audio_ms > {TURN_CAP_MS:g} (BRD-05 per-turn ceiling)",
+        cap_basis=(
+            f"first_audio_ms > {TURN_CAP_MS:g} (BRD-05 per-turn ceiling), measured from "
+            "caller speech end on the harness clock -- INCLUDING the ~600 ms endpointing "
+            "window (BRD-04). The app's vad_end clock is emitted per turn as "
+            "first_audio_from_vad_end_ms and summarised beside this one (A2); the PO's "
+            "confirmation of which clock the cap keys on is recorded in the story."),
         partial=partial,
         dropped_turns=dropped,
         records_separated=separation.get("records_separated"),
@@ -2276,6 +2322,7 @@ def summary_to_dict(s: RunSummary) -> dict[str, Any]:
         "network_profile", "profile_parameters", "profile_description",
         "injected_condition",
         "first_audio_ms", "cold_first_audio_ms", "warm_first_audio_ms",
+        "vad_end_first_audio_ms", "endpointing_ms",
         "carrier_boundary_excluded", "records_separated", "separation",
         "turns_over_3000ms", "cap_exceeded", "cap_basis",
         "turns_without_response", "turns_timed_out", "partial", "dropped_turns",
@@ -2292,6 +2339,8 @@ def summary_to_dict(s: RunSummary) -> dict[str, Any]:
                            "n": s.first_audio_n, "bucket": s.thermal_state}
     d["cold_first_audio_ms"] = s.cold
     d["warm_first_audio_ms"] = s.warm
+    d["vad_end_first_audio_ms"] = s.vad_end
+    d["endpointing_ms"] = s.endpointing
     return {k: d.get(k) for k in keys}
 
 
@@ -2798,7 +2847,8 @@ async def run_condition(
                             profile=profile, url=url, started=started, ended=ended,
                             readiness=readiness, separation=separation,
                             target_turns=target_turns, app_contract=app_contract,
-                            prior_rows=len(rows_before), extra_load=extra_load)
+                            prior_rows=len(rows_before), extra_load=extra_load,
+                            app_rows=rows_after)
     write_summary(summary)
     if not quiet:
         print_summary(summary)
@@ -3178,14 +3228,15 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     out: dict[str, Any] = {}
     fx = load_fixture(_write_tiny_fixture(tmp / "fixture.json"))
 
-    def obs(label: str, thermal: str, ms: float | None, cap: bool = False) -> TurnObservation:
+    def obs(label: str, thermal: str, ms: float | None, cap: bool = False,
+            sid: str = "MZx") -> TurnObservation:
         return TurnObservation(session_label=label, turn_index=0, fixture_id="tiny",
                                fixture_turn_index=0, intent="fees", thermal=thermal,
                                first_audio_ms=ms, turn_total_ms=ms, exceeded_cap=cap,
                                responded=ms is not None, timed_out=ms is None,
                                responses_seen=1 if ms else 0, expected_responses=1,
                                sent_frames=10, speech_frames=10, segment_s=0.2,
-                               t_speech_end=0.0, stream_sid="MZx", new_session=False)
+                               t_speech_end=0.0, stream_sid=sid, new_session=False)
 
     def result(label: str, turns: list[TurnObservation]) -> SessionResult:
         return SessionResult(label=label, turns=turns, stream_sids=[f"MZ{label}"],
@@ -3267,6 +3318,39 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     out["a1_clean_run_is_not_discarded"] = (
         not s.discarded and s.first_audio_n > 0 and not s.partial
         and s.discard_reason is None)
+
+    # ── A2 (2026-09-19): both clocks. The harness clock is caller speech end; the
+    # app's is vad_end, joined from the DAT-07 row for (call_id, turn_id). The delta
+    # is the endpointing wait. A turn with no app row keeps None -- unknown, never zero.
+    app_rows = [
+        {"ts": 0.5, "call_id": "MZA", "turn_id": 0, "first_audio_sent_ms": 500.0},
+        {"ts": 0.6, "call_id": "MZB", "turn_id": 0, "first_audio_sent_ms": 700.0},
+    ]
+    two_clock = build_summary(
+        condition="N=2", results=[result("A", [obs("A", "warm", 1000.0, sid="MZA")]),
+                                  result("B", [obs("B", "warm", 1200.0, sid="MZB")])],
+        fixtures=[fx], profile=CLEAN, url="ws://x", started=0.0, ended=1.0,
+        readiness={"stack_readiness": "test"}, separation=clean_sep,
+        target_turns=2, app_contract={}, prior_rows=0, app_rows=app_rows)
+    turns_by_label = {p["label"]: p["turns"] for p in two_clock.per_session}
+    ta0 = turns_by_label["A"][0]
+    tb0 = turns_by_label["B"][0]
+    out["a2_both_clocks_emitted_per_turn"] = (
+        ta0["first_audio_from_speech_end_ms"] == 1000.0
+        and ta0["first_audio_from_vad_end_ms"] == 500.0
+        and ta0["endpointing_ms"] == 500.0
+        and tb0["first_audio_from_speech_end_ms"] == 1200.0
+        and tb0["first_audio_from_vad_end_ms"] == 700.0)
+    out["a2_vad_end_clock_in_run_summary"] = (
+        two_clock.vad_end["p50"] == 600.0 and two_clock.vad_end["n"] == 2
+        and two_clock.endpointing["p50"] == 500.0
+        and "vad_end_first_audio_ms" in summary_to_dict(two_clock)
+        and "endpointing_ms" in summary_to_dict(two_clock))
+    out["a2_cap_basis_names_both_clocks"] = (
+        "vad_end clock" in two_clock.cap_basis and "caller speech end" in two_clock.cap_basis)
+    out["a2_absent_app_row_stays_unknown"] = (
+        s.per_session[0]["turns"][0].get("first_audio_from_vad_end_ms") is None
+        and s.per_session[0]["turns"][0].get("endpointing_ms") is None)
     return out
 
 
