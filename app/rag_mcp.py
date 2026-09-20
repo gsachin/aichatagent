@@ -25,6 +25,7 @@ Env (read lazily per call so tests can monkeypatch):
 """
 import json
 import os
+import threading
 import time
 from typing import Any
 
@@ -97,38 +98,48 @@ def _parse(r: httpx.Response) -> dict | None:
 #: on a service whose own handler answers in milliseconds — and the cost is paid
 #: TWICE, because the timeout is followed by a full local re-retrieval.
 #:
-#: REMOVED 2026-09-19: the shared-client helper and its module global.
-#:
-#: `US-008` introduced a module-level `httpx.Client` reused across requests to
-#: stop paying a fresh TCP connection per retrieval. It was **reverted** pending
-#: load evidence, and the revert left the helper behind: `_get_client()` and
-#: `_client` survived with **no call site anywhere in `app/`** — `_post` builds a
-#: per-request client instead, and says why in its own comment below.
-#:
-#: Dead code is not harmless here. `US-011`'s whole subject is configuration and
-#: code that reads as live and is not, and this was the same shape one layer down:
-#: a reader finding `_get_client` would reasonably conclude the pool is shared,
-#: which is exactly the claim the revert withdrew. Removed rather than left with a
-#: comment, because the file already carries the revert note where it matters.
-#:
-#: If `US-008` is re-adopted, restore the helper from `git show <rev>:app/rag_mcp.py`.
+#: US-008 re-adopted 2026-09-20 (Phase 3.3): the shared client is back. The
+#: 2026-09-19 revert isolated one variable while the 1011 keepalive deaths were
+#: unexplained; Phase 0.4 then root-caused those deaths as the event-loop
+#: freeze (a bug in the harness-era app path, now fixed), so the revert's
+#: rationale is obsolete and the per-request client was paying a fresh TCP
+#: connect on EVERY retrieval for nothing.
+
+_client: "httpx.Client | None" = None
+_client_lock = threading.Lock()
+
+
+def _get_client() -> httpx.Client:
+    """The shared pool (US-008). One connection set for every retrieval.
+
+    httpx.Client is thread-safe, and retrieval runs in worker threads, so the
+    pool is shared by design. Timeouts stay PER REQUEST (`_post` passes the
+    probe-aware budget on every call — a stalled call cannot hold a slot
+    beyond its own budget, which was the revert's stated worry). The lazy
+    construction is double-checked under a lock: without it, concurrent
+    first retrievals build several pools and the "one connection set" claim
+    would be true only on quiet paths.
+    """
+    global _client
+    if _client is None or _client.is_closed:
+        with _client_lock:
+            if _client is None or _client.is_closed:
+                _client = httpx.Client(
+                    limits=httpx.Limits(max_connections=8,
+                                        max_keepalive_connections=4),
+                )
+    return _client
+
 
 def _post(payload: dict, session_id: str | None = None) -> httpx.Response:
-    # REVERTED 2026-09-19 for a controlled test. The module-level client above
-    # was introduced to stop paying a fresh TCP connection per request, but it
-    # was never confirmed under load — and it shares one connection pool across
-    # every worker thread. With the read timeout raised to 6 s, a stalled call
-    # now holds a pool slot six times longer than before, and the pool has
-    # max_connections=8. The long-run failures (both sessions dropped at 28
-    # samples on a keepalive ping timeout) postdate both changes, so this
-    # restores the per-request client while KEEPING the 6 s timeout — isolating
-    # one variable at a time.
-    with httpx.Client(timeout=_timeout(probe=_probe_in_flight())) as client:
-        return client.post(
-            _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
-            json=payload,
-            headers=_headers(session_id),
-        )
+    # Per-request timeout, never a client default: the probe path carries its
+    # own shorter budget, and a default would silently override it.
+    return _get_client().post(
+        _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
+        json=payload,
+        headers=_headers(session_id),
+        timeout=_timeout(probe=_probe_in_flight()),
+    )
 
 
 # ── Session state ──────────────────────────────────────────────────────────

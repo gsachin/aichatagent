@@ -2,7 +2,7 @@
 
 # US-008 — De-serialize retrieval so no caller waits behind another [Lens: PO]
 
-- **Status:** **PARTIAL - the app-side client was reverted; no acceptance suite** · DoD 1/7 · the ERC side is in a separate repository and the concurrency claim is unproven here
+- **Status:** **PARTIAL - app-side shared client RE-MERGED (2026-09-20, Phase 3.3); full acceptance suite (T-1..T-14) pending** · DoD 1/7 · `test_us008_shared_client.py` 5/5 (reuse, 8/4 pool bounds, per-request probe-aware timeout, lock-guarded lazy construction) · live N=2 with the shared client + both streams: 120 turns clean, retrieval leg p50 531 ms, first-audio p50 1,328 ms · the ERC side (`asyncio.to_thread` wraps) is uncommitted in the separate repository — flagged to the user; the concurrency acceptance run is Phase 3.3
 
 - **Story:** As a **caller on the second line**, I want **my retrieval to run while Caller A's retrieval is still running**, so that **my answer does not start late because a stranger asked a slow question**.
 - **Business value:** Retrieval is the program's only **non-resource** bottleneck — one caller's slow query delays another caller's turn with no CPU, VRAM or bandwidth anywhere near saturation. `BRD-07` is a fairness requirement, and it is the one degradation a caller experiences for no physical reason at all.
