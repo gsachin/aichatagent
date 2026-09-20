@@ -229,12 +229,12 @@ names `TAC-3`, `TAC-4`, `TAC-6` and `TAC-7` — so unlike `US-001` the mapping i
 | T-8 | Engine restarted under a running app: residency re-establishes without a stack restart | — | **GAP** |
 | T-9 | Removing the keep-alive restores the server default (revert demonstrated) | `test_brd15_rollback.py` reverts US-006 | **COVERED elsewhere** — the only scenario this story gets from outside its own suite |
 | T-10 | `/ws/voice/text` still generates after the options change (`REC-09`) | — | **GAP.** No test under `doc/perf/tools/` touches `/ws/voice/text`, so the regression guard `REC-09` asks for does not exist |
-| T-11 | Residency observed in `nvidia-smi` **at the instant a call arrives** | — | **GAP, and the observation is not possible.** `gpu_clock_state()` is called at `app/boot_readiness.py:400`, inside the boot gate; there is no readiness surface for call time |
+| T-11 | Residency observed in `nvidia-smi` **at the instant a call arrives** | `GET /ready?refresh=1` (Phase 1.1) re-reads `/api/ps` residency and both GPU clocks at call time; the harness performs the read at call time in Phase-2 runs | **COVERED by PO ruling (2026-09-19, Phase 4a): a `?refresh=1` read at call arrival satisfies the wording.** The observation was impossible before Phase 1.1; the surface now exists and the ruling closes the wording |
 | T-12 | A call 30 minutes after boot shows no first-token time above the warm p95 | — | **GAP** — load gate, not run |
 | T-13 | N=1 ≥100 turns: first-token p95 ≤ 1,000 ms | — | **GAP** — load gate |
 | T-14 | N=2 30 min: VRAM ≤ 14,680 MiB, no sysmem spill, no turn over 3,000 ms | — | **GAP** — load gate |
 | T-15 | N=2: neither caller refused; the queue drains | — | **GAP** — load gate |
-| T-16 | The GPU is not idle-clocked **at call arrival** | — | **GAP, same impossibility as T-11** |
+| T-16 | The GPU is not idle-clocked **at call arrival** | same `?refresh=1` read: `gpu_clock_state()` is read from the device inside the call-time assessment | **COVERED by the same PO ruling** |
 
 **Coverage: 5 covered, 1 covered elsewhere, 10 gaps.**
 

@@ -2223,9 +2223,10 @@ def build_summary(
         cap_basis=(
             f"first_audio_ms > {TURN_CAP_MS:g} (BRD-05 per-turn ceiling), measured from "
             "caller speech end on the harness clock -- INCLUDING the ~600 ms endpointing "
-            "window (BRD-04). The app's vad_end clock is emitted per turn as "
-            "first_audio_from_vad_end_ms and summarised beside this one (A2); the PO's "
-            "confirmation of which clock the cap keys on is recorded in the story."),
+            "window (BRD-04). PO-ruled 2026-09-19 (Phase 4a): the cap keys on THIS clock, "
+            "because the endpointing wait is part of what the caller experiences. The app's "
+            "vad_end clock is emitted per turn as first_audio_from_vad_end_ms and "
+            "summarised beside this one as a companion figure, never the judge."),
         partial=partial,
         dropped_turns=dropped,
         ws_ping_interval=ws_ping_interval,

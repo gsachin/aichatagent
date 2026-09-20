@@ -2,7 +2,7 @@
 
 # US-010 — One authoritative knowledge store [Lens: PO]
 
-- **Status:** **BLOCKED - `DG-03` (changes answers)**
+- **Status:** **BLOCKED - `DG-03` (adoption); BUILD APPROVED behind flags (2026-09-19, Phase 4a PO ruling)** — the chunk-identity diff on the relevance set needs no ground truth; adoption still gated on `DG-03` (changes answers)
 
 - **Story:** As a **caller**, I want **the same question to get the same answer regardless of which internal path serves it**, so that **a failover does not silently change what the assistant tells me about a fee or a deadline**.
 - **Business value:** Two divergent stores hold different chunks of the same knowledge base, so a failover changes the **answer text** and not merely its packaging. `DG-01`/`REC-03` classify this as a **correctness** problem, not redundancy: two stores returning different chunks for one question is a defect.

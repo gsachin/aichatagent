@@ -2,7 +2,7 @@
 
 # US-016 — Two-caller admission control and the deterministic fixed response [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified; PO wording approval outstanding** · `test_us016_admission.py` 56/56, refusal path observed on the live server · DoD 3/10
+- **Status:** **IMPLEMENTED - ACs verified; PO wording APPROVED (2026-09-19, Phase 4a ruling)** · `test_us016_admission.py` 56/56, refusal path observed on the live server · DoD 3/10 (N=3 window + unload flags remain, Phase 3.5)
 
 - **Story:** As a **caller who reaches the line at the worst possible moment — when both lines are already live, or when the assistant's model has just gone away**, I want **to hear a sentence played from an asset that was prepared in advance, on a contract that was decided before the moment arrived rather than improvised inside it**, so that **a full line and a broken dependency both sound like a service that is still in control**.
 - **Business value:** `06-architecture.md` §5 and `MOD-01` R3 currently own this as **one sentence** — "refuse a third call rather than degrade all three" — with no implementation contract behind it, while `BRD-13`'s failure-capability matrix has just made a second obligation explicit: an inference-engine loss must end in a **deterministic fixed response**, "which is a build item, not an accepted gap". Neither obligation has a home today. Both are the same shape at the point of delivery — *a caller hears a prepared sentence with no model and no synthesis running at request time* — which is why they are one story and one asset set.

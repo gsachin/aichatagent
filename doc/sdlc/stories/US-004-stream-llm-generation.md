@@ -2,7 +2,7 @@
 
 # US-004 — Stream LLM generation to the caller [Lens: PO]
 
-- **Status:** **BLOCKED - `DG-03` (changes what the model returns)**
+- **Status:** **BLOCKED - `DG-03` (adoption); BUILD APPROVED behind flags (2026-09-19, Phase 4a PO ruling)** — timing-only change, batch path retained for BRD-15; adoption still gated on `DG-03` (changes what the model returns)
 
 - **Story:** As a **caller waiting on the line**, I want **the assistant to start speaking from the first clause the model produces**, so that **I stop waiting in silence for a whole answer to be written before I hear a single word**.
 - **Business value:** The non-streaming call is the single largest architectural defect this program addresses (`06-architecture.md` §1). Today the caller waits for the *worst* term in the chain; after this change the caller waits for the *first*.

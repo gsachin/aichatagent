@@ -2,7 +2,7 @@
 
 # US-014 — Decide caller-interruption behaviour and make code and prompt agree [Lens: PO]
 
-- **Status:** **AWAITING SIGN-OFF - Class C, PO decision required**
+- **Status:** **IN PROGRESS - DECIDED (2026-09-19, Phase 4a PO ruling): enable with echo-suppression** — caller audio continues during TTS playback with echo-suppression on the mic bleed; barge-in becomes possible pre-Wave-1
 
 > **CLASS C — REQUIRES PRODUCT OWNER SIGN-OFF.** This story changes user-perceivable turn-taking. Under `01-brd.md` §5 ("Behaviour-changing work needs sign-off") it may not be adopted on engineering judgement, and `UC-09` exists precisely because the decision is the Product Owner's. `DG-03` additionally gates every Class B/C change: the decision can be **taken** now, but the prompt alignment may not **ship** until the quality gate can score it.
 

@@ -2,7 +2,7 @@
 
 # US-009 — Relevance floor enforced without a second round trip [Lens: PO]
 
-- **Status:** **BLOCKED - `DG-03` (changes retrieved context)**
+- **Status:** **BLOCKED - `DG-03` (adoption); BUILD APPROVED behind flags (2026-09-19, Phase 4a PO ruling)** — floor ships disabled; adoption still gated on `DG-03` (changes retrieved context)
 
 - **Story:** As a **caller asking about tuition or a deadline**, I want **the assistant to say it does not have that information rather than answer from an unrelated chunk**, so that **I am never given a confident wrong number about money or dates**.
 - **Business value:** `BRD-10` requires a threshold below which retrieved context is treated as not relevant. Today the gate exists in code and is switched off (`RAG_SIMILARITY_THRESHOLD=0.0`), so "I don't know" is unreachable and the assistant grounds on whatever came back. A confident wrong answer about a fee is worse than a refusal.
