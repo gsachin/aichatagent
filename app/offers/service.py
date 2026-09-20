@@ -16,16 +16,14 @@ logger = logging.getLogger("offers.service")
 
 
 def _resolve_host() -> str:
-    """Resolve the public tunnel host for building media URLs."""
-    import os as _os
+    """Resolve the public tunnel host for building media URLs.
 
-    tunnel = _os.environ.get("TUNNEL_HOST", "")
-    if tunnel:
-        return tunnel
-    tunnel_file = Path(__file__).resolve().parent.parent.parent / ".whatsapp_tunnel"
-    if tunnel_file.is_file():
-        return tunnel_file.read_text().strip()
-    return _os.environ.get("NGROK_HOST", "localhost:8000")
+    Delegates to app.config.tunnel_host() — one home for a resolution that was
+    implemented four times across the app.
+    """
+    from app.config import tunnel_host
+
+    return tunnel_host()
 
 
 def _wa(num: str) -> str:

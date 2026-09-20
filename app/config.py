@@ -45,6 +45,13 @@ class Settings:
     # ── Chunk size for streaming (in frames) ────────────────────────
     CHUNK_FRAMES: int = 320          # 20 ms at 16 kHz
 
+    # ── Public tunnel ───────────────────────────────────────────────
+    # The hostname Twilio must call back on. Declared here so the four copies
+    # of the resolver (app/main.py twice — once dead — app/offers/service.py,
+    # app/outbound/caller.py) read through one place.
+    TUNNEL_HOST: str = field(default_factory=lambda: _env("TUNNEL_HOST", ""))
+    NGROK_HOST: str = field(default_factory=lambda: _env("NGROK_HOST", ""))
+
     # ── Twilio credentials ──────────────────────────────────────────
     TWILIO_ACCOUNT_SID: str = field(default_factory=lambda: _env("TWILIO_ACCOUNT_SID", ""))
     TWILIO_AUTH_TOKEN: str = field(default_factory=lambda: _env("TWILIO_AUTH_TOKEN", ""))
@@ -258,3 +265,29 @@ def database_target() -> str:
         f"dbname={settings.DB_NAME} user={settings.DB_USER} "
         f"password=<redacted>"
     )
+
+
+#: The hostname file the launcher writes once Cloudflare is up. Consulted only
+#: when TUNNEL_HOST is unset — it carries the same value, written where both
+#: the launcher and the operator can see it.
+TUNNEL_FILE = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
+
+
+def tunnel_host() -> str:
+    """
+    Public tunnel hostname for Twilio callbacks, e.g. "foo.trycloudflare.com".
+
+    One home for four copies of this resolution — app/main.py carried two
+    (the first shadowed by the second, so it was dead), and app/offers/service.py
+    and app/outbound/caller.py each had their own `_resolve_host`. Order is
+    unchanged: TUNNEL_HOST, then the file the launcher writes, then the legacy
+    NGROK_HOST, then localhost:8000. Returns a hostname with no scheme.
+
+    TUNNEL_HOST is empty in the checked-in .env and is filled in at launch,
+    which is why the file fallback is not merely legacy.
+    """
+    if settings.TUNNEL_HOST:
+        return settings.TUNNEL_HOST
+    if TUNNEL_FILE.is_file():
+        return TUNNEL_FILE.read_text().strip()
+    return settings.NGROK_HOST or "localhost:8000"

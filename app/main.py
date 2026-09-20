@@ -113,16 +113,10 @@ _readiness_cache: dict | None = None
 _readiness_lock = _asyncio.Lock()
 
 
-def _resolve_tunnel_host():
-    import os as _os
-    from pathlib import Path as _Path
-    host = _os.environ.get("TUNNEL_HOST", "")
-    if host:
-        return host
-    tf = _Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-    if tf.is_file():
-        return tf.read_text().strip()
-    return _os.environ.get("NGROK_HOST", "localhost:8000")
+# NOTE: a second, earlier copy of the tunnel-host resolver used to sit here.
+# Python took the later definition, so this one was dead code — two answers to
+# one question, which is the shape US-011 exists to remove. The survivor now
+# delegates to app.config.tunnel_host().
 
 
 # ── Startup / shutdown ───────────────────────────────────────────────
@@ -425,19 +419,14 @@ def _resolve_tunnel_host() -> str:
     """
     Resolve the public tunnel hostname for Twilio callbacks.
 
-    Checks, in order: TUNNEL_HOST env var, .whatsapp_tunnel file,
-    NGROK_HOST env var (legacy), then falls back to localhost:8000.
-    Returns just the hostname (no scheme), e.g. "foo.trycloudflare.com".
+    Delegates to app.config.tunnel_host(), which is the one home for this
+    resolution — it was previously implemented here, again above (dead, the
+    later definition won), in app/offers/service.py and in
+    app/outbound/caller.py, all four byte-equivalent.
     """
-    tunnel_host = os.environ.get("TUNNEL_HOST", "")
-    if tunnel_host:
-        return tunnel_host
+    from app.config import tunnel_host
 
-    tunnel_file = Path(__file__).resolve().parent.parent / ".whatsapp_tunnel"
-    if tunnel_file.is_file():
-        return tunnel_file.read_text().strip()
-
-    return os.environ.get("NGROK_HOST", "localhost:8000")
+    return tunnel_host()
 
 
 # ── TwiML template ───────────────────────────────────────────────────

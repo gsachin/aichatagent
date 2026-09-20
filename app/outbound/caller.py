@@ -61,20 +61,14 @@ def _format_twilio_error(exc: TwilioRestException) -> str:
 
 def _resolve_host() -> str:
     """
-    Resolve the public tunnel host from environment or file.
+    Resolve the public tunnel host from configuration.
 
-    Returns just the hostname (no scheme), e.g. "foo.trycloudflare.com".
+    Delegates to app.config.tunnel_host(). Returns just the hostname (no
+    scheme), e.g. "foo.trycloudflare.com".
     """
-    tunnel_host = os.environ.get("TUNNEL_HOST", "")
-    if tunnel_host:
-        return tunnel_host
+    from app.config import tunnel_host
 
-    tunnel_file = Path(__file__).resolve().parent.parent.parent / ".whatsapp_tunnel"
-    if tunnel_file.is_file():
-        return tunnel_file.read_text().strip()
-
-    # Last resort: try NGROK_HOST (legacy env var name)
-    return os.environ.get("NGROK_HOST", "localhost:8000")
+    return tunnel_host()
 
 
 class OutboundCallWorker:
