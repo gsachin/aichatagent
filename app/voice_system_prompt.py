@@ -21,10 +21,10 @@ context; build_voice_system_prompt() fills it, or substitutes an
 explicit "no information retrieved" marker when retrieval is empty.
 """
 
-import os
+from app.config import settings
 
-COMPANY_NAME = os.environ.get("COMPANY_NAME", "Meridian University")
-AGENT_NAME = os.environ.get("AGENT_NAME", "Alex")
+COMPANY_NAME = settings.COMPANY_NAME
+AGENT_NAME = settings.AGENT_NAME
 
 #: Substituted into {context} when retrieval returns nothing, so the
 #: grounding rules in section 25 still apply.

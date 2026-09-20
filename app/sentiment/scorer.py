@@ -35,14 +35,19 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from app.config import settings
+
 logger = logging.getLogger("sentiment.scorer")
 
-# ── Scoring weights (configurable via env) ──────────────────────────
+# ── Scoring weights (resolved through app/config.py) ────────────────
+# US-011 TAC-1: these read os.environ directly, so the weights in force
+# depended on whether .env had been loaded by whoever imported this module
+# first. Values and defaults are unchanged.
 
-W1 = float(os.environ.get("SENTIMENT_W1", "0.30"))   # latest call sentiment
-W2 = float(os.environ.get("SENTIMENT_W2", "0.30"))   # momentum (delta)
-W3 = float(os.environ.get("SENTIMENT_W3", "0.25"))   # buying intent
-W4 = float(os.environ.get("SENTIMENT_W4", "0.15"))   # friction penalty
+W1 = settings.SENTIMENT_W1   # latest call sentiment
+W2 = settings.SENTIMENT_W2   # momentum (delta)
+W3 = settings.SENTIMENT_W3   # buying intent
+W4 = settings.SENTIMENT_W4   # friction penalty
 
 
 @dataclass
@@ -194,7 +199,7 @@ async def extract_sentiment(transcript: str) -> ScoreResult:
 
 # ── EWMA baseline ───────────────────────────────────────────────────
 
-EWMA_LAMBDA = float(os.environ.get("SENTIMENT_EWMA_LAMBDA", "0.35"))
+EWMA_LAMBDA = settings.SENTIMENT_EWMA_LAMBDA
 
 
 async def _get_ewma_baseline(lead_id: str, current_s_call: float) -> float | None:
@@ -268,7 +273,7 @@ async def compute_lead_score(
     except Exception:
         pass
 
-    if history and len(history) >= int(os.environ.get("MIN_LABELED_OUTCOMES", "100")):
+    if history and len(history) >= settings.MIN_LABELED_OUTCOMES:
         # Placeholder for future LightGBM integration
         # For now, use a simple sigmoid heuristic
         try:

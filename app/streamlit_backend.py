@@ -8,14 +8,15 @@ and will always get a graceful fallback — no silent data loss.
 
 from __future__ import annotations
 
-import os
 import logging
 import requests
 
+from app.config import settings
+
 logger = logging.getLogger("streamlit_backend")
 
-BACKEND_BASE = os.environ.get("BACKEND_BASE", "http://localhost:8000")
-_TIMEOUT = float(os.environ.get("BACKEND_TIMEOUT", "10"))
+BACKEND_BASE = settings.BACKEND_BASE
+_TIMEOUT = settings.BACKEND_TIMEOUT
 
 
 def backend_healthy(timeout: float = 2.0) -> bool:

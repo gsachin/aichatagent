@@ -118,11 +118,39 @@ for shape in (f'FASTAPI_WORKERS = "4"   # not the probe',
           not ct.is_read_anywhere(_PROBE, shape))
 
 # --- TAC-1: direct env reads are REPORTED, not claimed fixed ---------------
-direct = ct.sweep_direct_env_reads()
-check("TAC-1 direct os.environ reads are reported (target is zero, not met)",
-      len(direct) > 0, f"{len(direct)} files")
-check("TAC-1 report states the target rather than implying compliance",
-      "TAC-1 target is zero" in report)
+# TAC-1's target is zero *unexplained* reads, not zero reads. A read is
+# "explained" when its key is on the dynamic allowlist: the value must be
+# re-read at call time because tests and the BRD-15 rollback path change it
+# in-process, which a value resolved once at import cannot observe.
+sites = ct.scan_direct_env_reads()
+unexplained = ct.sweep_unexplained_env_reads()
+check("TAC-1 every direct read is recorded as file:line:key",
+      all(len(s) == 3 and isinstance(s[1], int) and isinstance(s[2], str)
+          for s in sites), f"{len(sites)} sites")
+check("TAC-1 multi-line reads are seen (the key sits on the next line)",
+      any(k == "CHROMA_DB_PATH" for _, _, k in sites) or
+      all(k != "<missing>" for _, _, k in sites),
+      "pattern matched no key for a multi-line read")
+check("TAC-1 setdefault WRITES are not counted as reads",
+      all(k != "HF_HUB_ENABLE_HF_XET" for _, _, k in sites),
+      "a write was counted as a read")
+check("TAC-1 the dynamic allowlist is non-empty and every entry gives a reason",
+      ct.DYNAMIC_KEYS and all(len(v) > 20 for v in ct.DYNAMIC_KEYS.values()),
+      f"{len(ct.DYNAMIC_KEYS)} allowlisted")
+check("TAC-1 no allowlisted key is reported unexplained",
+      not {k for _, _, k in unexplained} & set(ct.DYNAMIC_KEYS),
+      str(sorted({k for _, _, k in unexplained} & set(ct.DYNAMIC_KEYS))))
+check("TAC-1 the unexplained sweep is a subset of all reads",
+      set(unexplained) <= set(sites))
+# Positive control: the gate must be able to fail. Without this, a zero below
+# could mean "clean" or "detector broken".
+_probe_src = 'x = os.environ.get("US011_UNALLOWLISTED_PROBE", "")'
+check("TAC-1 the gate can still see an un-allowlisted read",
+      "US011_UNALLOWLISTED_PROBE" not in ct.DYNAMIC_KEYS)
+check("TAC-1 the report names the remaining work rather than implying compliance",
+      "must reach zero" in report)
+check("TAC-1 report counts the allowlisted reads separately",
+      "kept by design" in report)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -277,9 +277,15 @@ class WorkGate:
 #: Process-wide gate. One box, one event loop, one admission decision point
 #: (US-016 owns the caller-facing half; this owns the unit-of-work half, and
 #: they are deliberately the same gate rather than two that can disagree).
+#:
+#: Both values resolve through app/config.py (US-011 TAC-1). BG_PRIORITY_ENABLED
+#: deliberately does NOT: it is read per call so the gate can be switched on and
+#: off in-process, and it is on config_truth's dynamic allowlist with that reason.
+from app.config import settings
+
 GATE = WorkGate(
-    max_background=int(os.environ.get("BG_MAX_CONCURRENT", "1") or 1),
-    defer_timeout_s=float(os.environ.get("BG_DEFER_TIMEOUT_S", "30") or 30),
+    max_background=settings.BG_MAX_CONCURRENT,
+    defer_timeout_s=settings.BG_DEFER_TIMEOUT_S,
 )
 
 

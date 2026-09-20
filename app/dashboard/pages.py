@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-# Backend base URL — reads from env so it can point to the tunnel URL
-import os
+# Backend base URL — from the resolution point, so it can point at the tunnel
+from app.config import settings
 
-BACKEND_URL = os.environ.get("DASHBOARD_API_URL", "http://localhost:8000")
+BACKEND_URL = settings.DASHBOARD_API_URL
 
 
 def setup_page():

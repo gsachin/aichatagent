@@ -52,6 +52,42 @@ class Settings:
     TUNNEL_HOST: str = field(default_factory=lambda: _env("TUNNEL_HOST", ""))
     NGROK_HOST: str = field(default_factory=lambda: _env("NGROK_HOST", ""))
 
+    # ── Presentation ────────────────────────────────────────────────
+    COMPANY_NAME: str = field(default_factory=lambda: _env("COMPANY_NAME", "Meridian University"))
+    AGENT_NAME: str = field(default_factory=lambda: _env("AGENT_NAME", "Alex"))
+
+    # ── Auxiliary HTTP clients ──────────────────────────────────────
+    # The Streamlit helpers and the admin dashboard each call the backend.
+    BACKEND_BASE: str = field(default_factory=lambda: _env("BACKEND_BASE", "http://localhost:8000"))
+    BACKEND_TIMEOUT: float = field(default_factory=lambda: float(_env("BACKEND_TIMEOUT", "10")))
+    DASHBOARD_API_URL: str = field(
+        default_factory=lambda: _env("DASHBOARD_API_URL", "http://localhost:8000")
+    )
+
+    # ── Background work admission ───────────────────────────────────
+    # `or 1` / `or 30` mirror the call sites: an empty value in .env must fall
+    # back rather than reach int("") and raise.
+    BG_MAX_CONCURRENT: int = field(
+        default_factory=lambda: int(_env("BG_MAX_CONCURRENT", "1") or 1)
+    )
+    BG_DEFER_TIMEOUT_S: float = field(
+        default_factory=lambda: float(_env("BG_DEFER_TIMEOUT_S", "30") or 30)
+    )
+
+    # ── Sentiment scoring ───────────────────────────────────────────
+    # Defaults copied from the call sites, which guard against an empty value
+    # with `or`: these are what app/sentiment/scorer.py has always used.
+    SENTIMENT_W1: float = field(default_factory=lambda: float(_env("SENTIMENT_W1", "0.30") or 0.30))
+    SENTIMENT_W2: float = field(default_factory=lambda: float(_env("SENTIMENT_W2", "0.30") or 0.30))
+    SENTIMENT_W3: float = field(default_factory=lambda: float(_env("SENTIMENT_W3", "0.25") or 0.25))
+    SENTIMENT_W4: float = field(default_factory=lambda: float(_env("SENTIMENT_W4", "0.15") or 0.15))
+    SENTIMENT_EWMA_LAMBDA: float = field(
+        default_factory=lambda: float(_env("SENTIMENT_EWMA_LAMBDA", "0.35") or 0.35)
+    )
+    MIN_LABELED_OUTCOMES: int = field(
+        default_factory=lambda: int(_env("MIN_LABELED_OUTCOMES", "100") or 100)
+    )
+
     # ── Twilio credentials ──────────────────────────────────────────
     TWILIO_ACCOUNT_SID: str = field(default_factory=lambda: _env("TWILIO_ACCOUNT_SID", ""))
     TWILIO_AUTH_TOKEN: str = field(default_factory=lambda: _env("TWILIO_AUTH_TOKEN", ""))

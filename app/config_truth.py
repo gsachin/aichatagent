@@ -163,6 +163,10 @@ def sweep_direct_env_reads(exclude_files: tuple[str, ...] = ("config.py", "confi
     asserting compliance — the refactor is not part of US-011 and claiming it
     without doing it would be exactly the 'set is not live' failure the module
     exists to catch.
+
+    File-level only, and therefore not actionable on its own: it cannot tell a
+    file that reads an allowlisted dynamic key from one that reads a key nobody
+    documented. Use `sweep_unexplained_env_reads()` for the gate.
     """
     hits = []
     for p in sorted(APP_DIR.rglob("*.py")):
@@ -175,6 +179,87 @@ def sweep_direct_env_reads(exclude_files: tuple[str, ...] = ("config.py", "confi
         if re.search(r"os\.environ(?:\.get\(|\[)|os\.getenv\(", src):
             hits.append(str(p.relative_to(PROJECT_ROOT)))
     return tuple(hits)
+
+
+# ── TAC-1: which direct reads are allowed to remain ─────────────────────────
+
+#: Keys whose read is deliberately dynamic — read from the environment at CALL
+#: time, not resolved once at import. Keeping these out of `Settings` is the
+#: design, not a gap: the test suite and the `BRD-15` rollback path change them
+#: at runtime and require the very next call to observe the change, which an
+#: import-time value cannot do. Each entry says why, because an allowlist
+#: without reasons is just a list of places nobody looked.
+#:
+#: Anything NOT in this map must resolve through `app/config.py`. That is the
+#: TAC-1 gate: `sweep_unexplained_env_reads()` returns empty.
+DYNAMIC_KEYS: dict[str, str] = {
+    "USE_MCP_RAG": (
+        "The MCP-first seam's mode. test_rag_dispatcher flips it per test "
+        "(14 sites) to exercise off/auto/on against one interpreter."),
+    "ADMISSION_ENABLED": (
+        "US-016's revert switch. BRD-15 requires reverting by configuration, "
+        "and admission.enabled() is the function the rollback path calls."),
+    "MAX_CONCURRENT_CALLS": (
+        "Sizing for the admission lease. Read at lease time so a test can "
+        "lower the ceiling without restarting the process."),
+    "BG_PRIORITY_ENABLED": (
+        "Turns the background/voice admission gate on and off; the gate is "
+        "exercised both ways in-process."),
+    "RAG_BREAKER_MODE": (
+        "Breaker policy. test_brd15_rollback sets it at runtime and asserts "
+        "the next read reflects it — the rollback demonstration itself."),
+    "RAG_COLLECTION_NAME": (
+        "Blue/green collection switch (C5). Flipped at runtime to prove the "
+        "seam moves without a restart."),
+    "PERF_TRACE": (
+        "Tracing toggle; enabled around a block of code under test."),
+    "PERF_TRACE_FILE": (
+        "Trace destination, set per test to keep runs out of the real file."),
+    "MACHINE_PROFILE_CHECK": (
+        "Boot drift report switch (DG-05). Read at boot, tested both ways."),
+}
+
+_READ_SITE_PATTERNS = (
+    re.compile(r'os\.environ\.get\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
+    re.compile(r'os\.environ\[\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']\s*\]'),
+    re.compile(r'os\.getenv\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
+    re.compile(r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
+)
+
+
+def scan_direct_env_reads(
+    exclude_files: tuple[str, ...] = ("config.py", "config_truth.py"),
+) -> tuple[tuple[str, int, str], ...]:
+    """Every direct env read as (file, line, key).
+
+    Pattern-matched over whole files rather than line by line, because a read's
+    key can sit on the line after the call — `os.environ.get(\\n "KEY",` is how
+    several of these are written. `os.environ.setdefault` writes are not reads
+    and are not matched.
+    """
+    sites: list[tuple[str, int, str]] = []
+    for p in sorted(APP_DIR.rglob("*.py")):
+        if p.name in exclude_files:
+            continue
+        try:
+            src = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for pat in _READ_SITE_PATTERNS:
+            for m in pat.finditer(src):
+                line = src.count("\n", 0, m.start()) + 1
+                sites.append((str(p.relative_to(PROJECT_ROOT)), line, m.group("k")))
+    return tuple(sites)
+
+
+def sweep_unexplained_env_reads() -> tuple[tuple[str, int, str], ...]:
+    """Direct reads of keys that are NOT on the dynamic allowlist.
+
+    This is the TAC-1 gate. Empty means every remaining direct read is one the
+    project has decided to keep and written down; non-empty means a read was
+    added that nothing accounts for.
+    """
+    return tuple(s for s in scan_direct_env_reads() if s[2] not in DYNAMIC_KEYS)
 
 
 def validate_types(env: dict[str, str] | None = None) -> list[str]:
@@ -245,11 +330,21 @@ def report() -> str:
     if not bad:
         lines.append("  none")
 
-    direct = sweep_direct_env_reads()
-    lines += ["", f"DIRECT os.environ READS outside app/config.py "
-                  f"(TAC-1 target is zero): {len(direct)}"]
-    for d in direct:
-        lines.append(f"  {d}")
+    sites = scan_direct_env_reads()
+    unexplained = sweep_unexplained_env_reads()
+    dynamic = tuple(s for s in sites if s[2] in DYNAMIC_KEYS)
+    lines += [
+        "",
+        f"DIRECT os.environ READS outside app/config.py: {len(sites)} sites "
+        f"in {len(sweep_direct_env_reads())} files",
+        f"  kept by design (dynamic allowlist): {len(dynamic)}",
+        f"  UNEXPLAINED - TAC-1 gate, must reach zero: {len(unexplained)}",
+    ]
+    for f, ln, k in unexplained:
+        lines.append(f"    {f}:{ln}  {k}")
+    if not unexplained:
+        lines.append("    none - every remaining direct read is a documented "
+                     "dynamic key")
 
     lines += [
         "",
