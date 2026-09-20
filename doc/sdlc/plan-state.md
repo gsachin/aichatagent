@@ -156,7 +156,7 @@ The stage table above tracks **artifact production**. It says `done` for every s
 |---|---|---|
 | Planning (artifacts) | **COMPLETE** | — |
 | Implementation | **IN PROGRESS** | Branch `perf/phase-a`, commit `849d94f` (local, unpushed). **4 stories DONE**, 1 in progress |
-| Instrumentation (`US-001`, `US-007`) | `US-001` **DONE** (`test_us001_tracer.py` 17/17, proven on a live call) · `US-007` **DONE** (`test_us007_readiness.py` 30/30; live gate 3/4 clauses) | `US-007` replaced the `"ping"` pre-warm with the real voice prompt and added the four-clause readiness gate. **The harness's `readiness: assumed` can now be replaced by the gate's verdict** |
+| Instrumentation (`US-001`, `US-007`) | `US-001` **DONE** (`test_us001_tracer.py` 17/17, proven on a live call) · `US-007` **DONE** (`test_us007_readiness.py` 37/37; live gate 4/4 clauses) | `US-007` replaced the `"ping"` pre-warm with the real voice prompt, added the four-clause readiness gate, and (Phase 1.1) exposed it at call time: `GET /health` = liveness, `GET /ready` = the boot verdict + `status`, `?refresh=1` = cheap re-assessment without re-warming. **The harness's `readiness: assumed` is replaced by the gate's verdict** (`--readiness-url`, verified live) |
 | Load harness (`US-002`) | **IN PROGRESS** | Drives live `/ws/twilio`; two gaps open. **First ≥100-sample run completed 2026-09-19** (110 turns, 108 warm samples, zero drops) |
 | Golden set (`US-003`) | **BUILT — AWAITING SIGN-OFF** | `eval/golden_set.jsonl`: 161 cases, 28/28 intents, 24 verified mechanically, **137 PENDING_PO_SIGNOFF**, **0 approved**. Built and self-tested (`eval/checks.py`, exit 0); it cannot freeze until a human approves the 12 critical-intent ground truths |
 | Quality gate | **BLOCKED** | All 12 critical intents report BLOCKED — no approved ground truth exists. This is the designed outcome, not a defect |
@@ -164,14 +164,14 @@ The stage table above tracks **artifact production**. It says `done` for every s
 | RAG optimization (`BRD-21` / `RAG-Optimized`) | **BLOCKED** | Quality gate; retrieval-only metrics can start now |
 | RAG baseline characterisation (`BRD-21` / `US-018`) | **PLANNED** | Owner is `US-018`; needs the trace's retrieval mark (`US-001`/`US-007`) before retrieval latency is reportable, and store consolidation (`US-010`) before a baseline number stops being a property of the route (see `08-coverage-verification.md` §2) |
 | Concurrency work (`US-008`, `US-012`, `US-016`) | `US-008` **DONE** · `US-012`, `US-016` **NOT STARTED** | `US-008`: both ERC legs moved off the event loop (`asyncio.to_thread`) |
-| Config truth (`US-011`) | **DONE** | `test_us011_config_truth.py` 16/16; found 3 inert keys the plan did not know about (`KOKORO_SPEED`, `LOG_FILE`, `LOG_LEVEL`) |
+| Config truth (`US-011`) | **DONE** | `test_us011_config_truth.py` 17/17; found 3 inert keys the plan did not know about (`KOKORO_SPEED`, `LOG_FILE`, `LOG_LEVEL`) |
 | Model residency (`US-006`) | **DONE** | `test_us006_residency.py` 11/11; `ollama ps` reports `Forever` |
 | Baseline measurement (`BRD-02`) | **ESTABLISHED — CAP NOT MET** | 2026-09-19, N=2 warm: **p50 3,609 ms · p95 6,044 ms · n=108**, 0 timeouts, 0 drops. **96 of 108 turns exceed the 3,000 ms cap.** The run is still `DISCARDED` by the harness's own turn-cap gate — the number is reportable, the run is not a pass |
 | Interruption decision (`US-014`) | **BLOCKED** | Class C — PO sign-off required |
 | Production validation | **NOT STARTED** | Requires implementation |
 | Production acceptance | **NOT STARTED** | — |
 
-**Summary line:** `PLANNING_COMPLETE · IMPLEMENTATION_IN_PROGRESS (4/18 DONE) · BASELINE_ESTABLISHED (CAP NOT MET) · QUALITY_GATE_BLOCKED (DG-03) · PRODUCTION_NOT_ACCEPTED`
+**Summary line:** `PLANNING_COMPLETE · IMPLEMENTATION_IN_PROGRESS (8/18 DONE) · BASELINE_ESTABLISHED (CAP NOT MET) · QUALITY_GATE_BLOCKED (DG-03) · PRODUCTION_NOT_ACCEPTED`
 
 ## Coverage gap — `MOD-05` has no story (ACCEPTED as out of scope, 2026-09-19)
 

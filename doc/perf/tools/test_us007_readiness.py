@@ -17,6 +17,7 @@ Run:  .venv/Scripts/python.exe doc/perf/tools/test_us007_readiness.py
 """
 import os
 import sys
+import json
 
 PROJ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
@@ -243,6 +244,40 @@ baseline()
 r = br.assess(do_warm=False)
 check("AC-1   --no-warm never reports a warm prefix",
       r.clauses.get("prefix") is False and r.ready is False)
+
+# ── Phase 1.1 / the call-time surface (/ready?refresh=1) ───────────────────
+# The refresh is a cheap re-assessment laid over the boot verdict. The prefix
+# clause is CARRIED from the boot assessment (a poll never re-warms), so a
+# healthy stack stays ready on refresh and only a real regression flips it.
+baseline()
+boot = br.assess().to_dict()          # warm boot: all four clauses true
+boot["status"] = "ready"
+merged = br.refresh_payload(boot, br.assess(do_warm=False))
+check("AC-3 sc.1  refresh carries the boot prefix clause, never re-warms",
+      merged["clauses"]["prefix"] is True)
+check("AC-3 sc.1  a healthy stack stays READY on refresh",
+      merged["ready"] is True and merged["status"] == "ready")
+check("T-6      the refresh basis says the warm was not re-run",
+      "never re-warms" in merged["basis"])
+
+stub_sockets(NONE_UP)
+merged = br.refresh_payload(boot, br.assess(do_warm=False))
+check("AC-3 sc.1  a refresh that finds a dead service flips NOT READY",
+      merged["ready"] is False and merged["status"] == "not_ready"
+      and merged["clauses"]["services"] is False)
+check("T-6      no secret value anywhere in the refresh payload",
+      SECRET not in json.dumps(merged))
+
+stub_config(unread=["LOG_LEVEL"])
+merged = br.refresh_payload(boot, br.assess(do_warm=False))
+check("TAC-1    a refresh that finds an unread key flips NOT READY",
+      merged["ready"] is False and merged["clauses"]["config_keys"] is False)
+
+# With no boot verdict to carry from, the caller falls back to a full assess --
+# the payload must still carry `status` beside `ready` for the harness contract.
+check("Phase 1.1  a bare assessment reports the harness's status word",
+      br.refresh_payload({}, br.assess(do_warm=False))["status"] in
+      ("ready", "not_ready"))
 
 print(f"\n{passed} passed, {failed} failed\n")
 sys.exit(1 if failed else 0)

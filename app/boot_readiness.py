@@ -449,6 +449,31 @@ def assess(do_warm: bool = True) -> Readiness:
     return r
 
 
+def refresh_payload(cached: dict, fresh: Readiness) -> dict:
+    """The `/ready?refresh=1` answer: a cheap re-assessment laid over the boot
+    verdict (US-007 Phase 1.1, the call-time surface).
+
+    The refresh re-checks services, residency, GPU and config — the clauses
+    that can change after boot — and never re-runs the prefix warm, because a
+    poll must not re-warm (and cannot meaningfully do so per request). The
+    prefix clause is therefore CARRIED from the boot assessment instead of
+    being failed for being unverified: warmth is a property of the boot warm,
+    not of the poll. `ready` is the conjunction of the fresh clauses and the
+    carried one; `status` says the same in the harness's vocabulary. No
+    credential value is ever rendered (TAC-6 holds for every field here).
+    """
+    d = fresh.to_dict()
+    d["prefix"] = dict(cached).get("prefix") or d.get("prefix")
+    d["clauses"] = dict(d.get("clauses") or {})
+    d["clauses"]["prefix"] = (dict(cached).get("clauses") or {}).get("prefix", False)
+    d["ready"] = bool(d["clauses"]) and all(d["clauses"].values())
+    d["status"] = "ready" if d["ready"] else "not_ready"
+    d["basis"] = ("cheap re-assessment (services/residency/gpu/config) at call time; "
+                  "the prefix clause is carried from the boot assessment - a poll "
+                  "never re-warms")
+    return d
+
+
 def render(r: Readiness) -> str:
     ok = lambda b: "OK  " if b else "FAIL"          # noqa: E731
     lines = ["", "== READINESS " + ("READY" if r.ready else "NOT READY") + " " + "=" * 40]

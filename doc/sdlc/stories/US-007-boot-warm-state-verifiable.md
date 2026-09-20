@@ -2,7 +2,7 @@
 
 # US-007 — Boot-time warm state is verifiable, not assumed [Lens: PO]
 
-- **Status:** **IMPLEMENTED - ACs verified; gate exits 0** · `test_us007_readiness.py` 30/30 · DoD 5/8 · LLD mapping and a commit-level rollback are open · the call-arrival acceptance box is UNTICKED (no readiness surface exists)
+- **Status:** **IMPLEMENTED - ACs verified; gate exits 0** · `test_us007_readiness.py` 37/37 · DoD 5/8 · LLD mapping and a commit-level rollback are open · the call-arrival acceptance box is UNTICKED pending the Phase 4a PO ruling (the `/ready?refresh=1` surface now exists — Phase 1.1 — so the observation is *possible*; whether it satisfies the "at the moment a call arrives" wording is the queued PO decision)
 
 - **Story:** As an **operator starting the stack**, I want **the stack to refuse to call itself ready until the model is resident and the real voice prompt prefix is warm, and to tell me exactly what is missing when it is not**, so that **I stop discovering a cold stack from a caller who waited half a minute in silence**.
 - **Business value:** `BRD-17` requires the inference model **and its prompt prefix** resident before the first call is accepted, and the GPU not idle-clocked at the moment a call arrives. Today the pre-warm sends the literal prompt `"ping"` — it warms weights, not the voice prompt prefix — and a skipped pre-warm is a warning the operator can miss.
@@ -269,20 +269,22 @@ against the scenario table above. The suite cites `AC-` and `TAC-` ids and **no
 | T-14 | Operator aborts a start mid-way: no partial readiness is claimed | — | **GAP — the second `MOD-07` B.6 row with nothing behind it.** `grep "abort"` in `boot_readiness.py`: 0 |
 | T-15 | CRM and tunnel down: reported, readiness still declared | *"a down Postgres degrades but does not block"*, *"a down ERC MCP degrades but does not block"* | **COVERED** |
 | T-16 | Restart after a failure is safe and repeatable | *"a second start against a warm stack is still READY"* — partially | **PARTIAL** — the warm-restart case is covered; restart *after a failure* is not distinguished from it |
-| T-17 | After a successful gate, a call placed immediately shows no cold-load signature and the GPU is not idle-clocked | — | **GAP** — the call-arrival observation, third story to carry it |
+| T-17 | After a successful gate, a call placed immediately shows no cold-load signature and the GPU is not idle-clocked | — | **PARTIAL — the surface now exists (Phase 1.1).** `GET /ready?refresh=1` re-reads `/api/ps` residency and both GPU clocks at call time without re-warming; the queued Phase 4a PO ruling decides whether that satisfies the "observed at the moment a call arrives" wording |
 | T-18 | A call placed 30 minutes later still shows no cold-load signature | — | **GAP** — load gate |
 | T-19 | The 32,919 ms cold load is paid once at boot, never per first call after idle | — | **GAP** — load gate |
 
-**Coverage: 9 covered, 2 covered elsewhere, 1 partial, 7 gaps.**
+**Coverage: 9 covered, 2 covered elsewhere, 2 partial, 6 gaps.**
 
 ### Three findings
 
 **The call-arrival observation is now a three-story pattern.** `US-006` T-11 and
 T-16, `US-007` T-17, and `US-007`'s own unticked DoD box all require residency
 or the GPU clock read *at the instant a call arrives*. The gate reads both at
-boot and no readiness surface exists, so none of the four can be satisfied as
-written. **This is one decision, not four fixes**, and it is a Product-Owner
-decision because two of the four are acceptance criteria.
+boot, and **Phase 1.1 (2026-09-19) added the missing surface**: `GET /ready`
+serves the boot verdict and `GET /ready?refresh=1` re-reads `/api/ps` residency
+plus both GPU clocks at call time without re-warming. The remaining open item is
+**one PO decision, not four fixes** — whether a `?refresh=1` read at call arrival
+satisfies the wording — queued in Phase 4a item 6 with a recommendation of yes.
 
 **T-11 and T-14 match the two `MOD-07` B.6 rows with no implementation.** That
 was found by reading the module doc; this is the same conclusion reached from a
@@ -302,7 +304,7 @@ using them to navigate the code will be sent to three places that do not exist.
 - [x] Perf/load test passed — n/a for the turn path (`MOD-07` has no runtime load); TAC-2's "cold load paid once at boot" is measured over repeated start-and-call cycles instead
 - [x] Schema migration applied — n/a; the readiness report is an output artefact
 - [x] Module docs updated if contracts changed — `MOD-07` B.3 (readiness report row) and B.6 (edge-case table) if the gate differs from `TRD-26`; `06-architecture.md` §2 MOD-07 flow already describes the pre-warm as "exists but is undone". **Done 2026-09-19:** B.3's readiness-report row (service states, model residency, prefix-warm state, effective config with sources, no secret values) is accurate as built and needed no change. B.6 was prescriptive ("Today: … Required: …") from before the gate existed; it now carries an as-built reconciliation answering the Required column row by row — **six implemented, one handled outside the gate, three with no implementation at all** (see the Outstanding note)
-- [ ] Acceptance observed externally at the moment a call arrives: the model resident in `nvidia-smi`, and the GPU not idle-clocked — never from a boot success line. **UNTICKED 2026-09-19, and this is a real gap rather than a documentation slip.** The gate reads `/api/ps` and both GPU clocks inside `assess()` at BOOT (`app/boot_readiness.py:383`), and **the app exposes no readiness route** — no `/health`, no `/ready` (verified: zero matches in `app/main.py`). So the observation AC-3 scenario 2 describes cannot be made at call arrival by anything, and the box was ticked for an observation the system is unable to perform. What IS true: the operator can run the gate (`python -m app.boot_readiness --json`, invoked at `start_services.ps1:728`) and it answers all four clauses, which satisfies AC-3 scenario 1. Closing this box needs either a readiness surface the call path can consult, or an AC re-word — and re-wording a Product-Owner acceptance criterion is not a change to make unilaterally
+- [ ] Acceptance observed externally at the moment a call arrives: the model resident in `nvidia-smi`, and the GPU not idle-clocked — never from a boot success line. **UNTICKED pending the Phase 4a PO ruling (updated 2026-09-19).** The gap this box described — no readiness route at all — is closed by Phase 1.1: `GET /health` (liveness) and `GET /ready` (the boot gate's cached verdict + `status`) now exist, and `GET /ready?refresh=1` re-reads `/api/ps` residency and both GPU clocks at call time in a worker thread, carrying the prefix clause from the boot assessment (a poll never re-warms). Live-verified: `/ready` → `ready: true, status: "ready"`, all four clauses green; the harness's `--readiness-url http://127.0.0.1:8000/ready` reports "ready (readiness endpoint)" instead of "assumed". What remains is the PO confirmation that a `?refresh=1` read at call arrival satisfies the "observed at the moment a call arrives" wording (Phase 4a item 6, recommendation: yes), plus the US-006 T-11/T-16 siblings
 - [ ] `BRD-15` rollback demonstrated: **not a setting.** The gate is a module plus its call in `start_services.ps1`, so its revert is commit-level and cannot be shown by configuration. `test_brd15_rollback.py` covers the five setting-revertible stories and records this one as out of its scope rather than implying coverage.
 - [x] A deliberately added inert key makes the gate fail loudly — the check is tested as well as the config (the `TRD-25` requirement that the check itself is verified)
 

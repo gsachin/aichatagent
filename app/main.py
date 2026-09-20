@@ -103,6 +103,15 @@ _configure_logging()
 logger = logging.getLogger("voice_api")
 
 
+# ── US-007 Phase 1.1: the call-time readiness surface (/health + /ready) ──
+# The boot gate is assessed once at startup (warm, all four clauses) and the
+# verdict is cached here. `/ready` serves the cache; `?refresh=1` re-runs only
+# the cheap clauses (services, residency, GPU, config) in a worker thread and
+# carries the prefix clause from the boot assessment -- a poll never re-warms.
+_readiness_cache: dict | None = None
+_readiness_lock = _asyncio.Lock()
+
+
 def _resolve_tunnel_host():
     import os as _os
     from pathlib import Path as _Path
@@ -316,6 +325,33 @@ async def lifespan(app_instance):
     except Exception as e:
         logger.warning(f"Warmup skipped: {e}")
 
+    # US-007 Phase 1.1: assess the boot gate once so `/ready` serves the SAME
+    # verdict the operator's CLI gate produces -- warmth included. Deferred to a
+    # background task: uvicorn binds the port only AFTER startup completes, so
+    # an assessment run inline in the lifespan probes its own :8000 socket
+    # before it exists and would report the app it is serving as DOWN (the
+    # CLI gate never has this problem - start_services.ps1 runs it after the
+    # app is up). Never blocks startup; a failed assessment leaves the cache
+    # empty and `/ready` falls back to a full assessment per request.
+    global _readiness_cache
+
+    async def _assess_readiness_at_boot() -> None:
+        try:
+            await _asyncio.sleep(3.0)   # let uvicorn bind; the gate probes :8000
+            from app import boot_readiness as _boot
+
+            _boot.load_env()
+            _booted = (await _asyncio.to_thread(_boot.assess, True)).to_dict()
+            _booted["status"] = "ready" if _booted.get("ready") else "not_ready"
+            _readiness_cache = _booted
+            logger.info("Readiness assessed at boot: %s (%s)",
+                        "READY" if _booted.get("ready") else "NOT READY",
+                        "; ".join(_booted.get("missing") or ["no gaps"])[:200])
+        except Exception as e:
+            logger.warning(f"Boot readiness assessment skipped: {e}")
+
+    _readiness_task = _asyncio.create_task(_assess_readiness_at_boot())
+
     # Start outbound call worker
     try:
         from app.outbound.caller import OutboundCallWorker
@@ -362,6 +398,8 @@ async def lifespan(app_instance):
 
     yield
     # Shutdown
+    if _readiness_task and not _readiness_task.done():
+        _readiness_task.cancel()
     if _outbound_worker:
         _outbound_worker.stop()
     if _follow_up_scheduler:
@@ -2698,6 +2736,49 @@ def _push_transcript_event(event_type: str, call_sid: str, data: dict | None = N
     # Keep only last 200 events
     if len(_transcript_events) > 200:
         _transcript_events[:] = _transcript_events[-200:]
+
+
+@app.get("/health")
+async def api_health():
+    """Pure liveness: the process serves HTTP. No checks, no secrets, no work.
+
+    This is the answer to "is the box up". Readiness is `/ready`.
+    """
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/ready")
+async def api_ready(refresh: int = 0):
+    """US-007 Phase 1.1: the boot gate's own verdict, readable at call time.
+
+    The plain response is the cached boot assessment (all four clauses, warmth
+    included) plus `status` in the harness's vocabulary. `?refresh=1` re-runs
+    the cheap clauses -- services, residency, GPU, config -- in a worker thread
+    and carries the prefix clause from the boot assessment: a poll never
+    re-warms, and a slow model load can never block the poll (the loop stays
+    free; the assessment runs in a thread). No credential value is rendered.
+    """
+    from app import boot_readiness as _boot
+
+    global _readiness_cache
+    if refresh != 1 and _readiness_cache is not None:
+        return JSONResponse(_readiness_cache)
+    async with _readiness_lock:
+        if refresh == 1:
+            if _readiness_cache is None:
+                # No boot verdict to carry the prefix clause from: fall back to
+                # a full assessment rather than report unverified warmth as a
+                # failure.
+                _readiness_cache = (await _asyncio.to_thread(
+                    _boot.assess, True)).to_dict()
+            fresh = await _asyncio.to_thread(_boot.assess, False)
+            _readiness_cache = _boot.refresh_payload(_readiness_cache, fresh)
+        elif _readiness_cache is None:
+            _readiness_cache = (await _asyncio.to_thread(_boot.assess, True)).to_dict()
+        if "status" not in _readiness_cache:
+            _readiness_cache["status"] = (
+                "ready" if _readiness_cache.get("ready") else "not_ready")
+        return JSONResponse(_readiness_cache)
 
 
 @app.get("/api/perf/policy")
