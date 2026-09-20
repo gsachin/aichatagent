@@ -92,10 +92,26 @@ def classify(case: dict, kb_text: str) -> dict:
     }
 
 
+#: The packet presents cases AWAITING a PO decision -- exactly
+#: `PENDING_PO_SIGNOFF`. A `verified` case is already usable (mechanically
+#: transcribed, no judgement claimed) and was never in this packet; a
+#: `PO_APPROVED` case has been decided.
+#:
+#: This was `!= "verified"` until 2026-09-19, which meant an approved case kept
+#: counting as pending. Measured: after approving the Out-of-scope intent, nine
+#: cases moved to `PO_APPROVED` and `--status` still reported `pending: 137` --
+#: the before-number. A Product Owner would approve nine decisions and watch the
+#: count not move, conclude the tool was broken, and be right.
+#:
+#: The same shape as everything else this programme has found: a number that
+#: stops describing the artifact and nothing that notices.
+AWAITING = ("PENDING_PO_SIGNOFF",)
+
+
 def load(kb_text: str | None = None) -> tuple[list[dict], str]:
     kb_text = kb_text if kb_text is not None else C.KB_PATH.read_text(encoding="utf-8")
     cases = C.load_cases()
-    pending = [c for c in cases if c["ground_truth_status"] != "verified"]
+    pending = [c for c in cases if c["ground_truth_status"] in AWAITING]
     return [classify(c, kb_text) for c in pending], kb_text
 
 
