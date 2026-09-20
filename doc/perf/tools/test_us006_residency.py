@@ -64,20 +64,20 @@ def unload(model=MODEL):
 
 # --- TAC-3 (static half): the serving path always sends a keep-alive ---------
 import app.llm_backend as lb                                     # noqa: E402
-check("TAC-3 KEEP_ALIVE resolves from config", lb.KEEP_ALIVE not in (None, ""),
+check("T-5/TAC-3 KEEP_ALIVE resolves from config", lb.KEEP_ALIVE not in (None, ""),
       repr(lb.KEEP_ALIVE))
 # Regression guard for the bug this test found: a .env value is always a string,
 # and Ollama 400s on `"-1"`. An integer must be sent as an int, not as text.
-check("TAC-3 a numeric keep-alive is sent as an INT, not a string",
+check("T-1/TAC-3 a numeric keep-alive is sent as an INT, not a string",
       isinstance(lb.KEEP_ALIVE, int), f"type={type(lb.KEEP_ALIVE).__name__}")
-check("TAC-3 a duration keep-alive stays a string",
+check("T-1/TAC-3 a duration keep-alive stays a string",
       lb._resolve_keep_alive("24h") == "24h" and lb._resolve_keep_alive("-1") == -1,
       f"{lb._resolve_keep_alive('24h')!r} / {lb._resolve_keep_alive('-1')!r}")
 import inspect                                                  # noqa: E402
 src = inspect.getsource(lb._chat_ollama)
-check("TAC-3 every generation request carries keep_alive",
+check("T-3/TAC-3 every generation request carries keep_alive",
       "keep_alive=ka" in src, "no unconditional keep_alive in _chat_ollama")
-check("TAC-3 the keep-alive is not sent only at boot",
+check("T-3/TAC-3 the keep-alive is not sent only at boot",
       "OLLAMA_KEEP_ALIVE" not in lb.__dict__.get("_BOOT_ONLY", ""),
       "resolved in the serving module, not the launcher")
 
@@ -85,7 +85,7 @@ check("TAC-3 the keep-alive is not sent only at boot",
 print(f"\n  [probe] unloading {MODEL} to establish a cold floor...")
 unload()
 pre = ps_row()
-check("TAC-4 model is NOT resident before the test (clean floor)",
+check("T-4/TAC-4 model is NOT resident before the test (clean floor)",
       pre is None, str(pre))
 
 print("  [probe] one generation through the serving path...")
@@ -97,11 +97,11 @@ except Exception as exc:
     call_ok = False
     print(f"        call failed: {exc!r}")
 first_ms = (time.time() - t0) * 1000
-check("TAC-4 a generation through the serving path succeeds", call_ok)
+check("T-4/TAC-4 a generation through the serving path succeeds", call_ok)
 print(f"        first call took {first_ms:,.0f} ms (includes the cold load)")
 
 row = ps_row()
-check("TAC-4 model IS resident after ONE serving-path call (external evidence)",
+check("T-4/TAC-4 model IS resident after ONE serving-path call (external evidence)",
       row is not None, "ollama ps shows nothing — residency was not established")
 
 if row:
@@ -112,14 +112,14 @@ if row:
     held = ("Forever" in until) or ("forever" in until.lower())
     if not held:
         held = not any(tok in until for tok in ("second", "minute"))
-    check("TAC-4 the model's expiry is HELD, not the 5-minute default "
+    check("T-4/TAC-4 the model's expiry is HELD, not the 5-minute default "
           "(this is the REC-11 failure)", held, f"UNTIL={until!r}")
 
 # --- TAC-6: re-warm is idempotent -------------------------------------------
 before = ps_row()
 lb.chat([{"role": "user", "content": "Say OK again."}], model=MODEL, num_ctx=2048)
 after = ps_row()
-check("TAC-6 a second call does not evict or duplicate residency",
+check("T-6/TAC-6 a second call does not evict or duplicate residency",
       before is not None and after is not None)
 
 # --- TAC-7: reversible -------------------------------------------------------

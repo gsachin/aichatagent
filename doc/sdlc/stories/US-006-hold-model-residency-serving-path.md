@@ -210,6 +210,56 @@ OLLAMA_KEEP_ALIVE=<duration, resolved from configuration at import>
 - Reconciliation: **`REC-11`** (central — the pre-warm exists, runs, and is neutralised by the first serving call; the fifth instance of "set ≠ live"); `REC-02` (one process, one event loop — the generation calls must stay non-blocking); `REC-05` (`.env` is the runtime truth and the machine profile is a detection artifact); **`REC-13`** (`app/memory_budget.py`'s `"nvidia"` block encodes a stale 6 GB machine and its `safe_threshold_percent: 95` sits above `BRD-11`'s 90% ceiling — `BRD-11` owns the ceiling and the threshold derives from it); `REC-06` (`doc/model_vram_analysis.md` carries the same stale machine and is excluded as evidence); `REC-01` (Pipecat is not adopted)
 - Related workflow: `WF-01` step 1 and `UC-01` E1 (model not resident → first turn pays a cold load, `BRD-03` breached and traced)
 
+## LLD test mapping — T-1 … T-16, reconciled 2026-09-19
+
+Mapped by reading every `check()` in `doc/perf/tools/test_us006_residency.py`
+against the scenario table above. **The suite cites no `T-` id at all** — it
+names `TAC-3`, `TAC-4`, `TAC-6` and `TAC-7` — so unlike `US-001` the mapping is
+*absent* rather than wrong. Eleven checks cover sixteen scenarios.
+
+| LLD | Requires | Satisfied by | Status |
+|---|---|---|---|
+| T-1 | `_srv_options()` always contains `keep_alive` | *"every generation request carries keep_alive"*, *"the keep-alive is not sent only at boot"*, +3 | **COVERED — but the named helper does not exist.** `_srv_options` has **zero** matches in `app/`; options are assembled inline in `_chat_ollama` (`app/llm_backend.py:193-203`). The behaviour is tested; the function the scenario names was never written |
+| T-2 | A malformed keep-alive is reported at start, not silently defaulted | — | **GAP.** `_resolve_keep_alive` coerces and has no test that it *reports* rather than defaults. Note `US-011`'s TAC-5 wiring now fails the boot on an unparseable managed value, which covers the class but not this key |
+| T-3 | The key has a demonstrable reader (static check) | *"every generation request carries keep_alive"*, *"not sent only at boot"* | **COVERED** |
+| T-4 | After a scripted turn, the model is still resident with a held expiry | clean floor / generation succeeds / resident after ONE call / expiry HELD — 4 checks | **COVERED** |
+| T-5 | Absent env keys fall back to documented defaults | *"TAC-3 KEEP_ALIVE resolves from config"* | **COVERED** |
+| T-6 | Repeated warm-up is a no-op, not a second load | *"a second call does not evict or duplicate residency"* | **COVERED** |
+| T-7 | Force-unloaded mid-life: the next turn completes and the trace carries `residency_miss` | — | **GAP, and the field name is wrong.** The trace carries `residency_lapse` (`app/llm_backend.py:241`); `residency_miss` appears nowhere in `app/` |
+| T-8 | Engine restarted under a running app: residency re-establishes without a stack restart | — | **GAP** |
+| T-9 | Removing the keep-alive restores the server default (revert demonstrated) | `test_brd15_rollback.py` reverts US-006 | **COVERED elsewhere** — the only scenario this story gets from outside its own suite |
+| T-10 | `/ws/voice/text` still generates after the options change (`REC-09`) | — | **GAP.** No test under `doc/perf/tools/` touches `/ws/voice/text`, so the regression guard `REC-09` asks for does not exist |
+| T-11 | Residency observed in `nvidia-smi` **at the instant a call arrives** | — | **GAP, and the observation is not possible.** `gpu_clock_state()` is called at `app/boot_readiness.py:400`, inside the boot gate; there is no readiness surface for call time |
+| T-12 | A call 30 minutes after boot shows no first-token time above the warm p95 | — | **GAP** — load gate, not run |
+| T-13 | N=1 ≥100 turns: first-token p95 ≤ 1,000 ms | — | **GAP** — load gate |
+| T-14 | N=2 30 min: VRAM ≤ 14,680 MiB, no sysmem spill, no turn over 3,000 ms | — | **GAP** — load gate |
+| T-15 | N=2: neither caller refused; the queue drains | — | **GAP** — load gate |
+| T-16 | The GPU is not idle-clocked **at call arrival** | — | **GAP, same impossibility as T-11** |
+
+**Coverage: 5 covered, 1 covered elsewhere, 10 gaps.**
+
+### Two findings, one of which is not this story's
+
+**`T-11` and `T-16` require an observation that cannot be made, and so does
+`US-007`'s unticked DoD box.** All three demand the model's residency or the GPU
+clock read *at the instant a call arrives*. The gate reads both at boot
+(`app/boot_readiness.py:400`) and the app exposes no readiness route, so nothing
+at call time can consult them. This is a specification-level issue appearing in
+two stories rather than a defect in either, and it needs one decision — build a
+call-time readiness surface, or re-word the three claims — not three separate
+fixes. It is recorded here rather than fixed here because re-wording an
+acceptance criterion is the Product Owner's call, not an engineer's.
+
+**T-1 names a function that does not exist.** `_srv_options()` is specified and
+the options are in fact assembled inline. The behaviour is tested and correct;
+the scenario describes a refactor that never happened. Worth knowing before
+someone reads the LLD as an as-built description.
+
+**Ten gaps is not a surprise and not all of it is owed by this story.** Six
+(T-12…T-16, and T-2 in part) are the load and e2e gates in the DoD's own
+outstanding list; T-8 and T-10 are unwritten integration guards; T-7 needs a
+field renamed or added.
+
 ## Definition of Done
 - [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-16)
