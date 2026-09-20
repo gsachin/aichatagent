@@ -50,6 +50,7 @@ except ImportError:
 
 import asyncio as _asyncio
 import base64
+import re
 import time as _time
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape
@@ -1586,36 +1587,73 @@ async def _handle_whatsapp_document(
 
 
 # ── Meridian program-name capture ──────────────────────────────────
-# Longer/more specific aliases first — first substring match wins.
+# The detector lives in app.programs because the Streamlit UI needs the same
+# one — its own copy listed four programs Meridian does not run. Imported under
+# the local names this module has always used.
 
-_MERIDIAN_PROGRAMS = {
-    # Compound / specific names first — first substring match wins
-    "master of business administration": "MBA",
-    "ai & machine learning": "B.Tech AI & Machine Learning",
-    "computer science": "B.Tech Computer Science",
-    "information technology": "B.Tech Information Technology",
-    "computer applications": "BCA",
-    "business administration": "BBA",
-    # Short aliases
-    "mba": "MBA",
-    "mca": "MCA",
-    "m.tech": "M.Tech",
-    "b.tech": "B.Tech",
-    "bca": "BCA",
-    "bba": "BBA",
-    "b.com": "B.Com",
-    "b.sc": "B.Sc",
-    "b.a": "BA",
-}
+from app.programs import (  # noqa: E402  (kept beside its only former use)
+    detect_program as _detect_meridian_program,
+    is_explicit_program_choice as _is_explicit_program_choice,
+)
 
 
-def _detect_meridian_program(msg_lower: str) -> str:
-    """Return the canonical Meridian program name for a message, or ''."""
-    msg_lower = msg_lower.lower()
-    for alias, canonical in _MERIDIAN_PROGRAMS.items():
-        if alias in msg_lower:
-            return canonical
-    return ""
+# Words that end a name capture. "my name is not Guruji check the start of the
+# chat" must yield no name at all — the greedy capture would otherwise take
+# "not Guruji check" as the student's new name.
+_NAME_STOPWORDS = frozenset({
+    "not", "no", "wrong", "incorrect", "isnt", "isn't", "dont", "don't",
+    "check", "please", "pls", "thanks", "thank", "you", "your", "my", "the",
+    "a", "an", "and", "but", "for", "here", "now", "name", "system",
+    "systems", "record", "profile", "correct", "change", "update", "fix",
+    "is", "was", "in", "on", "at", "to", "of",
+    # "call me tomorrow" / "call me back" are requests, not names.
+    "tomorrow", "today", "later", "back", "again", "afterwards", "soon",
+})
+
+
+def _clean_name_candidate(raw: str) -> str:
+    """
+    Reduce a free-text name capture to a plausible name, or ''.
+
+    Stops at the first stopword so a trailing clause is dropped instead of
+    being absorbed into the name, and rejects anything too long to be a name.
+    """
+    words: list[str] = []
+    for chunk in raw.split():
+        word = chunk.strip(".,;:!?'\"()[]-")
+        if not word or word.lower() in _NAME_STOPWORDS:
+            break
+        words.append(word)
+        if len(words) == 3:
+            break
+    candidate = " ".join(words).strip()
+    if not candidate or len(candidate) > 40 or not candidate[0].isalpha():
+        return ""
+    return candidate
+
+
+async def _apply_program_choice(lead_id: str, current: str, detected: str) -> str:
+    """
+    Persist a newly detected program and return the value to use from here on.
+
+    The program is deliberately *not* write-once any more. It always was the
+    lead's stored value that won — `if detected_prog and not lead_program` —
+    so a student who asked about M.Tech after any earlier mention of MBA was
+    told their admission was for MBA, and the offer letter that followed said
+    MBA too. A later explicit choice now supersedes an earlier one.
+    """
+    if not detected or detected == current:
+        return current or detected
+    if lead_id:
+        # Imported here for the same reason the webhook imports it locally:
+        # this module is imported by the voice path too, and the lead models
+        # pull in a database connection at call time.
+        from app.leads.models import update_lead
+
+        await update_lead(lead_id, program_interest=detected)
+    if current:
+        logger.info(f"Program switched: {current!r} -> {detected!r} (lead {lead_id or 'unknown'})")
+    return detected
 
 
 # Words that mark a message as a knowledge question even when it's short
@@ -1628,18 +1666,90 @@ _KB_QUESTION_KEYWORDS = (
 )
 
 
-async def _whatsapp_chat_rag(question: str) -> str:
+async def _whatsapp_recent_turns(lead_id: str, limit: int = 6) -> list[str]:
+    """
+    The last few User/Assistant turns for this lead, oldest first.
+
+    WhatsApp has no session object, so the transcript rows are the only record
+    of what was just said. Both callers of this need the same thing for
+    different reasons: the RAG leg feeds it to the model so an answer can
+    follow the conversation, and the state machine reads the *previous
+    assistant turn* to decide what "yes" is actually answering.
+    """
+    if not lead_id:
+        return []
+    from app.leads.models import get_conversations
+
+    try:
+        rows = await get_conversations(lead_id=lead_id, channel="whatsapp", limit=limit)
+    except Exception:
+        logger.exception("WhatsApp history load failed (non-fatal)")
+        return []
+
+    turns: list[str] = []
+    for row in reversed(rows or []):
+        transcript = (row.get("transcript") or "").strip()
+        if transcript:
+            turns.append(transcript)
+    return turns
+
+
+def _last_assistant_turn(turns: list[str]) -> str:
+    """
+    Text of the most recent assistant reply, or ''.
+
+    Uses rfind rather than a line scan because a logged answer can be
+    multi-line — only the first line carries the "Assistant:" prefix.
+    """
+    for turn in reversed(turns):
+        marker = turn.rfind("Assistant:")
+        if marker != -1:
+            text = turn[marker + len("Assistant:"):].strip()
+            if text:
+                return text
+    return ""
+
+
+async def _whatsapp_chat_rag(
+    question: str,
+    *,
+    history: list[str] | None = None,
+    profile: dict | None = None,
+    program: str = "",
+) -> str:
     """
     RAG answer for WhatsApp text chat using the chat-oriented prompt
     (mode="chat" — same Markdown SYSTEM_PROMPT as the Streamlit chat).
+
+    `history` and `profile` are what make the chat leg stateless no longer:
+    the model sees the recent turns and the fields already on the lead, so a
+    follow-up like "I can't afford it" stays on the program under discussion
+    and "what's my name?" can be answered from the record instead of being
+    refused.
+
+    `program` also seeds the *retrieval* query. Retrieval deliberately embeds
+    the student's own utterance (the N1 fix — the instruction boilerplate used
+    to dominate the vector), and a bare "I can't afford it $14600" carries no
+    program signal at all, which is how a fee question about M.Tech came back
+    with B.Tech IT's numbers.
     """
     from app.pipeline import run_rag_query_sync
 
+    retrieval_query = question
+    if program and not _detect_meridian_program(question.lower()):
+        retrieval_query = f"{question} {program}"
+
     try:
-        answer = await _asyncio.to_thread(run_rag_query_sync, question, mode="chat")
+        answer = await _asyncio.to_thread(
+            run_rag_query_sync,
+            question,
+            mode="chat",
+            retrieval_query=retrieval_query,
+            history=history,
+            profile=profile,
+        )
         if answer:
-            # Escape for the TwiML XML payload
-            return answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            return answer
     except Exception:
         logger.exception("WhatsApp RAG failed")
     return "Sorry, I couldn't process your question. Please try again."
@@ -1750,13 +1860,22 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     detected_program = _detect_meridian_program(msg_lower)
 
     # ── Fast path: strong admission keywords ────────────────────────
+    # Misspellings are listed explicitly because they are the common case in
+    # the wild, and a miss sends the turn to the knowledge base instead of the
+    # admission flow: "I would like to take admision on M.Tech" was answered
+    # with eligibility prose and never registered the program at all.
     strong = [
         "i want to take admission",
         "i want admission",
         "take the admission",
         "take admission",
         "want to take admission",
-        "take addmission",  # common typo
+        "take addmission",   # common typo
+        "take admision",     # common typo
+        "take admissoin",    # common typo
+        "take admisson",     # common typo
+        "i want to take admision",
+        "i want to take addmission",
         "i want to enroll",
         "ready to enroll",
         "sign me up",
@@ -1768,8 +1887,8 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
 
     # ── Medium path: weaker keywords — confirm with LLM ────────────
     medium = [
-        "admission", "enroll", "apply", "i am ready",
-        "let's proceed", "go ahead", "i'm interested",
+        "admission", "admision", "addmission", "admisson", "enroll", "apply",
+        "i am ready", "let's proceed", "go ahead", "i'm interested",
         "join the program", "confirm my", "i want to study",
         "proceed with", "i'd like to apply",
     ]
@@ -1890,6 +2009,7 @@ async def twilio_whatsapp_webhook(
     # keeps the same session alive too. Failure is never fatal: the webhook
     # must answer Twilio within 15s regardless.
     conversation_id = ""
+    wa_session = None
     try:
         from app.config import settings
         from app.crm import session as crm_session
@@ -1962,19 +2082,168 @@ async def twilio_whatsapp_webhook(
     has_email = "@" in Body and "." in Body.split("@")[-1] if "@" in Body else False
     is_name_like = len(Body.split()) <= 3 and not has_email and "?" not in Body and len(Body) < 60
 
+    # ── Conversation memory ──────────────────────────────────────
+    # Loaded once per turn, for two different reasons: the RAG leg needs it so
+    # an answer can follow the conversation (it used to be sent nothing at all,
+    # so every WhatsApp question was answered as a fresh conversation), and the
+    # acknowledgement handlers need the previous assistant turn to know what a
+    # bare "yes" is actually answering.
+    recent_turns = await _whatsapp_recent_turns(lead_id)
+    last_asked = _last_assistant_turn(recent_turns)
+    awaiting = (getattr(wa_session, "awaiting", "") or "")
+    # What the *outbound* message for this turn expects back. Written to the
+    # session once, at the end, so a branch that does not set it clears any
+    # stale expectation instead of leaving it armed for the next message.
+    awaiting_next = ""
+
+    async def _chat(question: str) -> str:
+        """RAG for this turn, with the conversation and known fields attached."""
+        return await _whatsapp_chat_rag(
+            question,
+            history=recent_turns,
+            profile={
+                "Name": lead_name,
+                "Email": lead_email,
+                "Program of interest": lead_program,
+            },
+            program=lead_program,
+        )
+
+    # An explicit "my name is X" / "call me X" is an instruction, and it has to
+    # beat every other branch. The name used to be settable only while blank,
+    # so a student asking to correct it could never be honoured: the request
+    # fell through to RAG, which invented a date-of-birth identity check that
+    # no code implements, then dropped the answer on the floor.
+    name_given = ""
+    if not has_email:
+        _name_match = re.search(
+            # Deliberately narrow: "i am X" and "this is X" are not here
+            # because "i am interested" and "this is urgent" are ordinary
+            # sentences that would otherwise rename the student.
+            r"\b(?:my name is|my name's|call me)\s+(.+)",
+            Body,
+            re.IGNORECASE,
+        )
+        if _name_match:
+            name_given = _clean_name_candidate(_name_match.group(1))
+            if name_given and _detect_meridian_program(name_given.lower()):
+                name_given = ""
+
+    # "correct my name" with no new name supplied — ask for it rather than
+    # letting it reach the knowledge base.
+    wants_name_change = bool(
+        re.search(
+            r"\b(?:correct|change|update|fix)\b[^.!?]{0,40}\bname\b"
+            r"|\bname\b[^.!?]{0,30}\b(?:is\s+)?(?:wrong|incorrect|not)\b",
+            Body,
+            re.IGNORECASE,
+        )
+    )
+
     # Greetings and knowledge questions are answered directly — never
     # mistaken for profile info (e.g. "fees" must not become a name).
-    if msg_lower in ("hi", "hello", "hey", "hii", "hi there", "namaste"):
-        answer = "Hello! 👋 I'm the Meridian University admissions assistant. What's your name?"
+    if name_given:
+        if lead_id:
+            await update_lead(lead_id, name=name_given)
+        lead_name = name_given
+        if not lead_email:
+            awaiting_next = "email"
+            answer = (
+                f"Thanks — I've corrected your name to {name_given}. "
+                "What's your email address?"
+            )
+        else:
+            answer = (
+                f"Thanks — I've corrected your name to {name_given}. "
+                "How can I help with your admission?"
+            )
+    elif wants_name_change and not name_given:
+        awaiting_next = "name"
+        answer = (
+            "Of course — what should I change your name to? "
+            "(You can just reply with the name.)"
+        )
+    elif msg_lower in ("hi", "hello", "hey", "hii", "hi there", "namaste"):
+        # Greet a known student by name instead of asking for a name that is
+        # already on file and that no branch would accept an answer to.
+        if lead_name:
+            answer = (
+                f"Hello {lead_name}! 👋 I'm the Meridian University admissions "
+                "assistant. What would you like to know?"
+            )
+        else:
+            answer = "Hello! 👋 I'm the Meridian University admissions assistant. What's your name?"
     elif "?" in Body or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
-        answer = await _whatsapp_chat_rag(Body)
+        answer = await _chat(Body)
+    # ── Replies to a question the bot actually asked (see `awaiting`) ────
+    elif awaiting == "name":
+        candidate = _clean_name_candidate(Body)
+        if candidate and not _detect_meridian_program(candidate.lower()):
+            if lead_id:
+                await update_lead(lead_id, name=candidate)
+            lead_name = candidate
+            answer = f"Thanks — your name is now {candidate}. How can I help with your admission?"
+        else:
+            awaiting_next = "name"
+            answer = "Sorry, I didn't catch a name there. What should I change it to?"
+    elif awaiting == "email" and has_email:
+        if lead_id:
+            await update_lead(lead_id, email=Body.strip())
+        lead_email = Body.strip()
+        answer = (
+            f"Thanks {lead_name}! I've saved your email."
+            if lead_name
+            else "Thanks — I've saved your email."
+        )
+    elif awaiting == "program":
+        detected = _detect_meridian_program(msg_lower)
+        if detected:
+            lead_program = await _apply_program_choice(lead_id, lead_program, detected)
+            answer = (
+                f"**{detected}** — got it! 🎓\n\n"
+                "To proceed with your admission, say: 'I want to take admission' "
+                "and I'll guide you through the document upload process."
+            )
+        else:
+            awaiting_next = "program"
+            answer = "Which program would you like? (e.g. B.Tech Computer Science, MBA, M.Tech, BCA)"
+    elif awaiting == "update_field":
+        # The "No problem! What would you like to update?" prompt used to be a
+        # dead end: nothing consumed the reply, so it fell through to RAG.
+        if "name" in msg_lower:
+            awaiting_next = "name"
+            answer = "Sure — what should I change your name to?"
+        elif "email" in msg_lower or has_email:
+            if has_email:
+                if lead_id:
+                    await update_lead(lead_id, email=Body.strip())
+                lead_email = Body.strip()
+                answer = "Thanks — I've updated your email address."
+            else:
+                awaiting_next = "email"
+                answer = "Sure — what's the correct email address?"
+        elif "program" in msg_lower or "course" in msg_lower:
+            awaiting_next = "program"
+            answer = "Sure — which program would you like instead? (e.g. B.Tech Computer Science, MBA, M.Tech, BCA)"
+        else:
+            awaiting_next = "update_field"
+            answer = "You can update your name, email, or program interest — which one?"
     # State machine for collecting missing info
-    elif not lead_name and is_name_like and not has_email and msg_lower not in ("done", "finish", "finished"):
+    elif (
+        not lead_name
+        and is_name_like
+        and not has_email
+        and msg_lower not in ("done", "finish", "finished")
+        # A short message that names a program is a program, not a person —
+        # "M.Tech" as a first message used to be stored as the student's name.
+        and not _detect_meridian_program(msg_lower)
+    ):
         # User likely provided their name
         if lead_id:
             await update_lead(lead_id, name=Body.strip())
         lead_name = Body.strip()  # Refresh local
         if not lead_email:
+            awaiting_next = "email"
             answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
         else:
             answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with Meridian admissions?"
@@ -1989,9 +2258,11 @@ async def twilio_whatsapp_webhook(
             answer = f"Thanks! I've saved your email. How can I help you with admissions today?"
     elif not lead_name:
         # Missing name — ask for it
+        awaiting_next = "name"
         answer = "Hi! Before I help you, could you tell me your name?"
     elif not lead_email:
         # Missing email — ask for it
+        awaiting_next = "email"
         answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
     else:
         # All info present — check admission intent first, then ACCEPT/DECLINE
@@ -2001,12 +2272,11 @@ async def twilio_whatsapp_webhook(
         if is_interested:
             if lead_id:
                 await update_lead(lead_id, status="in_progress")
-            if detected_prog and not lead_program:
-                if lead_id:
-                    await update_lead(lead_id, program_interest=detected_prog)
-                lead_program = detected_prog
+            if detected_prog:
+                lead_program = await _apply_program_choice(lead_id, lead_program, detected_prog)
             if not lead_program:
-                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
+                awaiting_next = "program"
+                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech, BCA)"
             else:
                 answer = (
                     f"Great! To process your admission for *{lead_program}*, "
@@ -2033,28 +2303,39 @@ async def twilio_whatsapp_webhook(
 
         # Only do RAG if user isn't confirming/changing their info
         elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
-            if lead_program:
+            # An acknowledgement never moves the program. Only the student
+            # states a course; a "yes" to something the bot itself said is not
+            # a course choice, and letting it write one is how "You're
+            # confirmed for MBA" appeared out of a reply to a knowledge
+            # question. If the previous turn did discuss the program already on
+            # file, re-affirm it; otherwise the turn belongs to whatever was
+            # really asked and goes to RAG with the conversation attached.
+            offered = _detect_meridian_program(last_asked.lower()) if last_asked else ""
+            if offered and offered == lead_program:
                 answer = (
                     f"Great {lead_name}! You're confirmed for *{lead_program}*. "
                     f"To proceed with admission, say: 'I want to take admission'"
                 )
             else:
-                answer = "Great! Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
+                answer = await _chat(Body)
         elif msg_lower in ("no", "nope", "wrong", "change"):
+            awaiting_next = "update_field"
             answer = "No problem! What would you like to update? Your name, email, or program interest?"
         elif msg_lower in ("done", "finish", "finished"):
             # All documents uploaded — generate the offer letter now.
             if not lead_program:
-                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, BCA)"
+                awaiting_next = "program"
+                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech, BCA)"
             else:
                 answer = await _whatsapp_offer_on_done(lead_id, lead_name, conversation_id)
-        # ── FIX: Capture program name from short replies (Critical bug fix) ──
-        elif lead_name and lead_email and not lead_program and len(msg_lower.split()) <= 3:
+        # ── Capture program name from short replies ──────────────────────────
+        elif lead_name and lead_email and len(msg_lower.split()) <= 3:
             detected = _detect_meridian_program(msg_lower)
-            if detected:
-                if lead_id:
-                    await update_lead(lead_id, program_interest=detected)
-                lead_program = detected
+            # Only a message that IS a course choice moves the program. A
+            # passing mention ("is mba good?") names one but chooses nothing,
+            # and must not silently enrol the student in it.
+            if detected and _is_explicit_program_choice(msg_lower, detected):
+                lead_program = await _apply_program_choice(lead_id, lead_program, detected)
                 answer = (
                     f"**{detected}** — great choice! 🎓\n\n"
                     f"To proceed with your admission, say: 'I want to take admission' "
@@ -2062,10 +2343,15 @@ async def twilio_whatsapp_webhook(
                 )
             else:
                 # Short message that isn't a program — treat it as a question.
-                answer = await _whatsapp_chat_rag(Body)
+                answer = await _chat(Body)
         else:
             # Everything else goes to RAG — same knowledge answers as Streamlit.
-            answer = await _whatsapp_chat_rag(Body)
+            answer = await _chat(Body)
+
+    # Record what this outbound message expects back (or clear a stale
+    # expectation) so the next turn can tell a reply from a new question.
+    if wa_session is not None:
+        wa_session.awaiting = awaiting_next
 
     # Safety: fallback answer
     try:
@@ -2112,7 +2398,12 @@ async def twilio_whatsapp_webhook(
         crm_user_id=crm_user_id,
     )
 
-    twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=answer)
+    # Escape exactly once, here at the XML boundary and after the Markdown
+    # pass. Only the RAG branch used to escape its own output, so every answer
+    # that echoed user-supplied text back — a name, a program — went into the
+    # document raw: a student called "Tom & Jerry" produced malformed TwiML and
+    # Twilio rejected the whole reply.
+    twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
     logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
     return Response(content=twiml, media_type="application/xml")
 

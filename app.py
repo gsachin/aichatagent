@@ -29,6 +29,35 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from app.streamlit_backend import backend_healthy, sync_lead, sync_program
 from app.offers.service import missing_fields_text
+from app.programs import detect_program, is_explicit_program_choice
+
+# Eligibility per canonical program, taken verbatim from the Meridian
+# knowledge base (content/meridian/meridian_knowledge_base.md). Keyed on the
+# names app.programs returns.
+#
+# Three copies of this table used to sit inline in the state machine, keyed on
+# "Computer Science", "Data Science", "Engineering", "Business Analytics" and
+# "Information Systems" — none of which the detector can return, and three of
+# which Meridian does not offer — so every lookup fell through to the generic
+# line and the eligibility the student was shown was never the KB's.
+PROGRAM_ELIGIBILITY = {
+    "MBA": "a bachelor's degree",
+    "MA": "a bachelor's degree",
+    "M.Tech": "a B.Tech or B.E. degree",
+    "MCA": "a bachelor's degree in computing",
+    "M.Com": "a bachelor's degree in commerce",
+    "M.Sc": "a bachelor's degree in science",
+    "B.Tech": "10+2 with Physics, Chemistry and Mathematics (PCM)",
+    "B.Tech Computer Science": "10+2 with Physics, Chemistry and Mathematics (PCM)",
+    "B.Tech AI & Machine Learning": "10+2 with Physics, Chemistry and Mathematics (PCM)",
+    "B.Tech Information Technology": "10+2 with Physics, Chemistry and Mathematics (PCM)",
+    "B.Sc": "10+2 with PCM or PCB",
+    "BBA": "10+2 in any stream",
+    "BCA": "10+2 in any stream",
+    "B.Com": "10+2 in any stream",
+    "BA": "10+2 in any stream",
+}
+DEFAULT_ELIGIBILITY = "a relevant bachelor's degree"
 
 
 # ── Public backend URL resolution ───────────────────────────────────
@@ -186,7 +215,7 @@ with st.sidebar:
                         )
                         if readiness["missing"] == ["program_interest"]:
                             st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *Computer Science*.")
+                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
                     else:
                         st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
                 else:
@@ -515,13 +544,16 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             return any(kw in text for kw in admission_keywords)
 
         def extract_program(text):
-            """Try to extract program name from message."""
-            programs = ["computer science", "mba", "data science", "engineering",
-                       "business analytics", "information systems"]
-            for p in programs:
-                if p in text:
-                    return p.title() if p != "mba" else "MBA"
-            return ""
+            """
+            Canonical Meridian program name for a message, or ''.
+
+            Delegates to app.programs, the same detector the WhatsApp webhook
+            uses. The local list this replaces was ["computer science", "mba",
+            "data science", "engineering", "business analytics", "information
+            systems"] — four of which Meridian does not run — and matched by
+            raw substring, so "i am from mumbai" returned MBA.
+            """
+            return detect_program(text)
 
         # ── Smart name detection: skip if contains admission intent ─
         has_email = "@" in msg and "." in msg.split("@")[-1] if "@" in msg else False
@@ -598,8 +630,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         # ── State: awaiting program confirmation ──────────────
         elif awaiting == "program":
             prog = extract_program(msg_lower)
-            if not prog and len(msg.split()) <= 3:
-                prog = msg.title()
+            # The old fallback here took *any* message of three words or fewer
+            # as the program name (`prog = msg.title()`), so "no thanks" became
+            # a course called "No Thanks" and was synced to the lead. A program
+            # now has to be a program Meridian actually runs.
             if prog:
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
@@ -620,24 +654,18 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         f"the server ({err}). It'll be synced before your "
                         f"documents are processed."
                     )
-                # Qualification check
-                qual_info = {
-                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
-                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
-                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
-                    "Engineering": "10+2 with Physics, Chemistry, Math (PCM) 60%+, JEE or equivalent entrance exam",
-                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
-                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
-                }
-                reqs = qual_info.get(prog, f"Relevant bachelor's degree with 50%+ marks")
+                # Qualification check — eligibility comes from the knowledge
+                # base, keyed on the canonical program names app.programs
+                # returns (see PROGRAM_ELIGIBILITY at the top of this file).
+                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
                 answer = (
                     f"**{prog}** — great choice! 🎓\n\n"
                     f"Before we proceed, here are the requirements:\n"
-                    f"📋 {reqs}\n\n"
+                    f"📋 Eligibility: {reqs}\n\n"
                     f"Do you meet these requirements? (yes/no)"
                 )
             else:
-                answer = "I didn't catch the program name. Which program? (e.g., Computer Science, MBA, Data Science)"
+                answer = "I didn't catch the program name. Which program? (e.g., B.Tech Computer Science, MBA, M.Tech)"
 
         # ── State: awaiting qualification confirmation ─────────
         elif awaiting == "qualification":
@@ -697,8 +725,13 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 else:
                     answer = (
                         "Great! Your info is confirmed. Now, which program are you interested in? "
-                        "(e.g., Computer Science, MBA, Data Science)\n\n"
-                        "Or just say: 'I want to take admission in MBA'"
+                        "(e.g., B.Tech Computer Science, MBA, M.Tech)\n\n"
+                        # The worked example used to be "I want to take admission
+                        # in MBA" — the only program ever demoed this way. Real
+                        # students copied it verbatim, which is how a lead ends
+                        # up stored as MBA before anyone asked for MBA. The
+                        # example is now the first program in the list instead.
+                        "Or just say: 'I want to take admission in B.Tech Computer Science'"
                     )
 
         # ── Profile not started yet ───────────────────────────
@@ -719,7 +752,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             prog = extract_program(msg_lower) or st.session_state.get("lead_program", "")
             if not prog:
                 st.session_state.awaiting_field = "program"
-                answer = "Which program are you interested in? (e.g., Computer Science, MBA, Data Science)"
+                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech)"
             elif st.session_state.get("awaiting_field") != "qualification":
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
@@ -740,18 +773,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         f"the server ({err}). It'll be synced before your "
                         f"documents are processed."
                     )
-                qual_info = {
-                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
-                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
-                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
-                    "Engineering": "10+2 with PCM 60%+, JEE or equivalent entrance exam",
-                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
-                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
-                }
-                reqs = qual_info.get(prog, "Relevant bachelor's degree with 50%+ marks")
+                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
                 answer = (
                     f"**{prog}** — great choice! 🎓\n\n"
-                    f"Here are the requirements:\n📋 {reqs}\n\n"
+                    f"Here are the requirements:\n📋 Eligibility: {reqs}\n\n"
                     f"Do you meet these requirements? (yes/no)"
                 )
             else:
@@ -761,7 +786,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         # ── User mentions a program name directly ─────────────
         elif st.session_state.get("lead_collected"):
             prog = extract_program(msg_lower)
-            if prog and len(msg.split()) <= 5:
+            # Only an actual choice sets the course. This branch used to take
+            # any mention of five words or fewer, so "is mba good?" enrolled the
+            # student in MBA — the same rule the WhatsApp webhook applies.
+            if prog and is_explicit_program_choice(msg_lower, prog):
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
                 lid, err = sync_program(
@@ -780,18 +808,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         f"the server ({err}). It'll be synced before your "
                         f"documents are processed."
                     )
-                qual_info = {
-                    "MBA": "Bachelor's degree with 50%+ marks, GMAT 550+ (or equivalent), 2+ years work experience preferred",
-                    "Computer Science": "Bachelor's in CS or related field with 55%+ marks, programming knowledge, math background",
-                    "Data Science": "Bachelor's in any quantitative field with 55%+ marks, basic statistics and programming knowledge",
-                    "Engineering": "10+2 with PCM 60%+, JEE or equivalent entrance exam",
-                    "Business Analytics": "Bachelor's degree with 50%+ marks, basic math/stats background",
-                    "Information Systems": "Bachelor's degree with 50%+ marks, basic IT knowledge",
-                }
-                reqs = qual_info.get(prog, "Relevant bachelor's degree with 50%+ marks")
+                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
                 answer = (
                     f"**{prog}** — great choice! 🎓\n\n"
-                    f"Here are the requirements:\n📋 {reqs}\n\n"
+                    f"Here are the requirements:\n📋 Eligibility: {reqs}\n\n"
                     f"Do you meet these requirements? (yes/no)"
                 )
 
@@ -907,7 +927,7 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                         )
                         if readiness["missing"] == ["program_interest"]:
                             st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *Computer Science*.")
+                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
                     else:
                         st.success("✅ Document uploaded! You can upload more or start asking questions.")
                 else:

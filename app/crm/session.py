@@ -79,6 +79,11 @@ class ConversationSession:
     # Filled in by Phase 2 once lookup-or-create returns it. Carried here so the
     # session is the single place a conversation's CRM identity lives.
     crm_user_id: str = ""
+    # What the bot's last outbound message asked for, if it expects a specific
+    # kind of reply: "", "name", "email", "program", "update_field". Keyword
+    # handlers consult this before acting — a bare "yes" used to be taken as
+    # program confirmation no matter what had actually been asked.
+    awaiting: str = ""
 
     def touch(self) -> None:
         """Mark activity now — resets the idle window for channels without an end event."""

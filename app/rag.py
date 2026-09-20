@@ -195,7 +195,9 @@ def _threshold_distance(query: str) -> float | None:
 
 
 def query_rag(question: str, *, mode: str = "voice",
-              retrieval_query: str | None = None) -> str | None:
+              retrieval_query: str | None = None,
+              history: list[str] | None = None,
+              profile: dict | None = None) -> str | None:
     """
     Full RAG pipeline: retrieve context -> build prompt -> query LLM.
     Identical behavior to the legacy pipeline; only the context source is
@@ -207,6 +209,12 @@ def query_rag(question: str, *, mode: str = "voice",
     dominated by boilerplate. ``retrieval_query`` decouples the two: it is
     what gets embedded and retrieved on; ``question`` stays in the prompt
     tail, byte-identical to before.
+
+    ``history`` / ``profile`` are the text-channel equivalent of what the voice
+    handler has always passed: recent turns and the fields already on the lead.
+    They are appended to the prompt rather than the system message so the
+    shared SYSTEM_PROMPT stays byte-identical for callers that pass neither,
+    and so the injected block can carry its own instructions.
     """
     if not question.strip():
         return None
@@ -232,6 +240,25 @@ def query_rag(question: str, *, mode: str = "voice",
         from app.voice_system_prompt import build_voice_system_prompt
 
         prompt = build_voice_system_prompt(context)
+
+    # Step 2b: the student's own record and the conversation so far. Rule 7 of
+    # SYSTEM_PROMPT tells the model the chat system collects profile details
+    # itself, so when the record is present it should answer from it rather
+    # than claim it has no student information.
+    if profile:
+        known = [(k, v) for k, v in profile.items() if v]
+        if known:
+            prompt += (
+                "\n\nThis student's record (already on file — answer from it if "
+                "they ask about themselves, and never ask for these again):\n"
+                + "\n".join(f"- {k}: {v}" for k, v in known)
+            )
+    if history:
+        prompt += (
+            "\n\nRecent conversation for this student, oldest first:\n"
+            + "\n".join(history)
+        )
+
     prompt += f"\n\nStudent's question: {question}"
 
     # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)
