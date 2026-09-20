@@ -275,6 +275,68 @@ class RunReport:
 - Reconciliation: none applicable — `MOD-06` is the program's only net-new module and this asset is classified **Net-new** in `07-brownfield-reconciliation.md` §1 with no existing code to reconcile. `REC-01` is not reopened: the local judge is used, and Pipecat is not adopted
 - Related workflow: `WF-03` steps 1, 4–7 (the quality half of the adoption gate), and `UC-10` (the model sweep consumes this set and is blocked by `DG-03` until it exists)
 
+## LLD test mapping — T-1 … T-14, reconciled 2026-09-19
+
+US-003 is a **half-built story and this mapping says so plainly**: the
+deterministic half exists (`eval/checks.py`, `eval/golden_set.jsonl`,
+`eval/heldout.txt`) and the runner half does not. `eval/runner.py`, `class
+EvalRunner`, `class RubricJudge`, `class RunReport`, `class Score`,
+`EvalBlocked`, `LatencyWindowConflict` and `resume()` are all **absent** — the
+story's own build-status section says "only the deterministic half exists", so
+this is not a discovery, but the map below shows exactly which scenarios the
+missing half costs.
+
+Evidence is `eval/checks.py`'s `self_test()` (`:511`) and its cited ids. The
+self-test asserts by behaviour name (`good_passed`, `forbidden_rejected`,
+`format_rejected`, `skipped_unsynthesizable`, `mutation_skipped`) and cites
+almost no scenario ids, so most of this mapping was established by reading.
+
+| LLD | Requires | Satisfied by | Status |
+|---|---|---|---|
+| T-1 | Two consecutive runs on a frozen set give byte-identical per-case verdicts (TAC-1) | `check_answer` is deterministic by construction ("never consults a model") | **PARTIAL** — determinism is a property of the code and is not asserted by any test that runs twice and compares |
+| T-2 | A malformed case raises `FixtureError` naming it; no case is skipped (TAC-2) | `validate_fixture` `:578`, `FixtureError` `:90`, self-test `skipped_unsynthesizable` | **PARTIAL** — the skip path is self-tested; the malformed-and-named path is not |
+| T-3 | A critical case with `approved_by: null` yields BLOCKED, not a score | `check_answer` `:416` implements exactly this | **COVERED BY IMPLEMENTATION, NOT BY TEST** — and this is the `DG-03` mechanism itself, measured repeatedly (53 of 83 gradable cases blocked on 2026-09-19). No self-test asserts it |
+| T-4 | A judge outage converts the run verdict to `blocked`; no case scored zero | `JudgeUnavailable` `:94`, `_is_blocked` `:734` | **PARTIAL** — the exception and the per-intent block exist; the *run-level* conversion is the runner's, which is not built |
+| T-5 | A partial run states `cases_scored: 40` and never extrapolates | cited in `checks.py` | **COVERED** |
+| T-6 | A case file whose hash differs from the baseline is refused and recorded | — | **GAP** — baseline and freeze recording are runner-side and absent |
+| T-7 | A critical regression with a positive aggregate delta renders `reject` | — | **GAP** — the adoption verdict is runner-side and absent |
+| T-8 | A well-formatted but factually wrong answer fails on the rubric alone | `check_answer` catches wrong facts via `required_facts` | **PARTIAL** — the deterministic half catches it; the *rubric* judge the scenario names does not exist, so "fails on the rubric alone" cannot be tested |
+| T-9 | A held-out case appears in the held-out bucket and is refused as a tuning input | `load_heldout` `:176`, `eval/heldout.txt` (32 ids) | **PARTIAL** — the split is loaded; refusal as a tuning input is a runner-side gate that does not exist |
+| T-10 | Interrupting a run and resuming scores only the remaining cases (TAC-5) | — | **GAP** — `resume()` does not exist |
+| T-11 | A run started while the US-002 harness is live is marked `latency_run_overlapped` | — | **GAP — and it is the other half of a gap US-002 already records.** The harness checks for `eval/.eval_in_progress` and says in its own output that "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock". T-11 is the scenario in which US-003 would write it. **Two stories, one unbuilt interlock**, each honestly describing its own half |
+| T-12 | A candidate answering a fees question from an unrelated chunk fails that case | `required_facts` containment in `check_answer` | **PARTIAL** — an unrelated-chunk answer would usually miss a required fact, so it fails, but nothing asserts the *grounding* failure specifically |
+| T-13 | Authoring preflight reports an uncovered intent | `coverage()` `:497`, `IntentCoverage` `:478` | **COVERED** |
+| T-14 | A full 60+ case run completes inside the experiment window (TAC-6) | — | **GAP as a scenario — but achieved in practice and unrecorded.** The `US-015` quality screen ran **83 cases per model** on 2026-09-19 (219.7 s for the 14B, 96.8 s for the 3B). The capability exists and is exercised; nothing in US-003's suite claims it |
+
+**Coverage: 2 covered, 6 partial, 6 gaps — and every gap is a runner-half gap.**
+
+### What this mapping establishes about US-003
+
+**The story's self-description is accurate and unusually good.** It says only
+the deterministic half exists, and the mapping confirms it without exception:
+all six gaps are on the runner side, and all six partials are cases where the
+deterministic half works and the runner-side half of the same scenario does not.
+A story that knows and states which half it built is worth noting in a programme
+whose central defect is documents drifting from their artefacts.
+
+**T-11 completes a picture US-002 half-drew.** US-002's T-10 is "the harness
+refuses to start while a quality evaluation is running"; its harness checks for
+`eval/.eval_in_progress` and reports in its own output that no runner writes it.
+US-003's T-11 is the scenario in which the runner would write it. **Neither story
+is wrong; together they are one unbuilt interlock**, and reading them apart would
+have shown two independent gaps instead of one shared cause.
+
+**T-3 is the `DG-03` mechanism and nothing tests it.** `check_answer:416`
+implements "critical with `approved_by` null → BLOCKED" exactly, and it is the
+single best-exercised behaviour in the programme — 53 of 83 gradable cases
+blocked when measured. No self-test asserts it. The behaviour is correct and its
+coverage is incidental.
+
+**T-14 is met in practice and claimed nowhere.** The quality screen ran 83 cases
+per model today, comfortably inside any experiment window. The capability the
+scenario needs exists and has been used; what is missing is a suite that asserts
+it. That is the cheapest gap in this story and it is on nobody's list.
+
 ## Definition of Done
 - [ ] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-7)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-14)
