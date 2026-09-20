@@ -2,7 +2,15 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
-- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` 17/17 · DoD 4/8 · LLD mapping and `MOD-07` are open
+- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; TAC-1 migration IN PROGRESS (Phase 1.2); AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` 34/34 · DoD 4/8 · LLD mapping and `MOD-07` are open
+
+  **TAC-1 migration, Phase 1.2 (2026-09-20, branch `sdlc/us011-tac1-config-migration`).** TAC-1 requires that no setting is read from `os.environ` directly in `app/`. The sweep that reports this returned *filenames*, so it could not tell a file reading an allowlisted dynamic key from one reading a key nobody had documented — the target was unverifiable, not just unmet. `sweep_unexplained_env_reads()` is now the gate: a per-read scan returning `(file, line, key)`, matched over whole files because several reads put the key on the line after the call. `DYNAMIC_KEYS` is the allowlist, derived from what actually mutates each key at runtime rather than from judgement — `USE_MCP_RAG` (14 mutation sites in the suite), `ADMISSION_ENABLED` and `BG_PRIORITY_ENABLED` (6 each), `RAG_BREAKER_MODE` (5), then four keys at 2 and `MACHINE_PROFILE_CHECK` at 1. Those reads must stay dynamic: the suite and the `BRD-15` rollback path change them in-process and require the very next call to observe it, which a value resolved once at import cannot do. So the target is **zero unexplained reads**, not zero reads, and the report states that split (total / kept by design / unexplained with `file:line:key`) rather than one file count.
+
+  Progress: 21 → 12 files reading `os.environ` directly; 68 unexplained reads remain, enumerated. Landed so far — the reader sweep sees the typed helper shapes (`_env_int`/`_env_float`/`_env_bool` were invisible, so a genuinely-read key would have been reported INERT); one `database_dsn()` home replacing four byte-identical copies of the six `DB_*` reads; one `tunnel_host()` replacing four copies of the tunnel resolution (one of them dead code — `app/main.py` defined `_resolve_tunnel_host` twice and the later definition silently won); and `COMPANY_NAME`/`AGENT_NAME`, `BACKEND_BASE`/`BACKEND_TIMEOUT`, `DASHBOARD_API_URL`, `BG_MAX_CONCURRENT`/`BG_DEFER_TIMEOUT_S`, `SENTIMENT_W1..W4`/`SENTIMENT_EWMA_LAMBDA`/`MIN_LABELED_OUTCOMES` moved onto `Settings`.
+
+  **The database copies were a live defect, not housekeeping.** None of those four modules loads `.env`, and each read `os.environ` at its own import time, so `from app.leads import models` imported *first* left `DATABASE_URL` unset and silently fell back to the `localhost/5432/admissions/postgres` defaults — a different database from the operator's. It works in the running app only because `app.main` happens to import `app.config` early, which calls `load_dotenv`. Resolving through `settings` makes the answer independent of import order. While consolidating, `app/database.py`'s "PostgreSQL not available" warning was found to log the connection string verbatim, which on the fallback path includes the password; scanning every log in `logs/` for every sensitive value found no occurrence, so that is a latent path closed, not a leak cleaned up.
+
+  **Settings defaults were verified against each call site, and the first draft was wrong.** It guessed `SENTIMENT_W1..W4` as 0.4/0.3/0.2/0.1, `SENTIMENT_EWMA_LAMBDA` 0.3, `MIN_LABELED_OUTCOMES` 5 and `BG_DEFER_TIMEOUT_S` 10s; the call sites use 0.30/0.30/0.25/0.15, 0.35, 100 and 30s. Corrected to quote the call sites, including their `or <default>` guards against an empty value reaching `int("")`. Recorded here because it is the same silent-divergence failure this story exists to catch, and it was one edit away from being introduced by the story's own fix.
 
   **TAC-5 was claimed and not implemented — found by the 2026-09-19 audit, now closed.** The criterion is "a value that cannot be parsed is a boot-time failure naming the key". `validate_types` (`app/config_truth.py:170`) has carried that docstring since it was written, and was called only from `report()` and from its own test — so nothing ever failed a start on a malformed value. It is now called by the US-007 gate's clause 4 (`app/boot_readiness.py` `check_config_keys`), which fails readiness when a managed key is unparseable, and reports the key by name. Verified both ways: `validate_types` finds `FASTAPI_WORKERS='four'`, `check_config_keys` surfaces it, and the clause evaluates false. That is the near-miss case closed — `OLLAMA_KEEP_ALIVE` is a `.env` string and Ollama's Go duration parser rejects `"-1"` with `time: missing unit in duration`, a 400 on EVERY request; that one is handled by a hand-written coercion at one call site, and this is the check that catches the next one.
 
@@ -242,3 +250,25 @@ def sweep_inert_keys() -> tuple[str, ...]: ...
 
 
 **Outstanding:** LLD test mapping (T-1..T-17); TAC-8 no-regression load test not run; `.machine_profile.json`'s `applied` block is not yet marked non-authoritative in the docs and loader; `MOD-07` B.4/B.6 not reconciled; `BRD-15` rollback not demonstrated.
+
+**Phase 1.2 remaining work** (the bulk of the item — per-file commits, defaults read from the call site before each move, never assumed):
+
+| File | Unexplained reads | Keys |
+|---|---|---|
+| `app/voice_handler.py` | 16 | `WHISPER_MODEL`, `WHISPER_NUM_THREADS`, `CUDA_VISIBLE_DEVICES`, `KOKORO_VOICE`, `KOKORO_SPEED`, `TTS_CACHE_SCOPE`, `TTS_STREAM`, `STT_MIN_AVG_LOGPROB`, `STT_MAX_NO_SPEECH_PROB`, `STT_MIN_CHARS`, `MIN_UTTERANCE_FRAMES`, `VAD_SILENCE_MS`, `VAD_SPECULATIVE_ADVANCE_MS`, `ONNX_PROVIDER` |
+| `app/llm_backend.py` | 15 | `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `OLLAMA_TEMPERATURE`, `EMBED_MODEL`, `LLM_STREAM`, `MLX_BASE_URL`, `MLX_MODEL`, `MLX_PORT`, `MLX_EMBED_MODEL`, `MLX_MAX_TOKENS`, `LLM_PROVIDER`, `SMALL_TASK_NUM_CTX`, `OLLAMA_KEEP_ALIVE` |
+| `app/rag_legacy.py` | 12 | `RAG_COLLECTION_NAME`, `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_FETCH_K`, `RAG_TOP_K`, `RAG_SEARCH_MODE`, `RAG_SIMILARITY_THRESHOLD`, `RAG_MAX_CONTEXT_CHARS`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TEMPERATURE`, `EMBED_MODEL` |
+| `app/rag_mcp.py` | 8 | `RAG_MCP_TIMEOUT`, `RAG_MCP_PROBE_FRACTION`, `RAG_RETRIEVAL_BUDGET`, `RAG_FALLBACK_RESERVE`, `RAG_MCP_URL`, `RAG_MCP_COOLDOWN` |
+| `app/main.py` | 5 | `LOG_LEVEL`, `LOG_FILE`, `MUTE_STT_DURING_TTS`, `FASTAPI_WORKERS`, `DATA_DIR` |
+| `app/pipeline.py` | 5 | `OLLAMA_MODEL`, `OLLAMA_URL`, `WHISPER_MODEL`, `KOKORO_VOICE`, `BG_PRIORITY_ENABLED`* |
+| `app/admission.py` | 2 | `KOKORO_VOICE`, `KOKORO_SPEED` (`ADMISSION_ENABLED`/`MAX_CONCURRENT_CALLS` are allowlisted) |
+| `app/boot_readiness.py` | 2 | `OLLAMA_KEEP_ALIVE`, `FASTAPI_PORT`† |
+| `app/hardware_profile.py` | 2 | `MACHINE_IN_CONTAINER`, `MACHINE_CLOUD` (`MACHINE_PROFILE_CHECK` is allowlisted) |
+| `app/rag.py` | 1 | `OLLAMA_NUM_PREDICT` (`USE_MCP_RAG` is allowlisted) |
+
+\* `BG_PRIORITY_ENABLED` appears here as an allowlisted read at a second site; only the unexplained ones count toward the 68.
+† `FASTAPI_PORT` is simultaneously an external-consumer carve-out — the launcher reads it — so it is reported as a read and not as inert.
+
+Also still to do in Phase 1.2, per the approved plan: bucket **D** — the engine-level `OLLAMA_*` keys documented in `.env.example` under "consumed by the Ollama service" with `_EXTERNALLY_CONSUMED` carve-outs, plus `.env.example` gaining `SMALL_TASK_NUM_CTX` and `.env` gaining `VAD_SILENCE_MS`/`VAD_SPECULATIVE_ADVANCE_MS` (the harness reads those two); `MACHINE_PROFILE_CHECK` implemented as a non-blocking boot drift report (discharges `DG-05` visibility); and a second carve-out corpus for `scripts/*.py` and the root scripts, which must never fold into the runtime corpus.
+
+One live-behaviour note for whoever picks this up: `FASTAPI_WORKERS` is read in `app/main.py:234` and is `TAC-3`'s subject — it must resolve to something that honours it or report `in_effect: false` with the `REC-02` reason. Migrating it is therefore not mechanical and should be its own commit.
