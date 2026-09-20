@@ -776,7 +776,7 @@ if ((Test-Path $ERCRoot) -and (Test-Path $ERCLauncher)) {
     Get-ChildItem (Join-Path $env:TEMP "erc_launcher_*.log") -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 |
         Remove-Item -Force -ErrorAction SilentlyContinue
-    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port $RagMcpPort -KbPath `"$ERCKb`" > `"$ercLauncherLog`" 2>&1"
+    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port $RagMcpPort -KbPath `"$ERCKb`" -SkipPrepopulate > `"$ercLauncherLog`" 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-OK ("ERC MCP service up: http://127.0.0.1:{0}/mcp (retrieval: MCP-first, automatic fallback)" -f $RagMcpPort)
     } else {

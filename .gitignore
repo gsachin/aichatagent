@@ -55,3 +55,4 @@ data/
 # Env backups (a plain .env pattern does NOT cover .env.bak-*) — these hold secrets
 .env.*
 *.env.bak*
+chroma_local_db_pre_c4/
