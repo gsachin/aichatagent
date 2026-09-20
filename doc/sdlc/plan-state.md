@@ -80,9 +80,13 @@ US-018 0/10.
    `US-006`'s TAC-1/TAC-2/TAC-5, `US-008`'s three consecutive N=2 runs. None has
    been run as specified. Note the ≥100-sample baseline now exists but every
    N=2 figure carries the `harness_fault` caveat (`doc/perf/runs/`).
-3. **`BRD-15` rollback** — demonstrated for six stories by
-   `test_brd15_rollback.py` (38/38); still *asserted* rather than demonstrated
-   for the rest.
+3. **`BRD-15` rollback** — demonstrated for **seven** stories by
+   `test_brd15_rollback.py` (42/42): US-006, US-011, US-012, US-013, US-016,
+   US-017 and **US-001**, added 2026-09-19. US-001 was missed because it was in
+   neither the covered list nor the two recorded exclusions — its own DoD
+   carried no `BRD-15` box, so nothing pointed at it. Two remain uncovered and
+   both carry a stated reason: US-007's revert is a commit-level change rather
+   than a setting, and US-008's spans two repositories.
 4. **Module-doc reconciliation** — `MOD-01`, `MOD-03`, `MOD-06`, `MOD-07` and
    the `US-015` benchmark reconciled 2026-09-19. **`MOD-04` closed too** (US-012
    TTS cache scope and voice/speed key), and it is the last one.

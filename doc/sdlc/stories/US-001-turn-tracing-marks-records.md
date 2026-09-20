@@ -304,6 +304,31 @@ author confirming which scenario each test was *intended* for risks replacing
 one set of wrong tags with another, and the tests' own intent is not recoverable
 from the code. The matrix above is the authority until that pass is done.
 
+## `BRD-15` — revert demonstrated 2026-09-19
+
+**This story carried no `BRD-15` box, and that is why it was missed.** The
+programme requirement is that every adopted change is revertible and that the
+revert is *demonstrated*, not asserted. `test_brd15_rollback.py` covered six
+stories and named US-007 and US-008 as the two it could not cover — US-001 was
+not in the list and not in the exclusions either, so nothing pointed at it.
+
+It is now covered. The revert is `PERF_TRACE=0`, and what it restores is not a
+defect but an **absence**: before this story no machine-readable turn record
+existed anywhere. So the observable prior behaviour is "no file is written and
+the turn proceeds identically", and the checks assert the sink rather than a
+counter — a revert that quietly kept writing would pass any assertion about the
+turn itself.
+
+Four checks, all passing: with tracing ON a record is written; with it OFF
+nothing is written and no file appears; the trace object still accepts marks
+without raising (the revert does not break the caller); and restoring brings the
+record back, so the revert is a switch and not a loss.
+
+`ENABLED` is read at module import (`perf_trace.py:55`), so the demonstration
+flips the module global — the same pattern US-012 uses for `TTS_CACHE_SCOPE`.
+The operator's real revert is the setting plus a restart; that path is
+deliberately not exercised, and the reason is recorded in `test_endpointing.py`.
+
 ## Definition of Done
 - [x] All ACs pass (AC-1 … AC-5, TAC-1 … TAC-6)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-16)

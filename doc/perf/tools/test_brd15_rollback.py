@@ -27,11 +27,16 @@ Not covered here: US-007 (its revert is "remove the boot gate", which is a
 commit-level change rather than a setting) and US-008 (whose change spans two
 repositories and whose app-side client was deliberately rolled back already).
 
+**US-001 was missing from this file entirely** until 2026-09-19, and is now
+covered: its change is revertible by `PERF_TRACE=0`, so the claim that it could
+not be demonstrated was never true -- it had simply never been listed.
+
 Run:  .venv/Scripts/python.exe doc/perf/tools/test_brd15_rollback.py
 """
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 import threading
 import time
@@ -343,11 +348,84 @@ def us011() -> None:
         "sk-" in str(v.value) or "token" in str(v.value).lower() for v in values.values()))
 
 
+
+# ───────────────────────── US-001 ─────────────────────────
+
+def us001() -> None:
+    """US-001's revert: PERF_TRACE=0.
+
+    This story was missing from the demonstration entirely -- the docstring
+    below named US-007 and US-008 as the two it could not cover, and did not
+    mention US-001 at all. Its change *is* revertible by configuration, so it
+    belongs here.
+
+    What reverting restores is not a defect but an ABSENCE: before US-001 no
+    machine-readable turn record existed anywhere, so the observable prior
+    behaviour is "no file is written and the turn proceeds identically". That is
+    what is asserted, and it is why the check is on the sink rather than on a
+    counter -- a revert that quietly kept writing would still pass any assertion
+    about the turn.
+
+    Read at module import (`perf_trace.ENABLED`, `:55`), so the flip is applied
+    to the module global, exactly as US-012 flips `TTS_CACHE_SCOPE`. The
+    operator's real revert is the setting plus a restart, and that path is
+    deliberately not exercised here -- see the note in `test_endpointing.py`.
+    """
+    banner("US-001  turn tracing", "PERF_TRACE=0")
+    import tempfile
+
+    from app import perf_trace as pt
+
+    original_enabled = pt.ENABLED
+    original_path = pt.LOG_PATH
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            sink = str(pathlib.Path(td) / "perf_turns.jsonl")
+            pt.LOG_PATH = sink
+
+            # Shipped behaviour: tracing on -> one record per emitted turn.
+            pt.ENABLED = True
+            t = pt.new_trace("CA-rollback", 1)
+            t.mark("vad_end")
+            t.mark("stt_done")
+            t.emit()
+            written = pathlib.Path(sink).read_text(encoding="utf-8") if pathlib.Path(sink).exists() else ""
+            check("US-001  shipped: tracing ON writes a record",
+                  written.count(chr(10)) == 1 and "CA-rollback" in written,
+                  repr(written[:80]))
+
+            # Reverted: the pre-US-001 behaviour -- no record exists at all.
+            pt.ENABLED = False
+            pathlib.Path(sink).unlink(missing_ok=True)
+            t2 = pt.new_trace("CA-rollback", 2)
+            t2.mark("vad_end")
+            t2.mark("stt_done")
+            t2.emit()
+            check("US-001  reverted: tracing OFF writes nothing, and emits no file",
+                  not pathlib.Path(sink).exists(),
+                  "a file appeared with PERF_TRACE=0")
+            check("US-001  reverted: the trace object still accepts marks without raising",
+                  t2._marks.get("vad_end") is not None)
+
+            # Restored: the fix returns, so the revert is a switch and not a loss.
+            pt.ENABLED = True
+            t3 = pt.new_trace("CA-rollback", 3)
+            t3.mark("vad_end")
+            t3.emit()
+            check("US-001  restored: the record returns",
+                  pathlib.Path(sink).exists()
+                  and "CA-rollback" in pathlib.Path(sink).read_text(encoding="utf-8"))
+    finally:
+        pt.ENABLED = original_enabled
+        pt.LOG_PATH = original_path
+
+
 def main() -> int:
     print("=" * 74)
     print("BRD-15 -- rollback demonstrated, not asserted")
     print("=" * 74)
 
+    us001()
     us012()
     us013()
     us016()
