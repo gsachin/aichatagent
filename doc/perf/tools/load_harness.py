@@ -1180,11 +1180,22 @@ class Transport:
 
 class WebsocketsTransport(Transport):
     """`websockets` (asyncio client). No dependency is added: this ships with the
-    project's .venv."""
+    project's .venv.
 
-    def __init__(self, url: str, *, open_timeout: float = 15.0) -> None:
+    Keepalive pings (Phase 0.4, 2026-09-19): off by default. A cold first turn
+    pays in-process model loads inside the app and can legitimately outlast a
+    keepalive window; a ping with a 20 s timeout then kills the measurement with
+    a 1011 "keepalive ping timeout" -- which is exactly how the two harness-clean
+    cold N=2 runs in the store died. The pings guard against a dead connection,
+    not a slow turn, so the guard is opt-in via --ws-ping-interval.
+    """
+
+    def __init__(self, url: str, *, open_timeout: float = 15.0,
+                 ping_interval: float | None = None, ping_timeout: float = 20.0) -> None:
         self.url = url
         self.open_timeout = open_timeout
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
         self._ws: Any = None
 
     async def connect(self) -> None:
@@ -1192,14 +1203,15 @@ class WebsocketsTransport(Transport):
             from websockets.asyncio.client import connect
         except Exception:                                  # pragma: no cover - old releases
             from websockets.client import connect         # type: ignore
-        self._ws = await connect(
-            self.url,
-            open_timeout=self.open_timeout,
-            ping_interval=20,
-            ping_timeout=20,
-            close_timeout=5,
-            max_queue=64,
-        )
+        kwargs: dict[str, Any] = {
+            "open_timeout": self.open_timeout,
+            "close_timeout": 5,
+            "max_queue": 64,
+        }
+        if self.ping_interval is not None:
+            kwargs["ping_interval"] = self.ping_interval
+            kwargs["ping_timeout"] = self.ping_timeout
+        self._ws = await connect(self.url, **kwargs)
 
     async def send_text(self, text: str) -> None:
         await self._ws.send(text)
@@ -1315,6 +1327,8 @@ class SessionDriver:
         phone: str = "+15550000000",
         idle_gap_ms: int = 0,
         wake_lead_s: float = PACER_WAKE_LEAD_S,
+        ws_ping_interval: float | None = None,
+        ws_ping_timeout: float = 20.0,
     ) -> None:
         fixtures = (fixture,) if isinstance(fixture, Fixture) else tuple(fixture)
         if not fixtures:
@@ -1335,7 +1349,10 @@ class SessionDriver:
         self.idle_gap_ms = idle_gap_ms
         self.wake_lead_s = wake_lead_s
         self.audit = FrameAudit()
-        self.transport = transport if transport is not None else WebsocketsTransport(url)
+        self.ws_ping_interval = ws_ping_interval
+        self.ws_ping_timeout = ws_ping_timeout
+        self.transport = transport if transport is not None else WebsocketsTransport(
+            url, ping_interval=ws_ping_interval, ping_timeout=ws_ping_timeout)
 
         self.stream_sid = self._new_stream_sid()
         self._planned = self._build_plan()
@@ -1977,6 +1994,11 @@ class RunSummary:
     cap_basis: str = ""
     partial: bool = False
     dropped_turns: int = 0
+    # Phase 0.4 (2026-09-19): keepalive ping settings, recorded so a reader can
+    # tell whether this run's connections could die on a 1011. None = pings off.
+    ws_ping_interval: float | None = None
+    ws_ping_timeout: float = 20.0
+    ws_ping_basis: str = ""
     records_separated: bool | None = None
     separation: dict[str, Any] = field(default_factory=dict)
     stack_readiness: str = ""
@@ -2045,6 +2067,23 @@ def system_ram_pct() -> float | None:
         return None
 
 
+def _ws_ping_basis(interval: float | None) -> str:
+    """The recorded reason for this run's keepalive ping setting (Phase 0.4)."""
+    if interval is None:
+        return (
+            "keepalive pings DISABLED (default for cold sessions). A cold first turn "
+            "pays in-process model loads inside the app and can legitimately outlast a "
+            "keepalive window; a ping then kills the measurement with a 1011 'keepalive "
+            "ping timeout' -- exactly how the two harness-clean cold N=2 runs in the "
+            "store died. The pings guard against a dead connection, not a slow turn. "
+            "Pass --ws-ping-interval to re-enable them."
+        )
+    return (
+        f"keepalive pings ENABLED by explicit --ws-ping-interval={interval:g} "
+        "(a dead connection then closes the run instead of hanging it)."
+    )
+
+
 def build_summary(
     *,
     condition: str,
@@ -2061,6 +2100,8 @@ def build_summary(
     prior_rows: int,
     extra_load: dict[str, Any] | None = None,
     app_rows: Sequence[dict[str, Any]] = (),
+    ws_ping_interval: float | None = None,
+    ws_ping_timeout: float = 20.0,
 ) -> RunSummary:
     turns: list[TurnObservation] = [t for r in results for t in r.turns]
     warm_values = [t.first_audio_ms for t in turns if t.thermal == "warm" and t.first_audio_ms is not None]
@@ -2187,6 +2228,9 @@ def build_summary(
             "confirmation of which clock the cap keys on is recorded in the story."),
         partial=partial,
         dropped_turns=dropped,
+        ws_ping_interval=ws_ping_interval,
+        ws_ping_timeout=ws_ping_timeout,
+        ws_ping_basis=_ws_ping_basis(ws_ping_interval),
         records_separated=separation.get("records_separated"),
         separation=separation,
         stack_readiness=readiness.get("stack_readiness", "unknown"),
@@ -2323,6 +2367,7 @@ def summary_to_dict(s: RunSummary) -> dict[str, Any]:
         "injected_condition",
         "first_audio_ms", "cold_first_audio_ms", "warm_first_audio_ms",
         "vad_end_first_audio_ms", "endpointing_ms",
+        "ws_ping_interval", "ws_ping_timeout", "ws_ping_basis",
         "carrier_boundary_excluded", "records_separated", "separation",
         "turns_over_3000ms", "cap_exceeded", "cap_basis",
         "turns_without_response", "turns_timed_out", "partial", "dropped_turns",
@@ -2749,6 +2794,8 @@ async def run_condition(
     admission_probes: int = 0,
     background_units: int = 0,
     load_start_delay_s: float = 8.0,
+    ws_ping_interval: float | None = None,
+    ws_ping_timeout: float = 20.0,
 ) -> RunSummary:
     """
     One condition: N sessions, one fixture set, one network profile.
@@ -2791,7 +2838,8 @@ async def run_condition(
         SessionDriver(url, by_label[chr(ord("A") + i)], chr(ord("A") + i), profile,
                       target_turns=target_turns, session_seed=1000 + i, phone=phone,
                       cold_gap_ms=cold_gap_ms, post_turn_quiet_ms=post_turn_quiet_ms,
-                      idle_gap_ms=idle_gap_ms, wake_lead_s=wake_lead_ms / 1000.0)
+                      idle_gap_ms=idle_gap_ms, wake_lead_s=wake_lead_ms / 1000.0,
+                      ws_ping_interval=ws_ping_interval, ws_ping_timeout=ws_ping_timeout)
         for i in range(n)
     ]
     # US-016 / US-017: the extra load runs ALONGSIDE the call pair, started
@@ -2848,7 +2896,9 @@ async def run_condition(
                             readiness=readiness, separation=separation,
                             target_turns=target_turns, app_contract=app_contract,
                             prior_rows=len(rows_before), extra_load=extra_load,
-                            app_rows=rows_after)
+                            app_rows=rows_after,
+                            ws_ping_interval=ws_ping_interval,
+                            ws_ping_timeout=ws_ping_timeout)
     write_summary(summary)
     if not quiet:
         print_summary(summary)
@@ -3351,6 +3401,35 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     out["a2_absent_app_row_stays_unknown"] = (
         s.per_session[0]["turns"][0].get("first_audio_from_vad_end_ms") is None
         and s.per_session[0]["turns"][0].get("endpointing_ms") is None)
+
+    # ── Phase 0.4 (2026-09-19): keepalive pings. Off by default for cold
+    # sessions, because a cold first turn can outlast a keepalive window and
+    # a ping then kills the run with a 1011 (the store's two harness-clean
+    # cold N=2 runs died exactly that way). The guard is opt-in, and every
+    # summary records which setting was in force.
+    cold_driver = SessionDriver("ws://x", fx, "A", target_turns=1)
+    out["ws_ping_default_disabled_for_cold_sessions"] = (
+        cold_driver.ws_ping_interval is None
+        and cold_driver.transport.ping_interval is None)
+    pinged = SessionDriver("ws://x", fx, "A", target_turns=1,
+                           ws_ping_interval=10.0, ws_ping_timeout=30.0)
+    out["ws_ping_explicit_interval_is_honored"] = (
+        pinged.transport.ping_interval == 10.0 and pinged.transport.ping_timeout == 30.0)
+    out["ws_ping_disabled_recorded_in_summary"] = (
+        d.get("ws_ping_interval") is None and d["ws_ping_timeout"] == 20.0
+        and "DISABLED" in d["ws_ping_basis"]
+        and "1011" in d["ws_ping_basis"])
+    pinged_summary = build_summary(
+        condition="N=1", results=[result("A", [obs("A", "warm", 900.0)])],
+        fixtures=[fx], profile=CLEAN, url="ws://x", started=0.0, ended=1.0,
+        readiness={"stack_readiness": "test"}, separation=clean_sep,
+        target_turns=1, app_contract={}, prior_rows=0,
+        ws_ping_interval=5.0, ws_ping_timeout=8.0)
+    pj = summary_to_dict(pinged_summary)
+    out["ws_ping_enabled_recorded_in_summary"] = (
+        pj["ws_ping_interval"] == 5.0 and pj["ws_ping_timeout"] == 8.0
+        and "ENABLED" in pj["ws_ping_basis"]
+        and "--ws-ping-interval=5" in pj["ws_ping_basis"])
     return out
 
 
@@ -3578,6 +3657,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--readiness-url", default=None,
                    help="optional readiness endpoint (US-007). Without it the summary says "
                         "readiness was ASSUMED, not certified")
+    p.add_argument("--ws-ping-interval", type=float, default=None,
+                   help="keepalive ping interval in seconds (Phase 0.4). Default: pings "
+                        "DISABLED for cold sessions -- a cold first turn pays in-process "
+                        "model loads and can legitimately outlast a keepalive window; a "
+                        "ping then kills the run with a 1011 'keepalive ping timeout' "
+                        "(how the two harness-clean cold N=2 runs in the store died)")
+    p.add_argument("--ws-ping-timeout", type=float, default=20.0,
+                   help="keepalive pong timeout in seconds, used only with "
+                        "--ws-ping-interval (default 20)")
     p.add_argument("--eval-lock", default=str(EVAL_LOCK),
                    help="path whose existence means a quality evaluation is running (TAC-7)")
     p.add_argument("--no-warm-gate", action="store_true",
@@ -3713,6 +3801,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 admission_probes=probes,
                 background_units=args.background_units,
                 load_start_delay_s=args.load_start_delay_s,
+                ws_ping_interval=args.ws_ping_interval,
+                ws_ping_timeout=args.ws_ping_timeout,
             ))
         except ReadinessError as e:
             print(f"READINESS REFUSAL: {e}", file=sys.stderr)
