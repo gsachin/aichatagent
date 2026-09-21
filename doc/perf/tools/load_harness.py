@@ -2014,6 +2014,14 @@ class RunSummary:
     target_turns_per_session: int = 0
     harness_version: str = HARNESS_VERSION
     harness_sha256: str = ""
+    # US-011 T-14 / TAC-7: the configuration that produced these numbers,
+    # embedded so a review needs only this artifact (`source` says what the rows
+    # describe, and whether they describe the serving process at all;
+    # `error` is non-empty only when attribution failed, so a summary without
+    # config is distinguishable from one whose config was unreadable).
+    effective_config: list[dict[str, Any]] = field(default_factory=list)
+    effective_config_source: str = ""
+    effective_config_error: str = ""
     #: US-016 / US-017: the N=3 window and the 2+1 mix, when they were driven.
     extra_load: dict[str, Any] = field(default_factory=dict)
     app_contract_check: dict[str, Any] = field(default_factory=dict)
@@ -2087,6 +2095,69 @@ def _ws_ping_basis(interval: float | None) -> str:
         f"keepalive pings ENABLED by explicit --ws-ping-interval={interval:g} "
         "(a dead connection then closes the run instead of hanging it)."
     )
+
+
+def resolve_effective_config(url: str = "") -> dict[str, Any]:
+    """The configuration in force, for the run's own attribution (TAC-7, T-14).
+
+    TAC-7 requires that a number cannot be orphaned from the settings that
+    produced it; T-14 requires a later review to recover those settings from the
+    run's OWN artifact. So the rows are embedded in the summary rather than
+    left to be reconstructed from the repo at review time -- the repo moves.
+
+    Resolved through THE implementation the app uses
+    (`app.boot_readiness.effective_config_rows`, built on
+    `app.config_truth.effective_configuration`) and not by re-reading `.env`
+    here. A second reader is a second answer, and "set != live" is this
+    program's most reliable defect class; the harness should not become another
+    instance of it. Secret VALUES are absent by construction, because that
+    property is inherited from the same call rather than re-implemented
+    (TAC-4).
+
+    Never raises: a load run must not abort because its configuration could not
+    be attributed. But the failure is RECORDED, not swallowed.
+
+    Returns {"rows": [...], "source": "...", "error": "..."}. `source` says what
+    the rows actually describe, including the one case where they may not
+    describe the serving process at all: the rows are resolved by THIS process
+    from the repo's `.env`, which is the same file the app resolved on a
+    single-box run (the documented deployment, and how every run in
+    doc/perf/runs/ was made). Pointed at a stack on another host, the serving
+    process may have been launched with a different environment, and these rows
+    would describe the harness's box instead.
+    """
+    try:
+        if str(PROJ) not in sys.path:
+            sys.path.insert(0, str(PROJ))
+        from app.boot_readiness import effective_config_rows
+
+        rows = effective_config_rows()
+        # `effective_config_rows` never raises -- it returns a ONE-ROW
+        # [{"error": ...}] on failure. Checking only for an exception would
+        # therefore store that single dict as a perfectly good config table and
+        # leave `error` empty: a failed resolution would be indistinguishable
+        # from a successful one, which is the property this whole field exists
+        # to protect.
+        if len(rows) == 1 and "error" in rows[0]:
+            return {"rows": [], "source": "", "error": str(rows[0]["error"])}
+        local = (not url) or bool(re.match(
+            r"wss?://(127\.0\.0\.1|localhost|\[::1\])(?::|/|$)", url))
+        source = (
+            f"resolved in-process by the harness from {PROJ / '.env'} via "
+            f"app.boot_readiness.effective_config_rows(); "
+            + ("the run targeted a local stack, so this is the same file the "
+               "serving process resolved"
+               if local else
+               f"the run targeted {url}, which is NOT local -- the serving "
+               "process may have been launched with a different environment, "
+               "so these rows may describe the harness's box rather than the "
+               "stack that produced these numbers")
+        )
+        return {"rows": rows, "source": source, "error": ""}
+    except Exception as exc:                       # noqa: BLE001
+        return {"rows": [],
+                "source": "",
+                "error": f"{type(exc).__name__}: {exc}"}
 
 
 def build_summary(
@@ -2193,6 +2264,8 @@ def build_summary(
 
     json_path = ""
     run_id = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(started))}"
+    # TAC-7 / T-14: resolve the configuration ONCE, for this run's attribution.
+    _cfg = resolve_effective_config(url)
     s = RunSummary(
         condition=condition,
         thermal_state=thermal_state,
@@ -2246,6 +2319,9 @@ def build_summary(
         powered=len(headline) >= 100,
         target_turns_per_session=target_turns,
         harness_sha256=_file_sha256(Path(__file__)),
+        effective_config=_cfg["rows"],
+        effective_config_source=_cfg["source"],
+        effective_config_error=_cfg["error"],
         app_contract_check=app_contract,
         extra_load=extra_load or {},
         disclosures={
@@ -2382,6 +2458,8 @@ def summary_to_dict(s: RunSummary) -> dict[str, Any]:
         "target_turns_per_session", "powered",
         "url", "started_at", "ended_at", "wall_seconds",
         "harness_version", "harness_sha256", "extra_load", "app_contract_check", "json_path",
+        # US-011 T-14 / TAC-7: the configuration that produced these numbers.
+        "effective_config", "effective_config_source", "effective_config_error",
         "disclosures", "notes",
     ]
     d = dict(s.__dict__)
@@ -3321,6 +3399,25 @@ def _st_summary_contract(tmp: Path) -> dict[str, Any]:
     # built it; a summary whose hash differs was produced by a different harness revision.
     out["a1_fresh_summary_records_current_harness_hash"] = (
         d["harness_sha256"] == _file_sha256(Path(__file__)))
+    # T-14 / TAC-7 (US-011): a summary carries the configuration that produced
+    # its numbers, so a review needs only the artifact. Three properties, and
+    # the third is the one that matters when a summary is copied around.
+    _cfg_local = resolve_effective_config("ws://127.0.0.1:8000/ws")
+    _cfg_remote = resolve_effective_config("wss://example.invalid/ws")
+    out["t14_summary_carries_effective_config"] = (
+        len(_cfg_local["rows"]) > 1 and not _cfg_local["error"])
+    out["tac7_source_states_what_the_rows_describe"] = (
+        "local stack" in _cfg_local["source"]
+        and "NOT local" in _cfg_remote["source"])
+    # A sensitive row carries a MARKER, never a value -- and "(unset)" is one
+    # too. Requiring "***set***" for every sensitive row asserted something
+    # false: SMTP_PASS is declared sensitive and is not set on this box, so a
+    # correctly-masked key was reported as a leak. What matters is that no
+    # sensitive row can carry a real value.
+    out["tac7_no_secret_value_is_carried"] = all(
+        (str(row.get("value")) in ("***set***", "(unset)"))
+        if row.get("sensitive") else True
+        for row in _cfg_local["rows"])
     out["clean_profile_states_clean"] = build(
         [result("A", [obs("A", "warm", 900.0)])],
         clean_sep).network_profile in PROFILES
