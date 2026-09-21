@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import socket
 import sys
 import time
@@ -40,6 +39,8 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from app.config import settings
 
 PROJ = Path(__file__).resolve().parent.parent
 
@@ -51,7 +52,16 @@ PREFIX_WARM_MS = 400.0
 
 #: `ollama.ps` reports `expires_at` years out when keep_alive=-1. Used only to
 #: decide whether to call residency "held indefinitely" in the report.
-KEEP_ALIVE_FOREVER = os.environ.get("OLLAMA_KEEP_ALIVE", "-1")
+#:
+#: NOTE (US-011): this constant has no reader anywhere in the repository. The
+#: warming path imports `app.llm_backend.KEEP_ALIVE` instead, which is the
+#: RESOLVED value — an int -1, because Ollama's duration parser rejects the
+#: string "-1" with a 400 on every request. So this is not a spare copy of that
+#: value but a differently-typed one: any future caller that picks it up would
+#: send the string and break every call. It is migrated rather than deleted
+#: because removing a module-level name is a separate decision; it should
+#: probably go.
+KEEP_ALIVE_FOREVER = settings.OLLAMA_KEEP_ALIVE
 
 
 @dataclass
@@ -86,13 +96,6 @@ class Readiness:
 
 # ── Clause 1 — services listening ──────────────────────────────────────────
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
 def load_env() -> None:
     """Load `.env` before anything reads it.
 
@@ -119,7 +122,7 @@ def default_services() -> list[tuple[str, str, int, bool, str]]:
     service and make a not-ready report look like a hang.
     """
     return [
-        ("FastAPI",   "127.0.0.1", _env_int("FASTAPI_PORT", 8000), True,  ""),
+        ("FastAPI",   "127.0.0.1", settings.FASTAPI_PORT,           True,  ""),
         ("Ollama",    "127.0.0.1", 11434,                           True,
          "no inference at all - every turn fails"),
         ("ERC MCP",   "127.0.0.1", 8010,                            False,

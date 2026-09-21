@@ -255,6 +255,23 @@ class Settings:
         default_factory=lambda: float(_env("RAG_MCP_COOLDOWN", "30"))
     )
 
+    # ── Boot readiness ──────────────────────────────────────────────
+    # The LAUNCHER's port key, which is not the same key as PORT above: both
+    # live in .env and both default 8000, but the launcher reads this one
+    # (start_services.ps1) and the boot gate probes the port it will bind.
+    # Listed in config_truth._EXTERNALLY_CONSUMED for that reason.
+    FASTAPI_PORT: int = field(default_factory=lambda: int(_env("FASTAPI_PORT", "8000")))
+
+    # ── Machine detection overrides ─────────────────────────────────
+    # Detection overrides, not values: each is compared against the exact
+    # string "1", so unset and "" both mean "not set" and the probe falls
+    # through to real detection. Held as strings so that comparison is
+    # untouched — a bool field would make "false" behave differently from "".
+    MACHINE_IN_CONTAINER: str = field(
+        default_factory=lambda: _env("MACHINE_IN_CONTAINER", "")
+    )
+    MACHINE_CLOUD: str = field(default_factory=lambda: _env("MACHINE_CLOUD", ""))
+
     # ── Public tunnel ───────────────────────────────────────────────
     # The hostname Twilio must call back on. Declared here so the four copies
     # of the resolver (app/main.py twice — once dead — app/offers/service.py,
