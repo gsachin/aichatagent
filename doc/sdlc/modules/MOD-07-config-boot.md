@@ -157,7 +157,11 @@ The stack shall not report itself ready until the inference model is resident an
 
 ### B.4 Data Model
 
-The entity is the configuration set, `DAT-09` — whose inventory row reads "`.env` + `.machine_profile.json`", owner Developer, availability 100%, quality "**Low — 4 keys inert, 3 disagree**", trust "**conflicting**". Its classification is "**Conflicting / Stale**", with the consequence that "`FASTAPI_WORKERS`, `WHISPER_NUM_THREADS` disagree; 4 keys never read".
+The entity is the configuration set, `DAT-09` — whose inventory row reads "`.env` + `.machine_profile.json`", owner Developer, availability 100%. **Reconciled 2026-09-21 (`US-011`).** The row previously read quality "**Low — 4 keys inert, 3 disagree**", trust "**conflicting**", classification "**Conflicting / Stale**", consequence "`FASTAPI_WORKERS`, `WHISPER_NUM_THREADS` disagree; 4 keys never read". Each clause of that has since been discharged, and the old wording is quoted rather than quietly deleted — a stale quality rating is exactly the class of claim this module exists to catch:
+
+- **4 keys inert → 0.** `sweep_inert_keys()` returns empty. All four now have demonstrable readers: `KOKORO_SPEED` and `LOG_LEVEL`/`LOG_FILE` migrated in Phase 1.2, and `FASTAPI_WORKERS` resolves to **NOT IN EFFECT**, reported by name at boot with its reason (`REC-02`) rather than left implying it applied.
+- **trust "conflicting" → one authority.** `.env` answers every runtime question; the artifact answers only "what machine was this sized for". Its `applied` block is not a source (see `load_snapshot` in `app/hardware_profile.py`).
+- **3 disagree → the divergence is classified, not silent.** `WHISPER_NUM_THREADS` still differs between `.env` and the artifact's `applied` block; it is recorded as having **zero runtime effect** (`REC-05`), because the artifact is not read at runtime at all.
 
 ```mermaid
 erDiagram
@@ -190,7 +194,7 @@ erDiagram
 | Entity | Key fields | Relation | Inventory |
 |---|---|---|---|
 | `.env` | ~222 lines; a marked managed block holding 10 keys | Authoritative for every runtime setting | `DAT-09` |
-| Config key | name, effective value, source (explicit or default) | Must resolve to exactly one reader | `DAT-09` |
+| Config key | name, effective value, source — `authoritative (.env)` \| `code default` \| `detection artifact` (`TAC-6`) | Must resolve to exactly one reader | `DAT-09` |
 | Machine profile | `profile_id`, `tier_id` (`nvidia_high`), `detected` block, `applied` block | Detection artifact; its `applied` block is never runtime-authoritative | `DAT-09` second writer |
 | Readiness report | per-service state, model residency, prefix-warm state, effective config table | Produced once per stack start | `UC-06` artefact |
 
@@ -214,7 +218,7 @@ erDiagram
 | Model evicted between boot and the first call | The residency check is part of readiness; a residency window shorter than the expected idle gap is a configuration error to be surfaced, not a surprise to be discovered by a caller |
 | A managed key has no reader | Failed readiness check naming the key (`TRD-25`). This is the mechanism that stops a fifth inert key appearing |
 | Two writers disagree on a key | `.env` wins by rule; the divergence is reported as a drift, not resolved silently (`TRD-24`, `DG-05`) |
-| Port held by an orphaned process | `UC-06` E1: start fails and the operator resolves ownership. The script already probes ports before starting (Steps 1–2) and warns when a port is held by another process (`start_services.ps1:635`) |
+| Port held by an orphaned process | `UC-06` E1: start fails and the operator resolves ownership. The script already probes ports before starting (Steps 1–2) and warns when a port is held by another process (`start_services.ps1:153` — the orphan case, where the socket was inherited by a PID that no longer exists) |
 | A dependency starts but never listens | The script's startup deadline reports it (`UC-06` timeout scenario); readiness is not declared on a timeout |
 | Half-started stack | Reported with the specific degraded capability; never silent (`UC-06` partial completion, `BRD-13`) |
 | Repeated start | Idempotent; an already-running dependency is reused, not duplicated (`UC-06` A1, duplicate-request scenario) |
@@ -224,11 +228,23 @@ erDiagram
 #### As-built, 2026-09-19 — the gate closes six of these, and three have nothing behind them
 
 This table was written prescriptively ("Today: … Required: …") before `US-007`'s
-gate existed. The gate is now implemented and passes 30/30 checks, so the
-"Required" column can be answered. **Six rows are implemented, one was already
-handled outside the gate, and three have no implementation at all** — the last
-group is the one worth acting on, because a table like this reads as a
-specification that has been met.
+gate existed. The gate is now implemented, so the "Required" column can be
+answered. **Eight rows are implemented, one was already handled outside the
+gate, and one has no implementation at all.**
+
+**Two of the three rows originally listed as having nothing behind them closed
+after this section was written**, and they are recorded here rather than
+deleted: the section is dated, and a reader needs to know which claims moved.
+
+- *A dependency starts but never listens* — **now implemented.** Clause 1 of the
+  gate is exactly this check: `tcp_listening` (`app/boot_readiness.py:135`)
+  probes every turn-path service, and one that is not listening fails the clause
+  rather than being assumed up.
+- *A configured value is malformed* — **now implemented by `US-011`'s `TAC-5`.**
+  `check_config_keys` (`app/boot_readiness.py:305`) fails readiness when a
+  managed key cannot be parsed, and names the key. This is the row that would
+  have caught `OLLAMA_KEEP_ALIVE="-1"`. That instance is still handled by
+  hand-written coercion at its call site, but the next one is caught by a gate.
 
 **Implemented — verified by a named check in `test_us007_readiness.py`:**
 
@@ -246,13 +262,12 @@ specification that has been met.
 
 | Row | Status |
 |---|---|
-| **A dependency starts but never listens** | **OPEN.** `boot_readiness.py` contains no such check (0 matches). The script has start-up deadlines per `UC-06`, but the *readiness gate* does not verify that a dependency which reported started is actually listening |
-| **A configured value is malformed** | **OPEN.** No parse-failure reporting (0 matches). This is the row that would have caught `OLLAMA_KEEP_ALIVE="-1"` — a `.env` value that is always a string and that Ollama's Go duration parser rejects with `time: missing unit in duration`, a 400 on *every* request. That instance is handled by coercion in `_resolve_keep_alive`, but by hand at the call site, not by a gate that would catch the next one |
-| **Operator aborts a start** | **OPEN.** Nothing implements it (0 matches). Low severity — an abort is visible to the operator who caused it — but the row claims a behaviour nothing provides |
+| **Operator aborts a start** | **OPEN — the only one left.** Nothing implements it (0 matches). Low severity, since an abort is visible to the operator who caused it, but the row claims a behaviour nothing provides |
 
-The three open rows are **not** this module's DoD box; they are recorded here so
-the box can be ticked honestly for the six that are real, without the table
-implying three more are done than are.
+The open row is **not** this module's DoD box; it is recorded here so the box
+can be ticked honestly for the eight that are real, without the table implying
+one more is done than is. (Two rows that were in this table have closed; see
+the note above it.)
 
 ### B.7 Tech Debt Accepted
 

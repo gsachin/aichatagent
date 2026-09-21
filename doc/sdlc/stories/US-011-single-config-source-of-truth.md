@@ -2,7 +2,7 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
-- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; TAC-1 MIGRATION COMPLETE 2026-09-21 (Phase 1.2, zero unexplained reads); AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` 38/38 · `test_us011_import_order.py` 13/13 · DoD 4/8 · LLD mapping and `MOD-07` are open
+- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; TAC-1 MIGRATION COMPLETE 2026-09-21 (Phase 1.2, zero unexplained reads; bucket D closed); AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` **40/40** · `test_us011_import_order.py` 13/13 · **DoD 6/8** · the two open boxes are sized in "Remaining DoD — assessed 2026-09-21": ~3–6 h, and only the TAC-8 load pair needs a quiet box · **T-14 is the one genuine code gap** (the harness does not carry the effective configuration into a run summary)
 
   **TAC-1 migration, Phase 1.2 (2026-09-20, branch `sdlc/us011-tac1-config-migration`).** TAC-1 requires that no setting is read from `os.environ` directly in `app/`. The sweep that reports this returned *filenames*, so it could not tell a file reading an allowlisted dynamic key from one reading a key nobody had documented — the target was unverifiable, not just unmet. `sweep_unexplained_env_reads()` is now the gate: a per-read scan returning `(file, line, key)`, matched over whole files because several reads put the key on the line after the call. `DYNAMIC_KEYS` is the allowlist, derived from what actually mutates each key at runtime rather than from judgement — `USE_MCP_RAG` (14 mutation sites in the suite), `ADMISSION_ENABLED` and `BG_PRIORITY_ENABLED` (6 each), `RAG_BREAKER_MODE` (5), then four keys at 2 and `MACHINE_PROFILE_CHECK` at 1. Those reads must stay dynamic: the suite and the `BRD-15` rollback path change them in-process and require the very next call to observe it, which a value resolved once at import cannot do. So the target is **zero unexplained reads**, not zero reads, and the report states that split (total / kept by design / unexplained with `file:line:key`) rather than one file count.
 
@@ -242,14 +242,27 @@ def sweep_inert_keys() -> tuple[str, ...]: ...
 - [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
 - [ ] Tests from the LLD test scenarios pass (T-1 … T-17)
 - [ ] Perf/load test passed against the story's TACs (TAC-8 no start-time or per-turn regression)
-- [ ] Schema migration applied — yes: `DAT-09` gains per-key provenance; `.machine_profile.json`'s `applied` block is marked non-authoritative in the docs and in the loader
-- [ ] Module docs updated if contracts changed — `MOD-07` B.4 (`DAT-09` inventory gains provenance) and B.6 if the implementation differs from `TRD-24`
+- [x] Schema migration applied — yes: `DAT-09` gains per-key provenance; `.machine_profile.json`'s `applied` block is marked non-authoritative in the docs and in the loader. **Closed 2026-09-21.** The provenance half was already live (`config_truth.EffectiveValue.source` classifies `authoritative (.env) | code default | detection artifact`, asserted by AC-1); the loader half was not — `load_snapshot` was a bare JSON read. It now carries the standing in its docstring, `write_snapshot` names `applied` for what it is ("written, not in force"), and B.4 records the demotion
+- [x] Module docs updated if contracts changed — `MOD-07` B.4 (`DAT-09` inventory gains provenance) and B.6 if the implementation differs from `TRD-24`. **Closed 2026-09-21.** B.4's inventory row read quality "4 keys inert, 3 disagree" / trust "conflicting" when the sweep has returned zero since Phase 1.2, and its `CONFIG_KEY.source` enum stopped at "explicit or default"; both now match the implementation, with the old wording quoted rather than deleted. B.6's as-built table listed **three** rows as having no implementation — two have since closed (the listening clause, and `TAC-5`'s malformed-value check), leaving one; the two were moved rather than dropped. A stale `start_services.ps1:635` citation in B.6 was corrected to `:153`
 - [x] Inert-key sweep recorded: every configured key listed with its resolution (read, or reported inert by name); the five known instances each resolved to one of the two
 - [x] Effective-configuration output verified to contain no secret values (TAC-4), and the verification is a test rather than a review
 - [x] `BRD-15` rollback demonstrated: `test_brd15_rollback.py` changes a value in the authoritative file, observes the effective value change with no code change, and restores. The same file also asserts that re-reading is stable, so provenance is not re-decided per call.
 
 
-**Outstanding:** LLD test mapping (T-1..T-17); TAC-8 no-regression load test not run; `.machine_profile.json`'s `applied` block is not yet marked non-authoritative in the docs and loader; `MOD-07` B.4/B.6 not reconciled; `BRD-15` rollback not demonstrated.
+### Remaining DoD — assessed 2026-09-21
+
+The four open boxes, sized. "Desk" means no live stack is needed.
+
+| # | Box | What is actually left | Kind | Estimate |
+|---|---|---|---|---|
+| 2 | LLD test mapping (T-1…T-17) | Map each of the 17 scenarios to the test that covers it and add an evidence column. **T-14 is the one genuine gap**: it requires a load run's summary to *carry the effective configuration*, and `load_harness.py` has no reference to `effective_configuration()` at all — the resolution exists (`app/config_truth.py`) but nothing puts it into a run summary. T-13/T-17 are the TAC-8 load pair below. | Desk, then code **for T-14 only** | mapping 1–2 h; T-14 (harness summary field + a test) 2–4 h |
+| 3 | TAC-8 no-regression load test | Start duration **and** per-turn p95, before vs after the resolution path. The "after" half is cheap. The "before" half is not: the pre-migration revision is 11+ commits back, so it means checking that revision out and running the same load against it. | **Live — needs a quiet box and the full stack resident** | 2–4 h wall-clock, two load runs |
+| ~~4~~ | ~~Schema migration — artifact marked non-authoritative~~ | **DONE 2026-09-21** — loader docstrings in `app/hardware_profile.py`, demotion recorded in B.4 | Desk | ~~30–60 min~~ |
+| ~~5~~ | ~~`MOD-07` B.4/B.6 reconciled~~ | **DONE 2026-09-21** — B.4 inventory + provenance enum; B.6's three "no implementation" rows reduced to one, the two closed ones moved rather than dropped; stale `ps1` citation fixed | Desk | ~~1–2 h~~ |
+
+**Total: roughly 3–6 h left, and only the TAC-8 load pair (box 3) needs a quiet box.** Box 2's T-14 is the only new code; the rest is mapping, measurement and documentation.
+
+Note the earlier "Outstanding" line listed `BRD-15` rollback as not demonstrated, which contradicted the `[x]` on box 8 — `test_brd15_rollback.py` exists and passes 42/42. That line was stale and is replaced by this table.
 
 **Phase 1.2 — COMPLETE 2026-09-21.** `sweep_unexplained_env_reads()` returns empty: 16 direct reads remain in `app/`, every one an allowlisted dynamic key carrying a written reason. 67 reads were migrated in per-file commits, each default copied off its call site before the move.
 

@@ -495,6 +495,21 @@ def apply_profile(env_path, tier: dict, *, dry_run: bool = False, snapshot: dict
 
 
 # ── Snapshot sidecar ──────────────────────────────────────────────────
+#
+# NOT A CONFIGURATION SOURCE. `.machine_profile.json` records what was DETECTED
+# and what sizing was WRITTEN at the moment it ran; it is evidence about the
+# machine, never a setting in force. `.env` is the runtime authority (REC-05),
+# and `app/config_truth.py` classifies a key found here as source "detection
+# artifact" precisely so it cannot be mistaken for an authoritative one.
+#
+# The `applied` block is the part that gets misread, so it is named for what it
+# is: the values written INTO the managed block of `.env` at that moment. It is
+# a record of an edit, not a claim about the running process -- `FASTAPI_WORKERS`
+# sat in it reading 4 while no launcher honoured the key (REC-02), and a key can
+# be edited out of `.env` afterwards without this file changing at all. Anything
+# that needs to know what is in force resolves it through `Settings`, or asks
+# `check_drift()` whether the machine still matches what `.env` was sized for.
+
 
 def get_snapshot_path(env_path=None) -> Path:
     """Snapshot lives next to .env (default: <repo_root>/.machine_profile.json)."""
@@ -504,6 +519,13 @@ def get_snapshot_path(env_path=None) -> Path:
 
 
 def load_snapshot(env_path=None) -> dict | None:
+    """Read the detection artifact. NOT a configuration source -- see above.
+
+    Returns None when the file is absent or unreadable, and callers must read
+    that as "no detection evidence" rather than as "no configuration": the
+    documented defaults in `app/config.py` still apply, and every key then
+    reports source "code default" instead of pretending to be configured.
+    """
     try:
         data = json.loads(get_snapshot_path(env_path).read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
@@ -519,8 +541,17 @@ def _profile_id(values: dict[str, str]) -> str:
 def write_snapshot(env_path, tier: dict, hw: dict, actions: dict, removed_from_block: list[str]) -> dict:
     """
     Persist .machine_profile.json next to .env. Returns the snapshot dict.
+
+    Detection evidence, not configuration -- see the note above
+    `get_snapshot_path`. In particular `applied` records the values this run
+    wrote into `.env`'s managed block, which is a fact about an edit and NOT a
+    statement about what the running process reads. Nothing should resolve a
+    setting from here.
     """
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    #: Written, not in force. Named at every use site because this is the field
+    #: that gets mistaken for live state (`REC-02`: FASTAPI_WORKERS read 4 here
+    #: while no launcher honoured it).
     applied = {k: str(v) for k, v in tier["values"].items()}
     snapshot = {
         "profile_id": _profile_id(applied),
