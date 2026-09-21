@@ -57,9 +57,15 @@ _FLOAT_KEYS = ("RAG_SIMILARITY_THRESHOLD", "RAG_MCP_TIMEOUT", "OLLAMA_TEMPERATUR
 #: operator a setting is dead when the runtime is using it. `admission.py`'s
 #: `max_concurrent()` documents hitting this class from the other side (it uses
 #: a literal read because the sweep could not verify the helper form).
+#: An assignment operator, never a comparison. `os.environ["K"] = x` WRITES the
+#: key; `os.environ["K"] == x` READS it. Both start identically, so a bare
+#: `\]` pattern counts the write as a read and reports a site that cannot be
+#: migrated — there is no lookup there to move. `(?!=)` lets `==` through.
+_ASSIGNMENT = r'(?!\s*(?:[-+*/|&^@]|<<|>>)?=(?!=))'
+
 _READ_PATTERNS = (
     r'os\.environ\.get\(\s*["\']{k}["\']',
-    r'os\.environ\[\s*["\']{k}["\']\s*\]',
+    r'os\.environ\[\s*["\']{k}["\']\s*\]' + _ASSIGNMENT,
     r'os\.getenv\(\s*["\']{k}["\']',
     r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\']{k}["\']',
 )
@@ -221,10 +227,26 @@ DYNAMIC_KEYS: dict[str, str] = {
 
 _READ_SITE_PATTERNS = (
     re.compile(r'os\.environ\.get\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
-    re.compile(r'os\.environ\[\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']\s*\]'),
+    re.compile(r'os\.environ\[\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']\s*\]'
+               + _ASSIGNMENT),
     re.compile(r'os\.getenv\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
     re.compile(r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
 )
+
+
+def reads_in_source(src: str) -> tuple[tuple[int, str], ...]:
+    """Every direct env read in a source string, as (line, key).
+
+    Split out of `scan_direct_env_reads` so the patterns can be pointed at a
+    literal. That is what lets the gate's positive control be an actual scan
+    rather than a comment claiming one: an un-allowlisted read in a string must
+    be seen before a zero over the real tree means anything.
+    """
+    out: list[tuple[int, str]] = []
+    for pat in _READ_SITE_PATTERNS:
+        for m in pat.finditer(src):
+            out.append((src.count("\n", 0, m.start()) + 1, m.group("k")))
+    return tuple(out)
 
 
 def scan_direct_env_reads(
@@ -234,8 +256,14 @@ def scan_direct_env_reads(
 
     Pattern-matched over whole files rather than line by line, because a read's
     key can sit on the line after the call — `os.environ.get(\\n "KEY",` is how
-    several of these are written. `os.environ.setdefault` writes are not reads
-    and are not matched.
+    several of these are written.
+
+    Writes are not reads and are not matched: neither
+    `os.environ.setdefault("K", ...)` nor the subscript form
+    `os.environ["K"] = ...` (see `_ASSIGNMENT`). The subscript form matters
+    because it is spelled almost identically to the read it must not be
+    confused with, and counting it invents a migration site with no lookup in
+    it — `app/voice_handler.py`'s `ONNX_PROVIDER` write was reported this way.
     """
     sites: list[tuple[str, int, str]] = []
     for p in sorted(APP_DIR.rglob("*.py")):
@@ -245,10 +273,8 @@ def scan_direct_env_reads(
             src = p.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
-        for pat in _READ_SITE_PATTERNS:
-            for m in pat.finditer(src):
-                line = src.count("\n", 0, m.start()) + 1
-                sites.append((str(p.relative_to(PROJECT_ROOT)), line, m.group("k")))
+        rel = str(p.relative_to(PROJECT_ROOT))
+        sites.extend((rel, line, key) for line, key in reads_in_source(src))
     return tuple(sites)
 
 

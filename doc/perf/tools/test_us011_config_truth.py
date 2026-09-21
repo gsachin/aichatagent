@@ -134,6 +134,20 @@ check("TAC-1 multi-line reads are seen (the key sits on the next line)",
 check("TAC-1 setdefault WRITES are not counted as reads",
       all(k != "HF_HUB_ENABLE_HF_XET" for _, _, k in sites),
       "a write was counted as a read")
+# The subscript form is the trap: `os.environ["K"] = x` and `os.environ["K"]`
+# differ by two characters, and counting the write invents a migration site
+# with no lookup in it. app/voice_handler.py's ONNX_PROVIDER write was reported
+# as an unexplained read this way. Both spellings are checked, plus the
+# comparison operator that must still read as a read.
+check("TAC-1 subscript WRITES are not counted as reads",
+      all(k != "ONNX_PROVIDER" for _, _, k in sites),
+      "os.environ['K'] = x was counted as a read")
+check("TAC-1 a subscript READ still counts, and == is not an assignment",
+      ct.reads_in_source('a = os.environ["US011_PROBE"]')
+      and ct.reads_in_source('b = os.environ["US011_PROBE"] == "1"')
+      and not ct.reads_in_source('os.environ["US011_PROBE"] = "1"')
+      and not ct.reads_in_source('os.environ["US011_PROBE"] += "1"'),
+      "the assignment guard swallows a read, or lets a write through")
 check("TAC-1 the dynamic allowlist is non-empty and every entry gives a reason",
       ct.DYNAMIC_KEYS and all(len(v) > 20 for v in ct.DYNAMIC_KEYS.values()),
       f"{len(ct.DYNAMIC_KEYS)} allowlisted")
@@ -146,7 +160,9 @@ check("TAC-1 the unexplained sweep is a subset of all reads",
 # could mean "clean" or "detector broken".
 _probe_src = 'x = os.environ.get("US011_UNALLOWLISTED_PROBE", "")'
 check("TAC-1 the gate can still see an un-allowlisted read",
-      "US011_UNALLOWLISTED_PROBE" not in ct.DYNAMIC_KEYS)
+      any(k == "US011_UNALLOWLISTED_PROBE" for _, k in ct.reads_in_source(_probe_src))
+      and "US011_UNALLOWLISTED_PROBE" not in ct.DYNAMIC_KEYS,
+      "the probe was not detected, so a zero below would prove nothing")
 check("TAC-1 the report names the remaining work rather than implying compliance",
       "must reach zero" in report)
 check("TAC-1 report counts the allowlisted reads separately",
