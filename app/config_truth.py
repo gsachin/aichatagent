@@ -150,7 +150,28 @@ def is_read_anywhere(key: str, corpus: str | None = None) -> bool:
 #: PowerShell launcher reads the host/port pair. Reported separately so a real
 #: inert key is not buried among them.
 _EXTERNALLY_CONSUMED_PREFIXES = ("PYTHON", "STREAMLIT")
-_EXTERNALLY_CONSUMED = ("FASTAPI_HOST", "FASTAPI_PORT")
+_EXTERNALLY_CONSUMED = ("FASTAPI_HOST", "FASTAPI_PORT",
+                        # Engine-level keys read by the `ollama serve` PROCESS,
+                        # not by this code. Documented in `.env.example` under
+                        # "Consumed by the Ollama SERVICE, not by this
+                        # application"; an operator who puts them in `.env`
+                        # while tuning the engine would otherwise see them
+                        # reported INERT -- the false positive that says a live
+                        # setting is dead. They are listed EXACTLY rather than
+                        # folded into the prefix above, and `OLLAMA` is
+                        # deliberately NOT a prefix: that would silently excuse
+                        # any future OLLAMA_* key nothing reads, which is the one
+                        # thing this sweep exists to catch.
+                        #
+                        # OLLAMA_KEEP_ALIVE is NOT here, though the engine reads
+                        # that name too. This application reads it as well
+                        # (app/config.py, app/llm_backend.py) as the per-request
+                        # keep_alive, so it is genuinely read and can never be
+                        # inert. See the trap in `.env.example`.
+                        "OLLAMA_NUM_PARALLEL", "OLLAMA_MAX_LOADED_MODELS",
+                        "OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE",
+                        "OLLAMA_CONTEXT_LENGTH", "OLLAMA_HOST",
+                        "OLLAMA_MODELS")
 
 
 def is_externally_consumed(key: str) -> bool:

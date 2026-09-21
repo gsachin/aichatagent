@@ -72,8 +72,8 @@ true, only the citations did.
 
 ## Verification, measured
 
-- `test_us011_config_truth.py`: **38/38**
-- `test_us011_import_order.py`: **13/13, 2 noted**
+- `test_us011_config_truth.py`: **40/40** (38 before Bucket D's two new controls)
+- `test_us011_import_order.py`: **13/13, 2 noted** · `test_endpointing.py` **18/18**
 - `test_doc_citations.py`: **5/5** · `test_doc_truth.py`: **6/6**
 - Full `tests/` suite: **563 passed, 6 failed** — and all 6 are the pre-existing
   pair the 2026-09-21 handoff documented under finding 5, not regressions:
@@ -118,11 +118,27 @@ alongside the pre-existing uncommitted `app/crm/*` + `app/leads/*` work.
 
 ## Next actions
 
-1. **Commit the TAC-3 launcher fix** — it is self-contained and verified.
-2. **Bucket D** (handoff 2026-09-21, next-action 3) — the engine-level `OLLAMA_*`
-   keys documented in `.env.example` under "consumed by the Ollama service", with
-   `_EXTERNALLY_CONSUMED` carve-outs; `.env.example` gains `SMALL_TASK_NUM_CTX`;
-   `.env` gains `VAD_SILENCE_MS` and `VAD_SPECULATIVE_ADVANCE_MS`.
+1. ~~**Commit the TAC-3 launcher fix**~~ **DONE** — `b175b97` (code) + `a4fed49`
+   (docs). Nothing pushed; the branch has no upstream.
+2. ~~**Bucket D**~~ **DONE** — `.env.example` carries a "Consumed by the Ollama
+   SERVICE, not by this application" section (engine keys, values measured from
+   this box's own `msg="server config"` line); `_EXTERNALLY_CONSUMED` gains those
+   keys as an **exact list, not an `OLLAMA` prefix**, with two new non-vacuity
+   controls in `test_us011_config_truth.py` (**40/40**) — one asserts a planted
+   engine key is carved out, the other that a planted unlisted `OLLAMA_*` key is
+   still caught. `SMALL_TASK_NUM_CTX` needed nothing (`5c5df80` had it, commented,
+   which is correct). `.env` gained the two VAD keys — **local only**, `.env` is
+   gitignored, so that half cannot be committed.
+   - **Found doing it:** the plan's reason for the VAD keys ("the harness reads
+     them") is wrong — `test_endpointing.py` *mutates* them, it never reads them
+     from `.env`. And the first draft of the `.env.example` section asserted no
+     launcher sets engine keys; `docker-compose.yml:55-56` sets `OLLAMA_HOST` and
+     `OLLAMA_MODELS`. Checking that claim is what surfaced `OLLAMA_MODELS`.
+   - **Pre-existing, not ours:** `test_us005_stream_tts.py` fails 2/25. Cause
+     confirmed by experiment — forcing `TTS_CACHE_SCOPE=shared` passes 25/25. The
+     gate seeds `_shared_tts_cache` directly but reads ambient `.env`, which sets
+     `per_call` (deliberate, measured, US-012, 2026-09-19). A gate that depends on
+     ambient config instead of forcing the scope it tests.
 3. **Second carve-out corpus** for `scripts/*.py` and the root scripts — never
    fold them into the runtime corpus.
 4. **`MACHINE_PROFILE_CHECK`** as a non-blocking boot drift report (`DG-05`).

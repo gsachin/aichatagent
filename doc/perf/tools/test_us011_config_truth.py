@@ -68,6 +68,25 @@ probe["US011_CANARY_UNREAD_KEY"] = "1"
 check("TAC-2 the sweep still detects a planted unread key",
       "US011_CANARY_UNREAD_KEY" in ct.sweep_inert_keys(probe),
       "detector is broken, not the config")
+
+# ...and the other half of that control, because the engine carve-out and the
+# canary pull in opposite directions. An engine key planted in `.env` must be
+# reported as EXTERNALLY CONSUMED rather than inert, or an operator who
+# documents one is told a live engine setting is dead. But an OLLAMA_* key
+# that nothing reads and that is NOT on the list must still be caught, or the
+# carve-out has quietly become the `OLLAMA` prefix it deliberately is not.
+_ENGINE = ("OLLAMA_NUM_PARALLEL", "OLLAMA_KV_CACHE_TYPE", "OLLAMA_FLASH_ATTENTION")
+engine_probe = dict(env)
+engine_probe.update({k: "2" for k in _ENGINE})
+still_inert = [k for k in _ENGINE if k in ct.sweep_inert_keys(engine_probe)]
+check("TAC-2 a planted engine key is carved out, not reported inert",
+      not still_inert, f"reported inert: {still_inert}")
+
+engine_probe["OLLAMA_TUNED_BY_NOBODY"] = "1"
+check("TAC-2 an UNLISTED OLLAMA_* key is still caught -- the carve-out is a "
+      "list, not a prefix",
+      "OLLAMA_TUNED_BY_NOBODY" in ct.sweep_inert_keys(engine_probe),
+      "the carve-out widened to a prefix and stopped catching real inert keys")
 check("TAC-2 every inert key appears in the rendered report",
       all(k in report for k in inert), str([k for k in inert if k not in report]))
 ext = [k for k in env if ct.is_externally_consumed(k) and k not in
