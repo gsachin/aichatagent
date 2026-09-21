@@ -32,6 +32,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from app.config import settings
+
 # Bypass AppLocker-style DLL blocks — same class of issue as hf_xet.dll
 os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "0")
 
@@ -44,32 +46,31 @@ logger = logging.getLogger("llm_backend")
 #: connect burns ~2,066 ms in SYN retransmits before Python falls back --
 #: paid on every model-resolution and embedding call. 127.0.0.1 skips the
 #: doomed attempt (~15 ms). Class A: same server, same bytes.
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
+OLLAMA_BASE_URL = settings.OLLAMA_URL
+OLLAMA_MODEL = settings.OLLAMA_MODEL
 # Single source of truth for the default context window (env: OLLAMA_NUM_CTX).
 # 8192 — the production voice system prompt (~3.5k tokens) plus RAG context
 # needs this much; scripts/predeploy.py sizes it per machine.
-DEFAULT_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+DEFAULT_NUM_CTX = settings.OLLAMA_NUM_CTX
 OLLAMA_NUM_CTX = DEFAULT_NUM_CTX  # backward-compat alias
-OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE", "")  # "" = ollama default
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+OLLAMA_TEMPERATURE = settings.OLLAMA_TEMPERATURE  # "" = ollama default
+EMBED_MODEL = settings.EMBED_MODEL
 
 #: US-004 (streaming LLM, PO build-approved 2026-09-19): the generation is
 #: consumed as token deltas and cut into clauses, so TTS can start on the
 #: first clause while the model still decodes. Behind a flag; the batch path
 #: (`_chat_ollama` non-streamed) is retained unchanged as the BRD-15 revert.
-LLM_STREAM = os.environ.get("LLM_STREAM", "0").strip().lower() in (
-    "1", "true", "yes", "on")
+LLM_STREAM = settings.LLM_STREAM
 
 # ── MLX config (macOS Apple Silicon) ───────────────────────────────────
 
-MLX_BASE_URL = os.environ.get("MLX_BASE_URL", "http://127.0.0.1:1234")
-MLX_MODEL = os.environ.get("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
-MLX_PORT = int(os.environ.get("MLX_PORT", "1234"))
-MLX_EMBED_MODEL = os.environ.get("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+MLX_BASE_URL = settings.MLX_BASE_URL
+MLX_MODEL = settings.MLX_MODEL
+MLX_PORT = settings.MLX_PORT
+MLX_EMBED_MODEL = settings.MLX_EMBED_MODEL
 # mlx_lm.server has no context-size flag — max_tokens is the only output
 # window control on the MLX path.
-MLX_MAX_TOKENS = int(os.environ.get("MLX_MAX_TOKENS", "2048"))
+MLX_MAX_TOKENS = settings.MLX_MAX_TOKENS
 
 _provider: str | None = None
 
@@ -78,7 +79,7 @@ def provider_name() -> str:
     """Return the active backend: 'mlx' or 'ollama'."""
     global _provider
     if _provider is None:
-        explicit = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+        explicit = settings.LLM_PROVIDER
         if explicit in ("mlx", "ollama"):
             _provider = explicit
         else:
@@ -132,7 +133,7 @@ def small_task_num_ctx() -> int:
     means predeploy re-sizing OLLAMA_NUM_CTX for a different machine cannot
     silently reintroduce the thrashing.
     """
-    return int(os.environ.get("SMALL_TASK_NUM_CTX", str(DEFAULT_NUM_CTX)))
+    return settings.SMALL_TASK_NUM_CTX
 
 
 def _chat_mlx(messages, *, model=None, num_ctx=None, temperature=None) -> str:
@@ -185,7 +186,7 @@ def _resolve_keep_alive(raw: str):
         return s
 
 
-KEEP_ALIVE = _resolve_keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", "-1"))
+KEEP_ALIVE = _resolve_keep_alive(settings.OLLAMA_KEEP_ALIVE)
 
 #: Set when the installed ollama client rejects the keep_alive kwarg, so the
 #: condition is visible rather than silently degrading residency to 5 minutes.
@@ -221,11 +222,17 @@ def _chat_ollama(messages, *, model=None, preferred=None, num_ctx=None,
         global _keep_alive_unsupported
         if not _keep_alive_unsupported:
             _keep_alive_unsupported = True
+            # `ka`, not a second environment read: this line reports what was
+            # ATTEMPTED. A fresh read could disagree with the value actually
+            # sent — `lb.KEEP_ALIVE` is reassignable at runtime, and
+            # test_brd15_rollback does reassign it. It also displayed the
+            # literal phrase "server default" whenever the key was unset, which
+            # is the one answer that is never right for this message.
             logger.warning(
                 "Ollama client does not accept keep_alive; residency will fall "
                 "back to the server default (%s). BRD-17 is NOT met. Upgrade the "
                 "ollama client or set OLLAMA_KEEP_ALIVE on the server.",
-                os.environ.get("OLLAMA_KEEP_ALIVE", "server default"),
+                ka,
             )
         response = ollama.chat(model=model, messages=messages, options=options)
     # US-001 / REC-12: capture the engine's own counters so prefill and

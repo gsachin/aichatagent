@@ -118,6 +118,71 @@ class Settings:
         default_factory=lambda: int(_env("VAD_SPECULATIVE_ADVANCE_MS", "220") or 220)
     )
 
+    # ── LLM backend: Ollama ─────────────────────────────────────────
+    # The literal IPv4 default is deliberate, not a shortcut: on this platform
+    # "localhost" resolves to ::1 first and Ollama binds IPv4 only, so the
+    # refused IPv6 connect burns ~2,066 ms in SYN retransmits before Python
+    # falls back — paid on every model-resolution and embedding call.
+    OLLAMA_URL: str = field(
+        default_factory=lambda: _env("OLLAMA_URL", "http://127.0.0.1:11434")
+    )
+    OLLAMA_MODEL: str = field(
+        default_factory=lambda: _env("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
+    )
+    # The single source of truth for the default context window. 8192 is what
+    # the production voice system prompt (~3.5k tokens) plus RAG context needs;
+    # scripts/predeploy.py sizes it per machine.
+    OLLAMA_NUM_CTX: int = field(default_factory=lambda: int(_env("OLLAMA_NUM_CTX", "8192")))
+    # "" means "use the provider's own default": the call sites guard with
+    # `float(T) if T else None`, so the empty string must survive intact rather
+    # than being coerced to a number here.
+    OLLAMA_TEMPERATURE: str = field(default_factory=lambda: _env("OLLAMA_TEMPERATURE", ""))
+    EMBED_MODEL: str = field(default_factory=lambda: _env("EMBED_MODEL", "nomic-embed-text"))
+    # US-004 streaming LLM, behind a flag; the batch path is retained unchanged
+    # as the BRD-15 revert.
+    LLM_STREAM: bool = field(
+        default_factory=lambda: _env("LLM_STREAM", "0").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+    LLM_PROVIDER: str = field(
+        default_factory=lambda: _env("LLM_PROVIDER", "auto").strip().lower()
+    )
+    # An escape hatch for a deliberate, MEASURED divergence — never a required
+    # key. It defaults to OLLAMA_NUM_CTX because Ollama tears a runner down
+    # whenever a request arrives with a different num_ctx, paying a full cold
+    # reload (~6-11 s measured on this box); five context sizes against one
+    # model meant the reload was paid constantly. Re-read from the same source
+    # rather than from the resolved field, so this stays correct whatever the
+    # field order becomes.
+    SMALL_TASK_NUM_CTX: int = field(
+        default_factory=lambda: int(
+            _env("SMALL_TASK_NUM_CTX", _env("OLLAMA_NUM_CTX", "8192"))
+        )
+    )
+    # The raw text, not the resolved value: Ollama's Go duration parser rejects
+    # "-1" as a duration, so an integer (including a negative one) has to be
+    # sent as an int while "24h" stays a string. `_resolve_keep_alive` decides
+    # that at the call site. Getting it wrong breaks every call, not merely
+    # residency.
+    OLLAMA_KEEP_ALIVE: str = field(
+        default_factory=lambda: _env("OLLAMA_KEEP_ALIVE", "-1")
+    )
+
+    # ── LLM backend: MLX (macOS Apple Silicon) ──────────────────────
+    MLX_BASE_URL: str = field(
+        default_factory=lambda: _env("MLX_BASE_URL", "http://127.0.0.1:1234")
+    )
+    MLX_MODEL: str = field(
+        default_factory=lambda: _env("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
+    )
+    MLX_PORT: int = field(default_factory=lambda: int(_env("MLX_PORT", "1234")))
+    MLX_EMBED_MODEL: str = field(
+        default_factory=lambda: _env("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+    )
+    # mlx_lm.server has no context-size flag — max_tokens is the only output
+    # window control on the MLX path.
+    MLX_MAX_TOKENS: int = field(default_factory=lambda: int(_env("MLX_MAX_TOKENS", "2048")))
+
     # ── Public tunnel ───────────────────────────────────────────────
     # The hostname Twilio must call back on. Declared here so the four copies
     # of the resolver (app/main.py twice — once dead — app/offers/service.py,
