@@ -9,7 +9,7 @@
 
 ## Headline
 
-Nine commits this session. **Nothing is uncommitted and nothing is pushed** — the
+Eleven commits this session. **Nothing is uncommitted and nothing is pushed** — the
 branch has no upstream configured. The tree is safe to lose; the work is on disk
 in git.
 
@@ -19,7 +19,7 @@ US-011 DoD boxes closed · T-14 (run summary carries its configuration) ·
 **TAC-6 provenance, which had been a constant** · T-11/T-12 driven · a full
 performance report.
 
-## The nine commits
+## The session's commits
 
 | Commit | What |
 |---|---|
@@ -32,39 +32,39 @@ performance report.
 | `27b34bd` | `fix(us011)`: **TAC-6 — provenance was a constant, and a passing check enforced it** |
 | `d278b44` | `test(us011)`: T-11 and T-12 driven; the two remaining partials named with reasons |
 | `0dd0d2e` | `docs(perf)`: **performance report** — what improved, what is pending, how critical |
+| `313faa7` | `docs`: this handoff |
+| *(companion)* | `fix(us011)`: **T-15 — `ConfigurationError` names the key** from every import-time parse (46 sites rewritten, proven behaviour-preserving against a 110-field snapshot) |
 
 ## US-011 status: DoD **6/8**
 
 | Box | State |
 |---|---|
-| 2 — LLD test mapping (T-1…T-17) | **13 pass, 2 partial, 2 not run.** T-14, T-1, T-10, T-11, T-12 closed this session |
+| 2 — LLD test mapping (T-1…T-17) | **14 pass, 1 partial, 2 not run.** T-14, T-1, T-10, T-11, T-12 and T-15 closed this session |
 | 3 — TAC-8 no-regression load test | **NOT RUN** — needs a quiet box + the full stack |
 
-**The two remaining partials, with their reasons** (do not re-litigate without
+**The one remaining partial, with its reason** (do not re-litigate without
 reading the evidence table in the story):
 
 - **T-8** — the "after a restart" half would mean a test writing to `.env`, the
-  untracked runtime authority with no VCS safety net. Left partial *deliberately*.
-- **T-15** — and its split is the finding: a malformed value behaves differently
-  **by key class**, and no single path has both halves. A key parsed at import
-  (`int(_env(...))`, `app/config.py:127`) raises before serving — so the stack
-  stops, but the key is named only inside a traceback. A key that survives import
-  is named properly by `check_config_keys`, but that makes the stack *not-ready*
-  rather than stopping it. **Closing it needs a key-naming path for import-time
-  parse failures** — a change to how ~110 fields resolve. Not started.
+  untracked runtime authority with no VCS safety net, where a crash mid-test
+  corrupts it. The property a restart re-runs is the resolution path itself,
+  which the in-process check already exercises. Left partial **deliberately**.
+- **T-15 is closed** — see finding 4 below.
 
 ## Next actions, in order
 
-1. **`US-011` box 2 remainder** — either the T-15 key-naming path (~1–2 h, touches
-   how every `Settings` field resolves), or accept T-8/T-15 as documented
-   partials and tick the box on that basis. **This is a judgement call for the PO.**
+1. ~~**`US-011` box 2 remainder — the T-15 key-naming path**~~ **DONE** (2026-09-21,
+   `ConfigurationError`; see the findings below). Box 2 now reads **14 pass / 1
+   partial / 2 not run**, and the one partial is **T-8, excluded deliberately**
+   (the restart half would mean a test writing the untracked `.env`). **Ticking
+   box 2 is now a PO judgement call, not a work item.**
 2. **`US-011` box 3 — the TAC-8 load pair** (~2–4 h). Blocked on a **quiet box**.
    Note the "before" half means checking out the pre-migration revision and
    running the same load against it — the migration is 11+ commits back.
 3. Back to the drive's order: **Phase 2.3 qualifying runs** (needs a quiet box),
    Phase 3 story closures, 4b, 5, 6. See the drive status.
 
-## The three findings that would be expensive to rediscover
+## The four findings that would be expensive to rediscover
 
 **1. US-013's circuit breaker gated nothing, for its entire life.**
 `rag._use_mcp()` had **no caller in `app/`** — `git log -S` shows the name in
@@ -97,11 +97,32 @@ the stack is designed to avoid, reached by following the launcher `SETUP_GUIDE.m
 removed rather than tuned (defaulting to 1 would not have helped — the explicit
 `.env` value still wins).
 
+**4. `ConfigurationError` was specified in US-011's LLD and never implemented.**
+The LLD has said since the story was written: *"`ConfigurationError` (a malformed
+or unparseable value; raised at **start**, never at first use, and naming the
+key)"* — and it did not exist. What existed was `int(_env(...))` at **46 call
+sites**, raising `ValueError: invalid literal for int() with base 10:
+'notanumber'`: the stack stops, correctly, but the operator is told the **value**
+and not the **key**. T-15 asks for both halves at once — *"stops the stack before
+it accepts a call, with the key named in the operator-visible output"* — and
+before this **no single path had both**: an import-parsed key stopped the stack
+without attribution; a key surviving import was attributed by `check_config_keys`
+but only made the stack *not-ready*. Now `_env_int` / `_env_float` raise
+`ConfigurationError` naming the key, and all 46 sites route through them.
+
+**The refactor's safety check is reusable and worth repeating.** All 110 resolved
+`Settings` fields were snapshotted *before* the change and compared after. That
+comparison caught a real regression the diff would never have shown: **6 fields
+silently changed type `float → int`**, because defaults written as `"2"` rather
+than `"2.0"` became uncoerced int literals. Numerically equal, type-different.
+If you touch how `Settings` resolves, snapshot the fields first.
+
 ## Verification — run these to confirm the tree is good
 
 ```bash
 cd /d/project/universityDemo
-.venv/Scripts/python.exe doc/perf/tools/test_us011_config_truth.py    # 51/51
+.venv/Scripts/python.exe doc/perf/tools/test_us011_config_truth.py    # 55/55
+.venv/Scripts/python.exe -c "import app.main"                         # imports OK
 .venv/Scripts/python.exe doc/perf/tools/test_us013_breaker.py        # 71/71
 .venv/Scripts/python.exe doc/perf/tools/test_brd15_rollback.py       # 42/42
 .venv/Scripts/python.exe doc/perf/tools/test_doc_citations.py        # 5/5

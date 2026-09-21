@@ -26,6 +26,68 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+class ConfigurationError(RuntimeError):
+    """A configured value that cannot be used. Raised at START, naming the key.
+
+    US-011's LLD has specified this class since the story was written --
+    "`ConfigurationError` (a malformed or unparseable value; raised at **start**,
+    never at first use, and naming the key)" -- and it did not exist. What existed
+    instead was `int(_env(...))` at 46 call sites, which raises
+    `ValueError: invalid literal for int() with base 10: 'notanumber'`: the stack
+    stops, which is the correct behaviour, but the operator is told the VALUE and
+    not the KEY, and has to read a traceback to find which setting is wrong.
+
+    `US-011` `T-15` asks for both halves at once -- "stops the stack before it
+    accepts a call, with the key named in the operator-visible output". Before
+    this, the stop was unattributed and the attribution did not stop.
+
+    Subclasses RuntimeError so `except Exception` handlers still see it: the boot
+    path must fail loudly rather than swallow a bad setting into a default, which
+    is the "set != live" failure this whole module exists to prevent.
+    """
+
+
+def _env_int(key: str, default: int) -> int:
+    """An int from the environment, or `default`. A malformed value names the KEY.
+
+    Empty and unset BOTH mean "use the default", which is what the
+    `int(_env(k, "600") or 600)` form it replaces meant -- `or` caught the empty
+    string, not a zero. A deliberate `0` still resolves to 0.
+    """
+    raw = _env(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ConfigurationError(
+            f"{key}={raw!r} is not an integer (default {default}). Fix it in .env, "
+            f"or remove the key to use the default."
+        ) from None
+
+
+def _env_float(key: str, default: float) -> float:
+    """A float from the environment, or `default`. A malformed value names the KEY.
+
+    `float(default)` on the fallback path, not a bare `default`: several call
+    sites write their default as `"2"` rather than `"2.0"`, and the
+    `float(_env(...))` form this replaces coerced those to `2.0`. Returning the
+    int `2` instead is numerically equal and type-different, which is a silent
+    behaviour change -- caught by comparing every resolved field against a
+    snapshot, not by reading the diff.
+    """
+    raw = _env(key, "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConfigurationError(
+            f"{key}={raw!r} is not a number (default {default}). Fix it in .env, "
+            f"or remove the key to use the default."
+        ) from None
+
+
 def _env_int_or(key: str, default: int) -> int:
     """`int(...)` when the value looks like an integer, else `default`.
 
@@ -48,7 +110,7 @@ class Settings:
 
     # ── FastAPI server ──────────────────────────────────────────────
     HOST: str = field(default_factory=lambda: _env("HOST", "127.0.0.1"))
-    PORT: int = field(default_factory=lambda: int(_env("PORT", "8000")))
+    PORT: int = field(default_factory=lambda: _env_int("PORT", 8000))
 
     # ── Audio format (PCM) ──────────────────────────────────────────
     AUDIO_SAMPLE_RATE: int = 16000   # 16 kHz
@@ -64,7 +126,7 @@ class Settings:
     # WhisperSTTSettings has no cpu_threads param, so this reaches the
     # voice_handler STT path only.
     WHISPER_NUM_THREADS: int = field(
-        default_factory=lambda: int(_env("WHISPER_NUM_THREADS", "4"))
+        default_factory=lambda: _env_int("WHISPER_NUM_THREADS", 4)
     )
     # A presence check, not a value: `_get_stt_model` picks cuda when this is
     # set and non-empty. Kept as the raw string so the truthiness test is
@@ -101,15 +163,15 @@ class Settings:
 
     # ── STT noise gate (pre-LLM guardrails) ─────────────────────────
     STT_MIN_AVG_LOGPROB: float = field(
-        default_factory=lambda: float(_env("STT_MIN_AVG_LOGPROB", "-4.0"))
+        default_factory=lambda: _env_float("STT_MIN_AVG_LOGPROB", -4.0)
     )
     STT_MAX_NO_SPEECH_PROB: float = field(
-        default_factory=lambda: float(_env("STT_MAX_NO_SPEECH_PROB", "0.8"))
+        default_factory=lambda: _env_float("STT_MAX_NO_SPEECH_PROB", 0.8)
     )
-    STT_MIN_CHARS: int = field(default_factory=lambda: int(_env("STT_MIN_CHARS", "3")))
+    STT_MIN_CHARS: int = field(default_factory=lambda: _env_int("STT_MIN_CHARS", 3))
     # Utterances shorter than this are noise bursts (15 x 20 ms = 300 ms).
     MIN_UTTERANCE_FRAMES: int = field(
-        default_factory=lambda: int(_env("MIN_UTTERANCE_FRAMES", "15"))
+        default_factory=lambda: _env_int("MIN_UTTERANCE_FRAMES", 15)
     )
 
     # ── End-of-speech delay (BRD-04) ────────────────────────────────
@@ -124,11 +186,11 @@ class Settings:
     # the live reader silently fell back — two answers to the same question,
     # which is the defect US-011 exists to remove.
     VAD_SILENCE_MS: int = field(
-        default_factory=lambda: int(_env("VAD_SILENCE_MS", "600") or 600)
+        default_factory=lambda: _env_int("VAD_SILENCE_MS", 600)
     )
     # Read the speculative lead (the measured STT p50, 203 ms, rounded up).
     VAD_SPECULATIVE_ADVANCE_MS: int = field(
-        default_factory=lambda: int(_env("VAD_SPECULATIVE_ADVANCE_MS", "220") or 220)
+        default_factory=lambda: _env_int("VAD_SPECULATIVE_ADVANCE_MS", 220)
     )
 
     # ── LLM backend: Ollama ─────────────────────────────────────────
@@ -145,7 +207,7 @@ class Settings:
     # The single source of truth for the default context window. 8192 is what
     # the production voice system prompt (~3.5k tokens) plus RAG context needs;
     # scripts/predeploy.py sizes it per machine.
-    OLLAMA_NUM_CTX: int = field(default_factory=lambda: int(_env("OLLAMA_NUM_CTX", "8192")))
+    OLLAMA_NUM_CTX: int = field(default_factory=lambda: _env_int("OLLAMA_NUM_CTX", 8192))
     # "" means "use the provider's own default": the call sites guard with
     # `float(T) if T else None`, so the empty string must survive intact rather
     # than being coerced to a number here.
@@ -188,13 +250,13 @@ class Settings:
     MLX_MODEL: str = field(
         default_factory=lambda: _env("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
     )
-    MLX_PORT: int = field(default_factory=lambda: int(_env("MLX_PORT", "1234")))
+    MLX_PORT: int = field(default_factory=lambda: _env_int("MLX_PORT", 1234))
     MLX_EMBED_MODEL: str = field(
         default_factory=lambda: _env("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
     )
     # mlx_lm.server has no context-size flag — max_tokens is the only output
     # window control on the MLX path.
-    MLX_MAX_TOKENS: int = field(default_factory=lambda: int(_env("MLX_MAX_TOKENS", "2048")))
+    MLX_MAX_TOKENS: int = field(default_factory=lambda: _env_int("MLX_MAX_TOKENS", 2048))
 
     # ── Retrieval / knowledge base ──────────────────────────────────
     # Absolute and derived from the repo root, not the CWD, exactly as the call
@@ -207,20 +269,20 @@ class Settings:
         )
     )
     # Chunking is markdown-aware; these are the legacy defaults.
-    RAG_CHUNK_SIZE: int = field(default_factory=lambda: int(_env("RAG_CHUNK_SIZE", "600")))
-    RAG_CHUNK_OVERLAP: int = field(default_factory=lambda: int(_env("RAG_CHUNK_OVERLAP", "90")))
+    RAG_CHUNK_SIZE: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 600))
+    RAG_CHUNK_OVERLAP: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 90))
     # Retrieval.
-    RAG_FETCH_K: int = field(default_factory=lambda: int(_env("RAG_FETCH_K", "20")))
-    RAG_TOP_K: int = field(default_factory=lambda: int(_env("RAG_TOP_K", "5")))
+    RAG_FETCH_K: int = field(default_factory=lambda: _env_int("RAG_FETCH_K", 20))
+    RAG_TOP_K: int = field(default_factory=lambda: _env_int("RAG_TOP_K", 5))
     # Optional features — every one defaults to the pre-existing behaviour.
     RAG_SEARCH_MODE: str = field(default_factory=lambda: _env("RAG_SEARCH_MODE", "mmr"))
     # Cosine distance; 0.0 = disabled.
     RAG_SIMILARITY_THRESHOLD: float = field(
-        default_factory=lambda: float(_env("RAG_SIMILARITY_THRESHOLD", "0.0"))
+        default_factory=lambda: _env_float("RAG_SIMILARITY_THRESHOLD", 0.0)
     )
     # 0 = off.
     RAG_MAX_CONTEXT_CHARS: int = field(
-        default_factory=lambda: int(_env("RAG_MAX_CONTEXT_CHARS", "0"))
+        default_factory=lambda: _env_int("RAG_MAX_CONTEXT_CHARS", 0)
     )
     # Output-token ceiling for the SPOKEN answer. 192 comes from the measured
     # answer-length distribution, not from taste: over 83 golden-set cases the
@@ -242,17 +304,17 @@ class Settings:
     # milliseconds — and the fallback then paid for a SECOND embedding. Waiting
     # is strictly cheaper than timing out and re-retrieving locally.
     RAG_MCP_TIMEOUT: float = field(
-        default_factory=lambda: float(_env("RAG_MCP_TIMEOUT", "6.0"))
+        default_factory=lambda: _env_float("RAG_MCP_TIMEOUT", 6.0)
     )
     # US-013 AC-2: a half-open probe gets a fraction of the serving budget, so
     # rediscovering "still down" costs a fraction of a full timeout. The floor
     # in `_timeout` keeps a probe from reading a merely-busy service as dead.
     RAG_MCP_PROBE_FRACTION: float = field(
-        default_factory=lambda: float(_env("RAG_MCP_PROBE_FRACTION", "0.25"))
+        default_factory=lambda: _env_float("RAG_MCP_PROBE_FRACTION", 0.25)
     )
     # Circuit-breaker cooldown.
     RAG_MCP_COOLDOWN: float = field(
-        default_factory=lambda: float(_env("RAG_MCP_COOLDOWN", "30"))
+        default_factory=lambda: _env_float("RAG_MCP_COOLDOWN", 30)
     )
 
     # ── Logging ─────────────────────────────────────────────────────
@@ -278,7 +340,7 @@ class Settings:
     # live in .env and both default 8000, but the launcher reads this one
     # (start_services.ps1) and the boot gate probes the port it will bind.
     # Listed in config_truth._EXTERNALLY_CONSUMED for that reason.
-    FASTAPI_PORT: int = field(default_factory=lambda: int(_env("FASTAPI_PORT", "8000")))
+    FASTAPI_PORT: int = field(default_factory=lambda: _env_int("FASTAPI_PORT", 8000))
 
     # Machine-sizing metadata written by scripts/predeploy.py. Held as the RAW
     # string, defaulting to empty, because app/main.py's `_reconcile_workers`
@@ -317,7 +379,7 @@ class Settings:
     # ── Auxiliary HTTP clients ──────────────────────────────────────
     # The Streamlit helpers and the admin dashboard each call the backend.
     BACKEND_BASE: str = field(default_factory=lambda: _env("BACKEND_BASE", "http://localhost:8000"))
-    BACKEND_TIMEOUT: float = field(default_factory=lambda: float(_env("BACKEND_TIMEOUT", "10")))
+    BACKEND_TIMEOUT: float = field(default_factory=lambda: _env_float("BACKEND_TIMEOUT", 10))
     DASHBOARD_API_URL: str = field(
         default_factory=lambda: _env("DASHBOARD_API_URL", "http://localhost:8000")
     )
@@ -326,24 +388,24 @@ class Settings:
     # `or 1` / `or 30` mirror the call sites: an empty value in .env must fall
     # back rather than reach int("") and raise.
     BG_MAX_CONCURRENT: int = field(
-        default_factory=lambda: int(_env("BG_MAX_CONCURRENT", "1") or 1)
+        default_factory=lambda: _env_int("BG_MAX_CONCURRENT", 1)
     )
     BG_DEFER_TIMEOUT_S: float = field(
-        default_factory=lambda: float(_env("BG_DEFER_TIMEOUT_S", "30") or 30)
+        default_factory=lambda: _env_float("BG_DEFER_TIMEOUT_S", 30)
     )
 
     # ── Sentiment scoring ───────────────────────────────────────────
     # Defaults copied from the call sites, which guard against an empty value
     # with `or`: these are what app/sentiment/scorer.py has always used.
-    SENTIMENT_W1: float = field(default_factory=lambda: float(_env("SENTIMENT_W1", "0.30") or 0.30))
-    SENTIMENT_W2: float = field(default_factory=lambda: float(_env("SENTIMENT_W2", "0.30") or 0.30))
-    SENTIMENT_W3: float = field(default_factory=lambda: float(_env("SENTIMENT_W3", "0.25") or 0.25))
-    SENTIMENT_W4: float = field(default_factory=lambda: float(_env("SENTIMENT_W4", "0.15") or 0.15))
+    SENTIMENT_W1: float = field(default_factory=lambda: _env_float("SENTIMENT_W1", 0.30))
+    SENTIMENT_W2: float = field(default_factory=lambda: _env_float("SENTIMENT_W2", 0.30))
+    SENTIMENT_W3: float = field(default_factory=lambda: _env_float("SENTIMENT_W3", 0.25))
+    SENTIMENT_W4: float = field(default_factory=lambda: _env_float("SENTIMENT_W4", 0.15))
     SENTIMENT_EWMA_LAMBDA: float = field(
-        default_factory=lambda: float(_env("SENTIMENT_EWMA_LAMBDA", "0.35") or 0.35)
+        default_factory=lambda: _env_float("SENTIMENT_EWMA_LAMBDA", 0.35)
     )
     MIN_LABELED_OUTCOMES: int = field(
-        default_factory=lambda: int(_env("MIN_LABELED_OUTCOMES", "100") or 100)
+        default_factory=lambda: _env_int("MIN_LABELED_OUTCOMES", 100)
     )
 
     # ── Twilio credentials ──────────────────────────────────────────
@@ -362,15 +424,15 @@ class Settings:
 
     # ── Outbound call engine ────────────────────────────────────────
     OUTBOUND_POLL_INTERVAL: int = field(
-        default_factory=lambda: int(_env("OUTBOUND_POLL_INTERVAL", "10"))
+        default_factory=lambda: _env_int("OUTBOUND_POLL_INTERVAL", 10)
     )
     MAX_CALL_ATTEMPTS: int = field(
-        default_factory=lambda: int(_env("MAX_CALL_ATTEMPTS", "3"))
+        default_factory=lambda: _env_int("MAX_CALL_ATTEMPTS", 3)
     )
 
     # ── Follow-up scheduler ─────────────────────────────────────────
     FOLLOW_UP_POLL_INTERVAL: int = field(
-        default_factory=lambda: int(_env("FOLLOW_UP_POLL_INTERVAL", "30"))
+        default_factory=lambda: _env_int("FOLLOW_UP_POLL_INTERVAL", 30)
     )
 
     # ── MCP server ──────────────────────────────────────────────────
@@ -387,10 +449,10 @@ class Settings:
         default_factory=lambda: _env("OFFER_EMAIL", "admissions@university.edu")
     )
     OFFER_VALID_DAYS: int = field(
-        default_factory=lambda: int(_env("OFFER_VALID_DAYS", "30"))
+        default_factory=lambda: _env_int("OFFER_VALID_DAYS", 30)
     )
     OFFER_GUARD_MINUTES: int = field(
-        default_factory=lambda: int(_env("OFFER_GUARD_MINUTES", "1"))
+        default_factory=lambda: _env_int("OFFER_GUARD_MINUTES", 1)
     )
     DEFAULT_PAYMENT_LINK: str = field(
         default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "https://pay.university.edu/admissions")
@@ -398,7 +460,7 @@ class Settings:
 
     # ── Email / SMTP ───────────────────────────────────────────────
     SMTP_HOST: str = field(default_factory=lambda: _env("SMTP_HOST", "smtp.gmail.com"))
-    SMTP_PORT: int = field(default_factory=lambda: int(_env("SMTP_PORT", "587")))
+    SMTP_PORT: int = field(default_factory=lambda: _env_int("SMTP_PORT", 587))
     SMTP_USER: str = field(default_factory=lambda: _env("SMTP_USER", ""))
     SMTP_PASS: str = field(default_factory=lambda: _env("SMTP_PASS", ""))
 
@@ -417,7 +479,7 @@ class Settings:
     # WhatsApp has no session and no end event, so "one conversation" is defined
     # by an idle window. Decision D4 in the plan; this is the proposed default.
     CRM_IDLE_WINDOW_HOURS: float = field(
-        default_factory=lambda: float(_env("CRM_IDLE_WINDOW_HOURS", "6"))
+        default_factory=lambda: _env_float("CRM_IDLE_WINDOW_HOURS", 6)
     )
     # The API has no authentication today (plan risk R8); if a shared secret is
     # ever added in front of it, this is sent as X-API-Key. Unset = no header.
@@ -425,32 +487,32 @@ class Settings:
     # Deliberately short: this sits behind a live phone call. A slow CRM must
     # give up quickly rather than delay the caller.
     CRM_TIMEOUT_CONNECT_S: float = field(
-        default_factory=lambda: float(_env("CRM_TIMEOUT_CONNECT_S", "2"))
+        default_factory=lambda: _env_float("CRM_TIMEOUT_CONNECT_S", 2)
     )
     CRM_TIMEOUT_READ_S: float = field(
-        default_factory=lambda: float(_env("CRM_TIMEOUT_READ_S", "5"))
+        default_factory=lambda: _env_float("CRM_TIMEOUT_READ_S", 5)
     )
     CRM_MAX_RETRIES: int = field(
-        default_factory=lambda: int(_env("CRM_MAX_RETRIES", "3"))
+        default_factory=lambda: _env_int("CRM_MAX_RETRIES", 3)
     )
     # Consecutive failures before the breaker opens and we stop calling out.
     CRM_BREAKER_THRESHOLD: int = field(
-        default_factory=lambda: int(_env("CRM_BREAKER_THRESHOLD", "5"))
+        default_factory=lambda: _env_int("CRM_BREAKER_THRESHOLD", 5)
     )
     # How long the breaker stays open before allowing a probe request.
     CRM_BREAKER_RESET_S: float = field(
-        default_factory=lambda: float(_env("CRM_BREAKER_RESET_S", "60"))
+        default_factory=lambda: _env_float("CRM_BREAKER_RESET_S", 60)
     )
     # A queued write is abandoned after this many attempts. Rare — the outbox
     # only ever holds *transient* failures, since permanent ones are dropped.
     CRM_OUTBOX_MAX_ATTEMPTS: int = field(
-        default_factory=lambda: int(_env("CRM_OUTBOX_MAX_ATTEMPTS", "10"))
+        default_factory=lambda: _env_int("CRM_OUTBOX_MAX_ATTEMPTS", 10)
     )
     # How often the worker drains the outbox and sweeps lapsed offers. Slower
     # than the other loops on purpose: nothing here is time-critical, and each
     # tick is a database query plus, when there is work, a CRM call.
     CRM_OUTBOX_POLL_INTERVAL: int = field(
-        default_factory=lambda: int(_env("CRM_OUTBOX_POLL_INTERVAL", "60"))
+        default_factory=lambda: _env_int("CRM_OUTBOX_POLL_INTERVAL", 60)
     )
 
     # ── Offer-letter document upload ───────────────────────────────
@@ -492,14 +554,14 @@ class Settings:
     # Offer PDFs are ~2.4 KB, so this is one chunk in practice. The cap exists so
     # a future large document still uploads rather than failing the size check.
     CRM_UPLOAD_CHUNK_BYTES: int = field(
-        default_factory=lambda: int(_env("CRM_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+        default_factory=lambda: _env_int("CRM_UPLOAD_CHUNK_BYTES", 1024 * 1024)
     )
     # Per-request override for the three upload calls. The shared read timeout
     # above is sized for a phone call; /complete performs a synchronous
     # ContentVersion create (base64-encoding the file and re-fetching an OAuth
     # token first), which does not fit in 5s.
     CRM_UPLOAD_TIMEOUT_S: float = field(
-        default_factory=lambda: float(_env("CRM_UPLOAD_TIMEOUT_S", "30"))
+        default_factory=lambda: _env_float("CRM_UPLOAD_TIMEOUT_S", 30)
     )
 
 

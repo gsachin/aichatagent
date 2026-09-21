@@ -130,6 +130,49 @@ check("T-12 REC-01 the dead Pipecat VADParams block is gone, not merely marked",
       "VADParams(" not in _pipeline_src,
       "a dead block that reads as live endpointing configuration is back")
 
+
+# --- T-15: a malformed key stops the stack AND names itself -----------------
+# Both halves in one place, because until 2026-09-21 no single path had both. A
+# key parsed at import stopped the stack but named only the VALUE, inside a
+# traceback (`ValueError: invalid literal for int() ... 'notanumber'`); a key
+# that survived import was named properly by `check_config_keys`, but that made
+# the stack not-READY rather than stopping it. `_env_int` / `_env_float` now
+# raise `app.config.ConfigurationError` naming the key.
+import subprocess                                                # noqa: E402
+
+
+def _boot_with(key: str, value: str):
+    """Import app.config in a CHILD process with `key` set. Returns (rc, output).
+
+    A child process is the point: the failure this tests for happens at import,
+    and the module is already imported here.
+    """
+    env = dict(os.environ)
+    env[key] = value
+    r = subprocess.run([sys.executable, "-c", "from app.config import settings"],
+                       capture_output=True, text=True, env=env, timeout=180)
+    return r.returncode, (r.stderr or "") + (r.stdout or "")
+
+
+_rc_int, _out_int = _boot_with("VAD_SILENCE_MS", "notanumber")
+check("T-15 a malformed int STOPS the stack before it serves", _rc_int != 0,
+      f"exit {_rc_int}")
+check("T-15 ...and the KEY is named in the operator-visible output",
+      "VAD_SILENCE_MS" in _out_int and "not an integer" in _out_int,
+      (_out_int.strip().splitlines() or [""])[-1][:140])
+
+_rc_flt, _out_flt = _boot_with("RAG_MCP_TIMEOUT", "soon")
+check("T-15 a malformed float stops the stack and names its key",
+      _rc_flt != 0 and "RAG_MCP_TIMEOUT" in _out_flt and "not a number" in _out_flt,
+      f"exit {_rc_flt}: " + (_out_flt.strip().splitlines() or [""])[-1][:140])
+
+# The control that stops this passing for the wrong reason: if the child died
+# for some unrelated cause, the two checks above would still be green.
+_rc_ok, _out_ok = _boot_with("VAD_SILENCE_MS", "450")
+check("T-15 a VALID value still boots, so the stop is the VALUE's doing",
+      _rc_ok == 0,
+      f"exit {_rc_ok}: " + (_out_ok.strip().splitlines() or [""])[-1][:140])
+
 # --- TAC-2: inert keys found, by name --------------------------------------
 inert = ct.sweep_inert_keys(env)
 # TAC-2 originally asserted that FASTAPI_WORKERS and KOKORO_SPEED were reported
