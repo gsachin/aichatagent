@@ -88,7 +88,7 @@ Technical acceptance criteria [Lens: TPO] — performance, security, resilience 
 
 ## HLD — Architecture Slice [Lens: Architect]
 
-The gate exists at `rag.py:163` and is switched off. **The obvious implementation is wrong**: `_threshold_distance` issues a *second* MCP `tools/call` with `top_k=1`, so enabling the gate naively doubles per-turn retrieval traffic to answer a question the first response already answered.
+The gate exists at `rag.py:237` and is switched off. **The obvious implementation is wrong**: `_threshold_distance` issues a *second* MCP `tools/call` with `top_k=1`, so enabling the gate naively doubles per-turn retrieval traffic to answer a question the first response already answered.
 
 ```mermaid
 flowchart LR

@@ -315,7 +315,12 @@ class MCPRetriever(BaseRetriever):
         self._allow_fallback = allow_fallback
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> list:
-        chunks = mcp_retrieve(query, self.top_k)
+        # Circuit-gated like the voice path. This surface (app.py, admissions_bot)
+        # has its own lazy legacy fallback, so a refusal here degrades exactly as
+        # a failure would -- but without putting a full-budget request against a
+        # service the circuit has already judged dead, and without restamping
+        # `failed_at` so the cooldown never expires.
+        chunks = mcp_retrieve(query, self.top_k) if admit_primary() else None
         if chunks is None:
             if self._allow_fallback and self._fallback_factory is not None:
                 retriever = self._fallback_factory()
@@ -467,6 +472,42 @@ def release_probe() -> None:
 def mcp_available() -> bool:
     """True when a caller may attempt the primary (closed, or probe-eligible)."""
     return breaker_state() != "open"
+
+
+def admit_primary() -> bool:
+    """May THIS caller attempt the primary right now? The one admission decision.
+
+    Every serving call site routes through here, so the circuit cannot be
+    bypassed by a path that forgets to ask. That is not hypothetical: until
+    2026-09-21 the decision lived in `rag._use_mcp()`, which had no caller
+    outside the test suite, so the breaker recorded every outage and gated
+    nothing -- each turn called the dead service at the full serving timeout.
+
+    Gating matters beyond the turn that pays. `_record_failure` stamps
+    `failed_at = now` on every failure, so an un-gated caller does not merely
+    waste its own budget: it keeps pushing the cooldown out, so a half-open
+    probe is never eligible and the circuit cannot recover on its own.
+
+      USE_MCP_RAG=off   never -- the client is not touched
+      USE_MCP_RAG=on    always -- the documented breaker override
+      auto              closed admits; half_open admits exactly ONE probe and
+                        CLAIMS the slot (which is what makes `_post` select the
+                        reduced budget); open refuses
+
+    Read per call, like the cooldown and the mode, so a flip takes effect
+    without an import and a restart.
+    """
+    mode = _env("USE_MCP_RAG", "auto").strip().lower()
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True
+    state = breaker_state()
+    if state == "closed":
+        return True
+    if state == "half_open":
+        return claim_probe()
+    return False
 
 
 def mcp_rag_status() -> dict:

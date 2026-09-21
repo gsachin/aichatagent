@@ -8,7 +8,7 @@
 
 ### A.1 Module Objectives
 
-MOD-02 decides what the assistant is allowed to know. Every answer the caller hears is either grounded in a chunk this module returned or is an admission that nothing relevant was found — and today the second branch is unreachable, because the relevance gate is disabled (`RAG_SIMILARITY_THRESHOLD=0.0`, `rag.py:163`). That makes this module the custodian of two distinct business promises:
+MOD-02 decides what the assistant is allowed to know. Every answer the caller hears is either grounded in a chunk this module returned or is an admission that nothing relevant was found — and today the second branch is unreachable, because the relevance gate is disabled (`RAG_SIMILARITY_THRESHOLD=0.0`, `rag.py:237`). That makes this module the custodian of two distinct business promises:
 
 - **Correctness.** The same question must produce the same grounding regardless of which internal path answers it. It does not today: two divergent stores hold different chunks of the same knowledge base, so a failover silently changes the answer and the citation format (`DG-01`, `REC-03`).
 - **Honesty.** The assistant must say it does not know rather than answer from an unrelated chunk (`BRD-10`). A confident wrong answer about a fee or a deadline is worse than a refusal.
@@ -83,7 +83,7 @@ ERC runs one worker with no `workers` argument and performs its dense and BM25 l
 
 Serves `BRD-10`; implements the grounding precondition that `DG-01` consolidation exists to make trustworthy (a floor is only meaningful if both paths return the same distances for the same question); consumes `DAT-01`'s content as the only corpus in scope; consumes `REC-08`.
 
-The gate exists in code but is switched off (`RAG_SIMILARITY_THRESHOLD=0.0`, `rag.py:163`). The obvious implementation is wrong: `_threshold_distance` issues a **second** MCP `tools/call` with `top_k=1`, so enabling the gate naively doubles per-turn retrieval traffic (`REC-08`). This TRD requires the floor to be enforced from the distance information already present in the primary retrieval response — one round trip per turn, as today.
+The gate exists in code but is switched off (`RAG_SIMILARITY_THRESHOLD=0.0`, `rag.py:237`). The obvious implementation is wrong: `_threshold_distance` issues a **second** MCP `tools/call` with `top_k=1`, so enabling the gate naively doubles per-turn retrieval traffic (`REC-08`). This TRD requires the floor to be enforced from the distance information already present in the primary retrieval response — one round trip per turn, as today.
 
 ### TRD-09 — Bound every retrieval dependency call, and replace the flat cooldown with a recovery probe
 
@@ -198,7 +198,7 @@ Per failure class; the `SM-02` state each leaves behind is `RETRIEVING` unless s
 | MCP client | `app/rag_mcp.py` | **Part-refactored 2026-09-19 (US-013)** | **flat breaker → three-state probe DONE.** The breaker is now `closed`/`open`/`half_open`: after the cooldown elapses exactly ONE caller may probe, at a fraction of the read timeout (1.5 s vs 6.0 s), and its result decides. A failed probe reopens and restarts the window; a successful one closes with no operator action; an abandoned probe slot is reclaimed rather than held forever. The primary attempt also reserves room for the fallback inside `RAG_RETRIEVAL_BUDGET` (8.0 − 1.5 = 6.5 s, which does not bind on the tuned 6 s timeout). **The shared `httpx.Client` was deliberately REVERTED and is NOT reinstated** — it was rolled back pending load evidence and this story did not produce that evidence. |
 | Legacy Chroma retrieval | `app/rag_legacy.py` | **Refactor** | `PersistentClient` rebuilt per call → reused; the store itself is `DG-01`'s subject (TRD-06) |
 | ERC service | `D:\project\enterprise-rag-core` | **Refactor** | Single event loop; synchronous "parallel" legs (`hybrid.py:141–144`) — the `BRD-07` blocker (TRD-07) |
-| Relevance gate + `_threshold_distance` | `app/rag.py:163` | **Refactor** | Enabled from the existing response's distances; the second `top_k=1` call is removed (`REC-08`) |
+| Relevance gate + `_threshold_distance` | `app/rag.py:237` | **Refactor** | Enabled from the existing response's distances; the second `top_k=1` call is removed (`REC-08`) |
 | Reranker (ONNX) | ERC `config.py:196–198` | **Debt** | Loaded at boot, never invoked; remove from boot per §4 — **not** wired by this module |
 | Semantic cache | ERC `cache.py` | **Debt** | Configured, unreachable from `retrieve_context`; left unreachable (§4) |
 | RAG parameter docs | `doc/RAGPIPLINE/RAG_Pipeline_Report.md` | **Excluded** | States `top_k=2` (actual 5), calls the threshold dead (it is read), and gives `num_ctx` 2048 (actual 8192) — excluded as evidence (`REC-07`) |

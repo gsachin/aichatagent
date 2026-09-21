@@ -343,6 +343,188 @@ def lld_record() -> None:
     reset()
 
 
+# ──────────────── The wiring: the circuit gates the SERVING path ─────────────
+#
+# Everything above drives the breaker and `_use_mcp()` DIRECTLY. That is how a
+# 51/51 suite coexisted with a breaker that did nothing: `_use_mcp` was written
+# for `rag._retrieve_context` and had no caller outside this file, so the state
+# machine updated honestly on every failure and nothing ever consulted it. Each
+# turn during an outage called the dead service at the full serving timeout.
+#
+# These checks go through `_retrieve_context` itself, so they fail if the wiring
+# is removed again. That is the property the section above could not have.
+
+def _turn(mcp_result, calls: list, budgets: list | None = None) -> str:
+    """Run ONE turn through the real serving path, counting primary calls."""
+    old_mcp = m.mcp_retrieve
+    old_legacy = rag.rag_legacy.retrieve_context
+
+    def fake_mcp(*a, **k):
+        calls.append(a)
+        if budgets is not None:
+            budgets.append(m._probe_in_flight())
+        return mcp_result()
+
+    m.mcp_retrieve = fake_mcp
+    rag.rag_legacy.retrieve_context = lambda q: "LOCAL"
+    try:
+        return rag._retrieve_context("q")
+    finally:
+        m.mcp_retrieve = old_mcp
+        rag.rag_legacy.retrieve_context = old_legacy
+
+
+def wiring() -> None:
+    print("\n-- The wiring  the circuit gates the serving path, not only the tests")
+
+    # AC-2, on the path a caller actually takes.
+    reset()
+    force_open()
+    calls: list = []
+    out = _turn(lambda: None, calls)
+    check("AC-2  an open circuit refuses the primary ON THE SERVING PATH",
+          calls == [], f"the primary was called {len(calls)} time(s) anyway")
+    check("AC-2  ...and that turn is served by the local rung", out == "LOCAL")
+
+    # TAC-4's arithmetic, offline. The criterion is that outage cost is bounded
+    # per WINDOW and does not grow with the number of turns served: ten turns
+    # inside one cooldown must cost one trip, not ten. This is the claim the
+    # unwired breaker could not make -- there, the count was 10.
+    reset()
+    force_open(age_s=float(os.environ.get("RAG_MCP_COOLDOWN", "30")) + 1.0)
+    calls_tac4: list = []
+    for _ in range(10):
+        _turn(lambda: None, calls_tac4)      # every attempt fails
+    check("TAC-4  ten turns in one window cost ONE trip, not ten",
+          len(calls_tac4) == 1,
+          f"{len(calls_tac4)} trips for 10 turns -- cost grows with turns")
+
+    # AC-3, on the same path: one window, two callers, one probe.
+    reset()
+    force_open(age_s=float(os.environ.get("RAG_MCP_COOLDOWN", "30")) + 1.0)
+    calls2: list = []
+    budgets: list = []
+    _turn(lambda: None, calls2, budgets)
+    _turn(lambda: None, calls2, budgets)
+    check("AC-3  two callers in one half-open window produce ONE probe",
+          len(calls2) == 1, f"{len(calls2)} probes for one window")
+
+    # ...and that one probe — and only it — carries the reduced budget. The
+    # budget is chosen inside `_post` from `_probe_in_flight()`, which is only
+    # ever true if `claim_probe()` ran, which is only reachable through this
+    # path. Before the wiring, this list was [False, False]: every turn paid the
+    # full 6.0 s serving read timeout against a dead service.
+    check("AC-3  the probe carries the reduced budget, not the serving one",
+          budgets == [True], f"probe budgets seen: {budgets}")
+
+    # A closed circuit still admits the primary, unchanged — the wiring must not
+    # make healthy serving take the local rung.
+    reset()
+    calls3: list = []
+    out3 = _turn(lambda: [{"section_title": "S", "content": "c"}], calls3)
+    check("closed  a healthy turn still calls the primary", len(calls3) == 1)
+    check("closed  ...and is served by the MCP rung", "[§ S]" in out3, out3)
+
+    # The other two primary call sites, gated by the same decision. Both are
+    # dormant on this box (RAG_SIMILARITY_THRESHOLD is 0.0 and the LCEL retriever
+    # serves the chat surfaces), which is exactly why they need a check: a config
+    # flip or a chat turn would otherwise re-open the bypass silently.
+    reset()
+    force_open()
+    calls4: list = []
+    old_best = rag.rag_legacy._best_distance
+    old_mcp = m.mcp_retrieve
+    m.mcp_retrieve = lambda *a, **k: (calls4.append(a), None)[1]
+    rag.rag_legacy._best_distance = lambda q: None
+    try:
+        rag._threshold_distance("q")
+        check("AC-2  the threshold gate does not bypass the circuit",
+              calls4 == [], f"primary called {len(calls4)} time(s) while open")
+
+        calls4.clear()
+        docs = m.MCPRetriever(top_k=3, allow_fallback=False)._get_relevant_documents("q")
+        check("AC-2  the LCEL retriever does not bypass the circuit",
+              calls4 == [], f"primary called {len(calls4)} time(s) while open")
+        check("AC-2  ...it degrades to an empty result instead", docs == [])
+    finally:
+        m.mcp_retrieve = old_mcp
+        rag.rag_legacy._best_distance = old_best
+
+
+# ──────────────── T-11: the PER-TURN record (the schema change) ──────────────
+#
+# The three fields the story's MOD-06 line claims and did not have. They are
+# per-turn on purpose: `mcp_rag_status()`'s counters are process-lifetime totals
+# and cannot attribute outage cost to the turn a caller waited on, which is what
+# TAC-4 is about.
+
+def _emitted(mcp_result, *, breaker=None) -> dict:
+    """Drive one turn under a real trace and return the emitted JSON record."""
+    import json
+    import tempfile
+
+    import app.perf_trace as pt
+
+    old = (pt.LOG_PATH, pt.ENABLED)
+    with tempfile.TemporaryDirectory() as td:
+        pt.LOG_PATH, pt.ENABLED = os.path.join(td, "t.jsonl"), True
+        try:
+            tr = pt.new_trace("t11", 1)
+            if breaker is not None:
+                breaker()
+            calls: list = []
+            _turn(mcp_result, calls)
+            tr.emit()
+            with open(pt.LOG_PATH, encoding="utf-8") as fh:
+                return json.loads(fh.readline())
+        finally:
+            pt.LOG_PATH, pt.ENABLED = old
+
+
+def t11_record() -> None:
+    print("\n-- T-11  the per-turn record names the rung, the state and the cost")
+
+    # A healthy turn: primary served, nothing charged to a dead dependency.
+    reset()
+    rec = _emitted(lambda: [{"section_title": "S", "content": "c"}])
+    for field in ("retrieval_rung", "retrieval_breaker",
+                  "retrieval_dead_dependency_ms"):
+        check(f"T-11  the record carries {field}", field in rec, str(sorted(rec)))
+    check("T-11  a healthy turn records the primary rung",
+          rec.get("retrieval_rung") == "mcp", str(rec.get("retrieval_rung")))
+    check("T-11  a healthy turn charges the dead dependency nothing",
+          rec.get("retrieval_dead_dependency_ms") == 0.0,
+          str(rec.get("retrieval_dead_dependency_ms")))
+
+    # An open circuit: local rung, and STILL zero charged. This is TAC-4's
+    # "bounded per window": the turn that is refused admission pays nothing,
+    # so cost cannot grow with the number of turns served.
+    reset()
+    rec_open = _emitted(lambda: None, breaker=force_open)
+    check("T-11  a refused turn records the breaker as open",
+          rec_open.get("retrieval_breaker") == "open",
+          str(rec_open.get("retrieval_breaker")))
+    check("T-11  ...takes the local rung", rec_open.get("retrieval_rung") == "local")
+    check("T-11  ...and is charged 0 ms for the dead dependency",
+          rec_open.get("retrieval_dead_dependency_ms") == 0.0,
+          str(rec_open.get("retrieval_dead_dependency_ms")))
+
+    # The admitted probe: this is the ONE turn per window that pays, and it
+    # records what it paid. Without it the cost is inferred, not measured.
+    reset()
+    rec_probe = _emitted(
+        lambda: None,
+        breaker=lambda: force_open(
+            age_s=float(os.environ.get("RAG_MCP_COOLDOWN", "30")) + 1.0))
+    check("T-11  the probe turn records the half-open state",
+          rec_probe.get("retrieval_breaker") == "half_open",
+          str(rec_probe.get("retrieval_breaker")))
+    check("T-11  the probe turn's cost is MEASURED, not inferred",
+          isinstance(rec_probe.get("retrieval_dead_dependency_ms"), (int, float)),
+          str(rec_probe.get("retrieval_dead_dependency_ms")))
+    reset()
+
+
 def main() -> int:
     print("=" * 74)
     print("US-013 -- bounded dependency calls and the half-open probe (BRD-14)")
@@ -358,6 +540,8 @@ def main() -> int:
     lld_record()
     breaker_mode_contract()
     a3_surface_contract()
+    wiring()
+    t11_record()
     reset()
 
     print()

@@ -148,6 +148,14 @@ def test_circuit_breaker_cooldown(monkeypatch):
 
 
 def test_retriever_invoke_and_fallback(monkeypatch):
+    # The mode under which the retriever is actually built: `rag.get_retriever()`
+    # returns the LEGACY retriever when USE_MCP_RAG=off, so an MCPRetriever only
+    # exists in auto/on. Stated here because the retriever now consults the
+    # circuit and the mode (`rag_mcp.admit_primary`), and conftest's hermetic
+    # default is "off" -- under which refusing the primary is the correct answer,
+    # not the bug this test is about.
+    monkeypatch.setenv("USE_MCP_RAG", "auto")
+
     def fake_post(payload, session_id=None):
         if payload.get("method") == "initialize":
             return httpx.Response(200, headers={"mcp-session-id": "s1"},
@@ -205,6 +213,7 @@ def test_retriever_works_in_create_retrieval_chain(monkeypatch):
     with AttributeError: 'MCPRetriever' object has no attribute 'with_config';
     a non-BaseRetriever Runnable would receive the whole input dict instead.
     """
+    monkeypatch.setenv("USE_MCP_RAG", "auto")   # see the note above on the mode
     queries = []
 
     def fake_post(payload, session_id=None):

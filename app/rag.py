@@ -19,6 +19,7 @@ identical to the legacy pipeline.
 
 import logging
 import os
+import time
 from typing import AsyncIterator
 
 from app import rag_legacy
@@ -73,18 +74,14 @@ def _use_mcp() -> bool:
     Every other caller in that window takes the local rung instead of piling a
     full request onto a service that has not yet proved it is back -- so two
     callers meeting the same outage cost one probe between them, not two.
+
+    The decision itself now lives in `rag_mcp.admit_primary()`, so all three
+    serving call sites -- `_retrieve_context`, `_threshold_distance` and
+    `rag_mcp.MCPRetriever` -- share one implementation rather than three
+    chances to disagree. This name is kept because the US-013 and BRD-15
+    suites drive it directly.
     """
-    mode = _mode()
-    if mode == "off":
-        return False
-    if mode == "on":
-        return True
-    state = rag_mcp.breaker_state()
-    if state == "closed":
-        return True
-    if state == "half_open":
-        return rag_mcp.claim_probe()
-    return False
+    return rag_mcp.admit_primary()
 
 
 # ── Ingestion validation (delegated — build path is legacy-owned) ──────────
@@ -134,6 +131,39 @@ def retrieve_context(query: str) -> str:
     return result
 
 
+def _note_retrieval(rung: str, breaker: str, dead_ms: float) -> None:
+    """Attribute this turn's retrieval cost to a rung and a breaker state.
+
+    US-013 T-11 / MOD-06. The breaker's own counters (`mcp_rag_status`) are
+    process-lifetime totals: they say an outage happened and how many times the
+    circuit opened, but they cannot attribute any of it to the turn a caller
+    waited on. TAC-4 is a per-turn claim -- the wall time charged to a dead
+    dependency is bounded by (trips x probe cost) and does NOT grow with the
+    number of turns served -- and before these fields that cost was INFERRED
+    from those totals rather than measured.
+
+    The three fields are deliberately per turn:
+      retrieval_rung                 which rung served: mcp | local | none
+      retrieval_breaker              closed | open | half_open, or off when
+                                     USE_MCP_RAG=off never consults it
+      retrieval_dead_dependency_ms   what the outage charged THIS turn: 0.0 on
+                                     a refused or healthy turn, and the
+                                     attempt's wall time when the primary was
+                                     admitted and failed -- a probe budget at
+                                     most, once per window
+    """
+    try:
+        from app.perf_trace import note_current
+
+        note_current(
+            retrieval_rung=rung,
+            retrieval_breaker=breaker,
+            retrieval_dead_dependency_ms=round(dead_ms, 1),
+        )
+    except Exception:
+        pass
+
+
 def _retrieve_context(query: str) -> str:
     """
     Returns the formatted context string: '[§ {section}]\\n{body}' chunks
@@ -141,20 +171,48 @@ def _retrieve_context(query: str) -> str:
     Returns '' when nothing is retrieved.
     """
     mode = _mode()
-    if mode == "off":
+    admitted = _use_mcp()
+    breaker = "off" if mode == "off" else rag_mcp.breaker_state()
+
+    # ── The wiring (US-013 AC-2/AC-3) ──────────────────────────────────────
+    # Admission is decided BEFORE the call, not after it fails. `_use_mcp` is
+    # off -> never, on -> always (the documented breaker override), auto ->
+    # closed admits, half_open admits exactly one probe, open refuses.
+    #
+    # This call is load-bearing, and it was missing. `_use_mcp` was written for
+    # this path and until 2026-09-21 had NO caller outside the test suite: the
+    # breaker kept its own state honestly on every failure and nothing ever
+    # consulted it, so each turn during an outage called the dead service at the
+    # full 6.0 s serving timeout. `claim_probe()` was therefore never reached,
+    # `_probe_in_flight()` was never true, `_post` never selected the 1.5 s
+    # probe budget, and `breaker_probes` could only ever read 0. TAC-4's
+    # "bounded per window, not per request" was untrue as wired -- the cost grew
+    # with every turn served. The suite passed 51/51 throughout, because it
+    # calls `_use_mcp` and `claim_probe` directly: it tested the mechanism and
+    # not its reachability.
+    if not admitted:
+        _note_retrieval(rung="local", breaker=breaker, dead_ms=0.0)
         return rag_legacy.retrieve_context(query)
 
+    t0 = time.monotonic()
     chunks = rag_mcp.mcp_retrieve(query, top_k=MMR_K)
+    attempt_ms = (time.monotonic() - t0) * 1000.0
+
     if chunks is not None:              # [] is a legitimate empty result
+        _note_retrieval(rung="mcp", breaker=breaker, dead_ms=0.0)
         return _guard_context(rag_mcp.format_legacy_chunks(chunks))
 
-    # Service unreachable/error:
+    # Service unreachable/error, and this turn was admitted -- so the attempt
+    # above IS what the outage charged it. With the circuit working that is one
+    # probe budget per window, and 0.0 on every turn the circuit refused.
     if mode == "auto":
         logger.warning(
             "MCP retrieval failed (%s) — falling back to local Chroma (auto mode)",
             rag_mcp.mcp_rag_status().get("last_error"),
         )
+        _note_retrieval(rung="local", breaker=breaker, dead_ms=attempt_ms)
         return rag_legacy.retrieve_context(query)
+    _note_retrieval(rung="none", breaker=breaker, dead_ms=attempt_ms)
     return ""
 
 
@@ -182,7 +240,14 @@ def _threshold_distance(query: str) -> float | None:
     Legacy path uses Chroma distances directly; the MCP path maps the top
     chunk score (cosine similarity) to distance = 1 - score."""
     mode = _mode()
-    if mode != "off":
+    # The circuit gates this call too. It is a SECOND primary call inside the
+    # same turn (`query_rag` runs this before `retrieve_context`), so leaving it
+    # ungated would put one full-budget request against a dead service on every
+    # turn that has the threshold gate enabled -- and, because `_record_failure`
+    # restamps `failed_at` on each failure, would keep pushing the cooldown out
+    # so the half-open probe never became eligible. Dormant today only because
+    # RAG_SIMILARITY_THRESHOLD is 0.0; a config flip would have re-opened it.
+    if mode != "off" and _use_mcp():
         chunks = rag_mcp.mcp_retrieve(query, top_k=1)
         if chunks is not None:
             if chunks:

@@ -139,14 +139,53 @@ alongside the pre-existing uncommitted `app/crm/*` + `app/leads/*` work.
      gate seeds `_shared_tts_cache` directly but reads ambient `.env`, which sets
      `per_call` (deliberate, measured, US-012, 2026-09-19). A gate that depends on
      ambient config instead of forcing the scope it tests.
-3. **Second carve-out corpus** for `scripts/*.py` and the root scripts — never
-   fold them into the runtime corpus.
-4. **`MACHINE_PROFILE_CHECK`** as a non-blocking boot drift report (`DG-05`).
-5. **Close US-011's DoD** — LLD test mapping (T-1..T-17), the remainder of
+3. ~~**Phase 1.3 — US-013 T-11**~~ **DONE**, and it found a defect bigger than
+   the task. The per-turn `DAT-07` record now carries `retrieval_rung`,
+   `retrieval_breaker` and `retrieval_dead_dependency_ms` (`app/rag.py`,
+   `_note_retrieval`), on every return path. Adding them is what made the
+   wiring defect visible: **the breaker gated nothing in production.**
+   `rag._use_mcp()` — the function written to choose the rung — had no caller in
+   `app/` at all; `git log -S` shows the name in exactly one commit, `a049bc5`,
+   the one that defined it. So every turn during an outage called the dead
+   service at the full 6.0 s serving timeout, `claim_probe()` was never reached,
+   `_probe_in_flight()` was never true, `_post` never selected the 1.5 s probe
+   budget, and `breaker_probes` could only ever read 0. **TAC-4's "bounded per
+   window" was untrue as wired**, and the suite passed 51/51 throughout because
+   it calls `_use_mcp` and `claim_probe` directly: it tested the mechanism, not
+   its reachability.
+   - **Fix:** one decision, `rag_mcp.admit_primary()`, routes all three primary
+     call sites — `_retrieve_context`, `_threshold_distance` (a second call in
+     the same turn, dormant only because `RAG_SIMILARITY_THRESHOLD=0.0`) and
+     `MCPRetriever` (`app.py` / `admissions_bot.py`). Gating the last two
+     matters beyond their own budget: `_record_failure` restamps `failed_at` on
+     every failure, so an ungated caller keeps pushing the cooldown out and the
+     probe never becomes eligible.
+   - **Suite:** `test_us013_breaker.py` 51 → **70**, with six checks that drive
+     `_retrieve_context` itself. Verified non-vacuous by reverting `app/rag.py`
+     alone: they report `the primary was called 1 time(s) anyway`,
+     `2 probes for one window`, `probe budgets seen: [False, False]`.
+   - **Two adapter tests were made explicit rather than broken:**
+     `test_rag_mcp_adapter.py` now sets `USE_MCP_RAG=auto`, because conftest's
+     hermetic default is `off` and the retriever now honours it. The repo's own
+     convention (the conftest comment) is that tests set the mode per test.
+   - **Ripple:** the citation gate caught this change's own drift —
+     `_threshold_distance` moved 163 → 237, invalidating three citations in
+     `MOD-02` (`:86`, `:201`) and `US-009` (`:91`). All three updated.
+4. **Second carve-out corpus** for `scripts/*.py` and the root scripts — never
+   fold them into the runtime corpus. (Verified latent, not live: no `.env` key
+   is currently read by scripts alone.)
+5. ~~**`MACHINE_PROFILE_CHECK`** boot drift report~~ — **already implemented**,
+   contrary to the earlier list: `app/main.py:294-308` calls `check_drift()` in
+   the lifespan, warns on `drifted`, swallows every exception, and exposes the
+   state in health/dashboard payloads (`:3331`, `:3735`). Nothing to do.
+6. **Close US-011's DoD** — LLD test mapping (T-1..T-17), the remainder of
    `MOD-07` B.4/B.6 (only the `FASTAPI_WORKERS` row was reconciled here; the
    other three inert items and the rest of MOD-07's `.env` line citations are
    unaudited), and the TAC-8 no-regression load test.
-6. Then the drive's order: Phase 1.3 remainder (US-013 T-11 trace fields),
-   Phase 2.3 on a **quiet box**, Phase 3 story closures, 4b, 5, 6.
+7. Then the drive's order: Phase 2.3 on a **quiet box**, Phase 3 story closures,
+   4b, 5, 6. Note US-013's TAC-4/TAC-6/TAC-10 **load** figures are still
+   unmeasured — and they are now measurable for the first time, because the
+   fields exist and the circuit actually gates. That is the natural next load
+   run once the box is quiet.
 
 Use `127.0.0.1`, never `localhost` (IPv6 stall on this box).
