@@ -16,8 +16,8 @@ in git.
 What landed, in order: the `start.sh` OOM path removed · Bucket D (engine-level
 `OLLAMA_*` keys) · **US-013's breaker finally wired to the serving path** · two
 US-011 DoD boxes closed · T-14 (run summary carries its configuration) ·
-**TAC-6 provenance, which had been a constant** · T-11/T-12 driven · a full
-performance report.
+**TAC-6 provenance, which had been a constant** · T-11/T-12 driven · **T-15
+(`ConfigurationError` now names the key)** · a full performance report.
 
 ## The session's commits
 
@@ -33,7 +33,7 @@ performance report.
 | `d278b44` | `test(us011)`: T-11 and T-12 driven; the two remaining partials named with reasons |
 | `0dd0d2e` | `docs(perf)`: **performance report** — what improved, what is pending, how critical |
 | `313faa7` | `docs`: this handoff |
-| *(companion)* | `fix(us011)`: **T-15 — `ConfigurationError` names the key** from every import-time parse (46 sites rewritten, proven behaviour-preserving against a 110-field snapshot) |
+| `2d21eba` | `fix(us011)`: **T-15 — `ConfigurationError` names the key** from every import-time parse (46 sites rewritten, proven behaviour-preserving against a 110-field snapshot) |
 
 ## US-011 status: DoD **6/8**
 
