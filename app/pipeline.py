@@ -27,19 +27,23 @@ import logging
 import os
 from pathlib import Path
 
+from app.config import settings
+
 logger = logging.getLogger("voice_pipeline")
 
 # ── Configuration ────────────────────────────────────────────────────
 
-CHROMA_DB_PATH = Path(os.environ.get(
-    "CHROMA_DB_PATH",
-    str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
-))
-DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
+CHROMA_DB_PATH = Path(settings.CHROMA_DB_PATH)
+DEFAULT_LLM_MODEL = settings.OLLAMA_MODEL
 #: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
-TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
+OLLAMA_BASE_URL = settings.OLLAMA_URL
+STT_MODEL = settings.WHISPER_MODEL
+#: This one omits the `.strip() or "af_heart"` guard the other readers of
+#: KOKORO_VOICE apply (app/voice_handler.py, app/admission.py). Settings carries
+#: the normalised value, so this path now agrees with them instead of passing
+#: an empty string to KokoroTTSService. KOKORO_VOICE itself stays on the
+#: dynamic allowlist for admission.asset_drift()'s per-call read.
+TTS_VOICE = settings.KOKORO_VOICE
 # Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
 # Voice calls run the full production voice system prompt (~3.5k tokens)
 # plus RAG context; scripts/predeploy.py sizes it per machine.
