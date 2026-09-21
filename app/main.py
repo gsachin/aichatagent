@@ -213,23 +213,38 @@ def _reconcile_workers() -> None:
     """Report the configured FASTAPI_WORKERS against what is actually running.
 
     FASTAPI_WORKERS is machine-sizing metadata written by scripts/predeploy.py.
-    No launcher passes it to uvicorn -- start_services.ps1, start_services.sh,
-    the Dockerfile and docker-compose all start a single process -- so a
-    configured value above 1 is a silent contradiction between .env and the
-    running stack. That mismatch is the exact defect class US-011 was written
-    to surface ("set != live"), and it had to be found by hand the first time:
-    the plan inherited a claim of 4 workers when there is one.
 
-    Reading it here does not change the worker count. It makes the difference
-    visible at boot instead of leaving it for someone to rediscover, and it is
-    deliberately NOT wired to `--workers`: this stack holds model residency
-    (whisper, Kokoro) and per-call session state in-process, so a second worker
-    would load a second copy of every model. On a 16 GB card already holding
-    ~13 GB, that is a crash, not a speedup.
+    Reading it here does not change the worker count, and it is deliberately NOT
+    wired to `--workers`: this stack holds model residency (whisper, Kokoro) and
+    per-call session state in-process, so a second worker loads a second copy of
+    every model. On a 16 GB card already holding ~13 GB, that is a crash, not a
+    speedup.
+
+    CORRECTED 2026-09-21 (US-011). This docstring used to assert that "No
+    launcher passes it to uvicorn -- start_services.ps1, start_services.sh, the
+    Dockerfile and docker-compose all start a single process", and the warning
+    below told the operator "No launcher honours the setting; the running count
+    is 1". Both were false. The list had simply never included start.sh:
+
+        start.sh:164   --workers "${FASTAPI_WORKERS:-4}"
+
+    That is the non-DEV_MODE branch, and start.sh is not dead code -- it is the
+    launcher SETUP_GUIDE.md, README_DEPLOYMENT.md and SETUP_COMPLETE.md point
+    operators at. So the truth is neither "in effect" nor "inert" but
+    CONDITIONAL on which launcher ran, and two consequences follow that are
+    worse than the mismatch this function was written to report:
+
+      - on that path the setting IS honoured, so a configured value above 1 is a
+        real second worker, not merely a contradiction sitting in .env; and
+      - `${FASTAPI_WORKERS:-4}` substitutes 4 when the key is unset OR empty, so
+        launching that way without the key yields four workers holding four
+        copies of the models -- the crash described above, reached by doing
+        nothing.
+
+    Whether start.sh's default should stay 4 is a launcher decision rather than
+    a configuration migration, and is deliberately NOT changed here.
     """
-    import os as _os
-
-    raw = _os.environ.get("FASTAPI_WORKERS", "").strip()
+    raw = settings.FASTAPI_WORKERS
     if not raw:
         return
     try:
@@ -239,11 +254,16 @@ def _reconcile_workers() -> None:
         return
     if configured > 1:
         logger.warning(
-            "FASTAPI_WORKERS=%d is configured but this stack runs a single "
-            "uvicorn worker by design (in-process model residency and per-call "
-            "session state). No launcher honours the setting; the running "
-            "count is 1. Set FASTAPI_WORKERS=1 to make .env agree with the "
-            "stack, or see doc/sdlc/modules/MOD-07-config-boot.md.",
+            "FASTAPI_WORKERS=%d is configured while this stack is designed to "
+            "run a single uvicorn worker (in-process model residency and "
+            "per-call session state). Whether it is honoured depends on the "
+            "launcher: start_services.ps1, start_services.sh, the Dockerfile "
+            "and docker-compose start one process and ignore it, but start.sh "
+            "passes --workers \"${FASTAPI_WORKERS:-4}\", so on that path this "
+            "value IS the running count -- and 4 if the key is unset. Check "
+            "which launcher started this process. Set FASTAPI_WORKERS=1 to "
+            "make .env agree with the design, or see "
+            "doc/sdlc/modules/MOD-07-config-boot.md.",
             configured,
         )
 

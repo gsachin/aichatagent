@@ -280,6 +280,17 @@ class Settings:
     # Listed in config_truth._EXTERNALLY_CONSUMED for that reason.
     FASTAPI_PORT: int = field(default_factory=lambda: int(_env("FASTAPI_PORT", "8000")))
 
+    # Machine-sizing metadata written by scripts/predeploy.py. Held as the RAW
+    # string, defaulting to empty, because app/main.py's `_reconcile_workers`
+    # distinguishes "unset" (say nothing) from "set to something that is not a
+    # number" (warn) — so `int("")` must not happen on the way in.
+    #
+    # In effect on one launcher only, and conditionally: see start.sh:164. The
+    # rest of this stack runs a single uvicorn worker by design.
+    FASTAPI_WORKERS: str = field(
+        default_factory=lambda: _env("FASTAPI_WORKERS", "").strip()
+    )
+
     # ── Machine detection overrides ─────────────────────────────────
     # Detection overrides, not values: each is compared against the exact
     # string "1", so unset and "" both mean "not set" and the probe falls
