@@ -99,6 +99,37 @@ check("T-10 ...and the restored run is back to reporting both origins",
       {v.source for v in ct.effective_configuration()} == _ORIGINS,
       "the simulation leaked into the live configuration")
 
+# --- T-11: a renamed key leaves the old name reported inert ------------------
+# The scenario's point is that a rename cannot leave a silently-ignored setting
+# behind: the NEW name is read, and the OLD name -- still sitting in the file --
+# is reported inert rather than carried as though it did something.
+_rename_probe = dict(_env_now)
+_rename_probe["OLLAMA_MODEL_V2"] = _env_now.get("OLLAMA_MODEL", "x")
+_renamed_inert = ct.sweep_inert_keys(_rename_probe)
+check("T-11 a renamed key leaves the old name reported inert",
+      "OLLAMA_MODEL_V2" in _renamed_inert, str(_renamed_inert))
+check("T-11 ...while the live name is not reported",
+      "OLLAMA_MODEL" not in _renamed_inert)
+
+# --- T-12: the five known instances each resolve, none in a third state ------
+# REC-01 (the Pipecat VADParams block), REC-02 (FASTAPI_WORKERS), REC-05 and
+# REC-11 (the sizing divergence and the pre-warm keep-alive), and the four keys
+# the inert sweep originally named. "Read" or "reported inert" -- never a third
+# state where a value sits in the file implying it is doing something.
+_reported = {e.key: e for e in ct.effective_configuration()}
+_four_named = ["FASTAPI_WORKERS", "KOKORO_SPEED", "LOG_FILE", "LOG_LEVEL"]
+check("T-12 the four named keys each resolve to a reader, not to a third state",
+      all(k in _reported and not _reported[k].inert for k in _four_named),
+      str([k for k in _four_named if k not in _reported or _reported[k].inert]))
+check("T-12 ...and each states a known origin",
+      all(_reported[k].source in _ORIGINS for k in _four_named),
+      str({k: _reported[k].source for k in _four_named}))
+_pipeline_src = (ct.PROJECT_ROOT / "app" / "pipeline.py").read_text(
+    encoding="utf-8", errors="replace")
+check("T-12 REC-01 the dead Pipecat VADParams block is gone, not merely marked",
+      "VADParams(" not in _pipeline_src,
+      "a dead block that reads as live endpointing configuration is back")
+
 # --- TAC-2: inert keys found, by name --------------------------------------
 inert = ct.sweep_inert_keys(env)
 # TAC-2 originally asserted that FASTAPI_WORKERS and KOKORO_SPEED were reported
