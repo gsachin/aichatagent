@@ -192,7 +192,7 @@ Per failure class:
 
 | Asset | Location | Class | What this module does |
 |---|---|---|---|
-| `llm_backend.chat` / `_chat_ollama` | `llm_backend.py:135–175` | **Refactor** | Non-streaming → token stream with counter capture (TRD-10); `options` gains keep-alive on the serving path (TRD-12) |
+| `llm_backend.chat` / `_chat_ollama` | `llm_backend.py:196–265` | **Refactor** | Non-streaming → token stream with counter capture (TRD-10); `options` gains keep-alive on the serving path (TRD-12) |
 | `pick_model()` per-call `/api/tags` | `llm_backend.py:180–204` | **Debt** | **Resolve now** — uncached HTTP round trip per utterance becomes process-lifetime (TRD-10) |
 | System prompt template | `app/voice_system_prompt.py` (`{context}` at line 600 of 714) | **Refactor** | Static text after `{context}` moves ahead of it; the static region must contain no per-turn values (TRD-11) |
 | Prompt prefix / KV cache behaviour | measured, `doc/perf/tools/a4_prefix_cache_probe.py` | **Reusable** | The mechanism is measured working (2,909 ms → 50 ms); the change is to what is placed inside it, not to the mechanism |
