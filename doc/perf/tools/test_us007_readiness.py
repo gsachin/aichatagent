@@ -307,5 +307,101 @@ check("A5  a lapsed embed model is NAMED and degrades, never blocks",
       and r.clauses.get("residency") is True
       and r.ready is True)
 
+# ── Phase 1.1 / the boot verdict must actually REACH the cache ─────────────
+# The cache write lives in a NESTED function, and a `global` declared in the
+# enclosing lifespan does not carry into it. The write therefore became a
+# closure local: the verdict was computed, logged, and discarded, so
+# `_readiness_cache` stayed None and the first `/ready` after every boot re-ran
+# the entire gate -- two warm LLM calls, ~13 s -- instead of serving the boot
+# verdict the docstring promises ("the plain response is the cached boot
+# assessment"). Measured 2026-09-21 on a fresh boot: `/ready` 13.38 s, with both
+# `POST /api/chat` calls visible inside that one request.
+#
+# Static, because the defect is a scoping declaration and a behavioural test
+# would need a real lifespan (two model loads). The scan is asserted in both
+# directions below.
+import ast as _ast                                         # noqa: E402
+from pathlib import Path as _Path                          # noqa: E402
+
+_main_src = (_Path(__file__).resolve().parents[3] / "app" / "main.py").read_text(
+    encoding="utf-8")
+_boot_task = None
+for _node in _ast.walk(_ast.parse(_main_src)):
+    if isinstance(_node, _ast.AsyncFunctionDef) and _node.name == "_assess_readiness_at_boot":
+        _boot_task = _node
+
+check("Phase 1.1  the boot assessment task exists in app/main.py",
+      _boot_task is not None)
+check("Phase 1.1  the boot task declares `global _readiness_cache`",
+      bool(_boot_task) and any(
+          isinstance(n, _ast.Global) and "_readiness_cache" in n.names
+          for n in _boot_task.body),
+      "without it the verdict never reaches the module cache")
+check("Phase 1.1  and the boot task does assign the verdict",
+      bool(_boot_task) and any(
+          isinstance(n, _ast.Assign) and any(
+              getattr(t, "id", None) == "_readiness_cache" for t in n.targets)
+          for n in _ast.walk(_boot_task)))
+
+# NEGATIVE CONTROL. If this scan cannot see the defect, the green above means
+# nothing: the same shape, minus the declaration, must be flagged.
+_planted = '''
+async def outer():
+    global _readiness_cache
+
+    async def task():
+        _readiness_cache = "verdict"
+'''
+_planted_task = next(n for n in _ast.walk(_ast.parse(_planted))
+                     if isinstance(n, _ast.AsyncFunctionDef) and n.name == "task")
+check("NEGATIVE CONTROL: the scan flags a nested write with no `global`",
+      not any(isinstance(n, _ast.Global) and "_readiness_cache" in n.names
+              for n in _planted_task.body))
+
+# ── Phase 1.1 / the boot probe must wait for OUR OWN bind ─────────────────
+# A fixed sleep cannot cover the startup path. The assessment is deferred so it
+# does not probe its own :8000 before uvicorn creates it -- but the deferral
+# used to be `sleep(3.0)`, and with Postgres down the workers' first DB
+# attempts block the loop for ~20 s before the bind, so the probe still fired
+# early: "NOT READY (FastAPI :8000 not listening)" was logged at 03:43:50 on a
+# stack that had been accepting connections since 03:43:46 (measured
+# 2026-09-21). The invariant is structural: a listen check on our own port,
+# bounded by a deadline, BEFORE the assessment runs.
+#: References, not Calls: both probes are handed to `asyncio.to_thread` as
+#: arguments, so `_boot.tcp_listening` is an Attribute expression and never a
+#: Call node. (The first draft of this scan looked for Calls and reported the
+#: fixed code as broken -- the same distinction test_event_loop_hygiene.py
+#: rests on.)
+def _calls(fn, name):
+    return [n for n in _ast.walk(fn)
+            if isinstance(n, _ast.Attribute) and n.attr == name]
+
+
+def _waits_for_bind_then_assesses(fn) -> bool:
+    listens, assesses = _calls(fn, "tcp_listening"), _calls(fn, "assess")
+    if not listens or not assesses:
+        return False
+    if min(n.lineno for n in listens) > min(n.lineno for n in assesses):
+        return False                      # assessed first, waited after
+    return any(isinstance(n, _ast.Name) and n.id == "BOOT_BIND_WAIT_S"
+               for n in _ast.walk(fn))    # and the wait is bounded
+
+
+check("Phase 1.1  the boot task waits for its own port before assessing",
+      bool(_boot_task) and _waits_for_bind_then_assesses(_boot_task),
+      "a fixed sleep does not cover a slow startup path")
+
+# NEGATIVE CONTROL: the shape that shipped the false verdict must be flagged.
+_planted_wait = '''
+async def _assess_readiness_at_boot():
+    await _asyncio.sleep(3.0)
+    from app import boot_readiness as _boot
+    _booted = (await _asyncio.to_thread(_boot.assess, True)).to_dict()
+'''
+_planted_fn = next(n for n in _ast.walk(_ast.parse(_planted_wait))
+                   if isinstance(n, _ast.AsyncFunctionDef))
+check("NEGATIVE CONTROL: the scan flags sleep-then-assess with no bind wait",
+      not _waits_for_bind_then_assesses(_planted_fn))
+
 print(f"\n{passed} passed, {failed} failed\n")
 sys.exit(1 if failed else 0)

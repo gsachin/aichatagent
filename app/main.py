@@ -116,6 +116,14 @@ logger = logging.getLogger("voice_api")
 _readiness_cache: dict | None = None
 _readiness_lock = _asyncio.Lock()
 
+#: How long the boot assessment waits for its OWN port to accept a connection
+#: before running anyway. uvicorn binds :8000 only after the lifespan returns,
+#: and on this box the startup path can take tens of seconds to get there (a
+#: dead Postgres costs ~2 s per attempt, and the workers' first polls run
+#: before the bind). Generous on purpose: the wait is a background task, and a
+#: verdict that is late is better than a verdict that is false.
+BOOT_BIND_WAIT_S = 60.0
+
 
 # NOTE: a second, earlier copy of the tunnel-host resolver used to sit here.
 # Python took the later definition, so this one was dead code — two answers to
@@ -352,14 +360,34 @@ async def lifespan(app_instance):
     # CLI gate never has this problem - start_services.ps1 runs it after the
     # app is up). Never blocks startup; a failed assessment leaves the cache
     # empty and `/ready` falls back to a full assessment per request.
-    global _readiness_cache
+    #
+    # The deferral WAITS for our own socket rather than sleeping a fixed 3 s.
+    # It used to sleep, and the assumption behind that (startup is quick) does
+    # not hold here: with Postgres down the startup path blocks the loop for
+    # ~20 s while the workers' first DB attempts time out, so the clause-1
+    # probe fired BEFORE uvicorn bound and reported the app it was serving as
+    # down -- "NOT READY (FastAPI :8000 not listening)" logged on a stack that
+    # answered `/health` a second later (measured 2026-09-21).
 
     async def _assess_readiness_at_boot() -> None:
+        # The write below must name the MODULE global. A `global` declared in
+        # the enclosing lifespan does not carry into a nested function, so
+        # without this line the verdict is computed, logged, and thrown away:
+        # the cache stays None, and every first `/ready` re-runs the whole
+        # gate -- warm included -- instead of serving the boot verdict.
+        global _readiness_cache
         try:
-            await _asyncio.sleep(3.0)   # let uvicorn bind; the gate probes :8000
             from app import boot_readiness as _boot
 
             _boot.load_env()
+            deadline = _time.monotonic() + BOOT_BIND_WAIT_S
+            while _time.monotonic() < deadline:
+                if await _asyncio.to_thread(
+                        _boot.tcp_listening, "127.0.0.1",
+                        settings.FASTAPI_PORT, 0.5):
+                    break
+                await _asyncio.sleep(0.25)
+
             _booted = (await _asyncio.to_thread(_boot.assess, True)).to_dict()
             _booted["status"] = "ready" if _booted.get("ready") else "not_ready"
             _readiness_cache = _booted
