@@ -63,11 +63,24 @@ _FLOAT_KEYS = ("RAG_SIMILARITY_THRESHOLD", "RAG_MCP_TIMEOUT", "OLLAMA_TEMPERATUR
 #: migrated — there is no lookup there to move. `(?!=)` lets `==` through.
 _ASSIGNMENT = r'(?!\s*(?:[-+*/|&^@]|<<|>>)?=(?!=))'
 
+#: The `_env`-family helper call, with ANY suffix (`_env`, `_env_int`,
+#: `_env_int_or`, ...). Enumerating the suffixes has now failed twice: the
+#: pattern once read `env\(` and so missed every typed variant, and the
+#: enumeration that replaced it missed `_env_int_or` the moment it was added —
+#: each time reporting a key the runtime genuinely uses as INERT, which is a
+#: false positive in the direction that matters. `(_[a-z]+)*` cannot go stale.
+#:
+#: It still requires a quoted literal first argument, so the two same-named
+#: things that are NOT lookups stay excluded: `_env_map(lines)` in
+#: app/hardware_profile.py parses `.env` as TEXT, and `_env_value(key, default)`
+#: in bootstrap_services.py takes the name as a variable.
+_ENV_HELPER = r'(?<![\w.])_?env(?:_[a-z]+)*\(\s*{k}'
+
 _READ_PATTERNS = (
     r'os\.environ\.get\(\s*["\']{k}["\']',
     r'os\.environ\[\s*["\']{k}["\']\s*\]' + _ASSIGNMENT,
     r'os\.getenv\(\s*["\']{k}["\']',
-    r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\']{k}["\']',
+    _ENV_HELPER.format(k=r'["\']{k}["\']'),
 )
 
 
@@ -253,7 +266,7 @@ _READ_SITE_PATTERNS = (
     re.compile(r'os\.environ\[\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']\s*\]'
                + _ASSIGNMENT),
     re.compile(r'os\.getenv\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
-    re.compile(r'(?<![\w.])_?env(?:_int|_float|_bool)?\(\s*["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']'),
+    re.compile(_ENV_HELPER.format(k=r'["\'](?P<k>[A-Za-z_][A-Za-z0-9_]*)["\']')),
 )
 
 

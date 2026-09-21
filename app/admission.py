@@ -36,6 +36,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.config import settings
+
 logger = logging.getLogger("admission")
 
 STATIC_AUDIO_DIR = Path(__file__).resolve().parent / "static" / "audio"
@@ -314,9 +316,16 @@ def asset_drift() -> str | None:
     manifest = read_manifest()
     if not manifest:
         return "no asset manifest; the pre-synthesised call assets are missing"
+    # The two halves are resolved differently ON PURPOSE, and the difference is
+    # evidence, not style. KOKORO_VOICE is read live because
+    # test_us016_admission changes it in-process and requires this very call to
+    # report the drift — it is on the dynamic allowlist. KOKORO_SPEED has no
+    # mutation site anywhere, so it resolves through Settings; a test that needs
+    # to vary it must now reload the module. If that becomes necessary, the
+    # honest fix is to add the key to the allowlist, not to re-read it here.
     current = {
         "voice": os.environ.get("KOKORO_VOICE", "af_heart").strip() or "af_heart",
-        "speed": float(os.environ.get("KOKORO_SPEED", "1.0") or 1.0),
+        "speed": float(settings.KOKORO_SPEED or 1.0),
     }
     drift = [f"{k}: recorded {manifest.get(k)!r} vs live {v!r}"
              for k, v in current.items()

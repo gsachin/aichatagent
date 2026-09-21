@@ -26,6 +26,19 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def _env_int_or(key: str, default: int) -> int:
+    """`int(...)` when the value looks like an integer, else `default`.
+
+    For the one call site whose non-numeric value is a FALLBACK rather than a
+    crash: app/rag.py's OLLAMA_NUM_PREDICT becomes 192 silently instead of
+    raising at import, because a typo there must not take the spoken-answer
+    path down. `lstrip("-")` admits a negative, which the call site reads as
+    "no ceiling" — the same meaning as 0.
+    """
+    raw = _env(key, str(default)).strip()
+    return int(raw) if raw.lstrip("-").isdigit() else default
+
+
 @dataclass(frozen=True)
 class Settings:
     # ── Transport provider ──────────────────────────────────────────
@@ -208,6 +221,15 @@ class Settings:
     # 0 = off.
     RAG_MAX_CONTEXT_CHARS: int = field(
         default_factory=lambda: int(_env("RAG_MAX_CONTEXT_CHARS", "0"))
+    )
+    # Output-token ceiling for the SPOKEN answer. 192 comes from the measured
+    # answer-length distribution, not from taste: over 83 golden-set cases the
+    # 95th percentile was 106 tokens (qwen2.5:14b) and 82 (llama3.2:3b), so a
+    # ceiling of 192 truncates none of them while bounding the worst case —
+    # the one thing an unbounded generation cannot give a live call. 0 or a
+    # negative removes the ceiling.
+    OLLAMA_NUM_PREDICT: int = field(
+        default_factory=lambda: _env_int_or("OLLAMA_NUM_PREDICT", 192)
     )
 
     # ── MCP retrieval service ───────────────────────────────────────

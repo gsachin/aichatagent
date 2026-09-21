@@ -23,6 +23,7 @@ from typing import AsyncIterator
 
 from app import rag_legacy
 from app import rag_mcp
+from app.config import settings
 from app.llm_backend import EngineCounters
 
 logger = logging.getLogger("rag_module")
@@ -42,8 +43,7 @@ OLLAMA_TEMPERATURE = rag_legacy.OLLAMA_TEMPERATURE
 #: bounded worst case -- the one thing an unbounded generation cannot give a
 #: live call -- while changing nothing on the answers actually produced.
 #: Set OLLAMA_NUM_PREDICT=0 to remove the ceiling.
-_num_predict_raw = os.environ.get("OLLAMA_NUM_PREDICT", "192").strip()
-OLLAMA_NUM_PREDICT = int(_num_predict_raw) if _num_predict_raw.lstrip("-").isdigit() else 192
+OLLAMA_NUM_PREDICT = settings.OLLAMA_NUM_PREDICT
 EMBED_MODEL = rag_legacy.EMBED_MODEL
 CHUNK_SIZE = rag_legacy.CHUNK_SIZE
 CHUNK_OVERLAP = rag_legacy.CHUNK_OVERLAP

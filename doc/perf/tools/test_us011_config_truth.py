@@ -101,14 +101,19 @@ check("TAC-5 the live .env has no malformed values",
 # --- AC-2 / TAC-2: what counts as a READ -----------------------------------
 # The sweep must recognise every lookup shape, or a key the runtime genuinely
 # uses is reported INERT — a false positive in the direction that matters,
-# because it tells an operator a live setting is dead. The typed helper shapes
-# (`_env_int` and friends) were invisible until Phase 1.2: the pattern read
-# `env\(`, which matched `_env(` only by accident of being a substring.
+# because it tells an operator a live setting is dead. This has now gone wrong
+# twice: the pattern once read `env\(`, matching `_env(` only by accident of
+# being a substring and missing every typed variant; the enumeration that
+# replaced it then missed `_env_int_or` the moment it was introduced, and the
+# TAC-2 inert check caught OLLAMA_NUM_PREDICT looking unread. The pattern now
+# accepts any suffix, so neither the list below nor the pattern can go stale
+# the same way again.
 _PROBE = "US011_PROBE_KEY"
 for shape in (f'os.environ.get("{_PROBE}", "")', f'os.environ["{_PROBE}"]',
               f'os.getenv("{_PROBE}")', f'_env("{_PROBE}", "")',
               f'_env_int("{_PROBE}", 1)', f'_env_float("{_PROBE}", 1.0)',
-              f'_env_bool("{_PROBE}", True)'):
+              f'_env_bool("{_PROBE}", True)', f'_env_int_or("{_PROBE}", 1)',
+              f'_env_whatever_future_suffix("{_PROBE}", 1)'):
     check(f"AC-2 a read is recognised: {shape}",
           ct.is_read_anywhere(_PROBE, shape))
 for shape in (f'FASTAPI_WORKERS = "4"   # not the probe',
