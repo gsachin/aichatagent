@@ -29,6 +29,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.config import settings
+
 # Bypass AppLocker DLL blocks — same class of issue as hf_xet.dll
 os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "0")
 
@@ -42,10 +44,7 @@ logger = logging.getLogger("rag_module")
 
 # ── Configuration ────────────────────────────────────────────────────
 
-CHROMA_DB_PATH = Path(os.environ.get(
-    "CHROMA_DB_PATH",
-    str(Path(__file__).resolve().parent.parent / "chroma_local_db"),
-))
+CHROMA_DB_PATH = Path(settings.CHROMA_DB_PATH)
 
 # C3 (Meridian KB repopulation): the collection name is configuration, not a
 # magic literal. The legacy default "langchain" stays the default for
@@ -63,27 +62,27 @@ SOURCES = [
 ]
 
 #: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
+OLLAMA_BASE_URL = settings.OLLAMA_URL
+OLLAMA_MODEL = settings.OLLAMA_MODEL
 # Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
 # 8192 default — voice calls run the full production voice system prompt
 # (~3.5k tokens) plus RAG context; scripts/predeploy.py sizes it per machine.
 from app.llm_backend import DEFAULT_NUM_CTX as OLLAMA_NUM_CTX  # noqa: E402
-OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE", "")  # "" = ollama default
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+OLLAMA_TEMPERATURE = settings.OLLAMA_TEMPERATURE  # "" = ollama default
+EMBED_MODEL = settings.EMBED_MODEL
 
 # Chunking (markdown-aware)
-CHUNK_SIZE = int(os.environ.get("RAG_CHUNK_SIZE", "600"))
-CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "90"))
+CHUNK_SIZE = settings.RAG_CHUNK_SIZE
+CHUNK_OVERLAP = settings.RAG_CHUNK_OVERLAP
 
 # Retrieval settings
-MMR_FETCH_K = int(os.environ.get("RAG_FETCH_K", "20"))
-MMR_K = int(os.environ.get("RAG_TOP_K", "5"))
+MMR_FETCH_K = settings.RAG_FETCH_K
+MMR_K = settings.RAG_TOP_K
 
 # Optional features — all default to current behavior (OFF)
-RAG_SEARCH_MODE = os.environ.get("RAG_SEARCH_MODE", "mmr")  # "mmr" | "hybrid"
-RAG_SIMILARITY_THRESHOLD = float(os.environ.get("RAG_SIMILARITY_THRESHOLD", "0.0"))  # cosine distance; 0.0 = disabled
-RAG_MAX_CONTEXT_CHARS = int(os.environ.get("RAG_MAX_CONTEXT_CHARS", "0"))  # 0 = off
+RAG_SEARCH_MODE = settings.RAG_SEARCH_MODE  # "mmr" | "hybrid"
+RAG_SIMILARITY_THRESHOLD = settings.RAG_SIMILARITY_THRESHOLD  # cosine distance; 0.0 = disabled
+RAG_MAX_CONTEXT_CHARS = settings.RAG_MAX_CONTEXT_CHARS  # 0 = off
 
 # ── Ingestion validation gate ─────────────────────────────────────────
 

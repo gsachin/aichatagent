@@ -183,6 +183,33 @@ class Settings:
     # window control on the MLX path.
     MLX_MAX_TOKENS: int = field(default_factory=lambda: int(_env("MLX_MAX_TOKENS", "2048")))
 
+    # ── Retrieval / knowledge base ──────────────────────────────────
+    # Absolute and derived from the repo root, not the CWD, exactly as the call
+    # sites did — a relative default here would move with the process's working
+    # directory. A relative value IN .env still resolves against the CWD, which
+    # is the call sites' behaviour preserved, not an oversight.
+    CHROMA_DB_PATH: str = field(
+        default_factory=lambda: _env(
+            "CHROMA_DB_PATH", str(Path(__file__).resolve().parent.parent / "chroma_local_db")
+        )
+    )
+    # Chunking is markdown-aware; these are the legacy defaults.
+    RAG_CHUNK_SIZE: int = field(default_factory=lambda: int(_env("RAG_CHUNK_SIZE", "600")))
+    RAG_CHUNK_OVERLAP: int = field(default_factory=lambda: int(_env("RAG_CHUNK_OVERLAP", "90")))
+    # Retrieval.
+    RAG_FETCH_K: int = field(default_factory=lambda: int(_env("RAG_FETCH_K", "20")))
+    RAG_TOP_K: int = field(default_factory=lambda: int(_env("RAG_TOP_K", "5")))
+    # Optional features — every one defaults to the pre-existing behaviour.
+    RAG_SEARCH_MODE: str = field(default_factory=lambda: _env("RAG_SEARCH_MODE", "mmr"))
+    # Cosine distance; 0.0 = disabled.
+    RAG_SIMILARITY_THRESHOLD: float = field(
+        default_factory=lambda: float(_env("RAG_SIMILARITY_THRESHOLD", "0.0"))
+    )
+    # 0 = off.
+    RAG_MAX_CONTEXT_CHARS: int = field(
+        default_factory=lambda: int(_env("RAG_MAX_CONTEXT_CHARS", "0"))
+    )
+
     # ── Public tunnel ───────────────────────────────────────────────
     # The hostname Twilio must call back on. Declared here so the four copies
     # of the resolver (app/main.py twice — once dead — app/offers/service.py,

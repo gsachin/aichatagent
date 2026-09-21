@@ -87,6 +87,14 @@ def live_values() -> dict:
     `test_us018_rag_baseline.py` caught it. Anything that resolves these values
     must pass through this function, so this is the only place the guard has to
     be — and if a second resolution path is ever added, it must call this one.
+
+    Since US-011 TAC-1 (2026-09-21) the guard is no longer load-bearing for
+    these six keys: `rag_legacy` resolves them through `app.config`, which loads
+    `.env` itself, so import order no longer decides the answer and the negative
+    control in the test now asserts that agreement instead of the old gap. The
+    guard is kept deliberately — it is harmless, and a key still read straight
+    from `os.environ` at import time in `rag_legacy` (RAG_COLLECTION_NAME is
+    one) still depends on an earlier loader.
     """
     _load_env_if_present()
     from app import rag_legacy

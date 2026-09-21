@@ -93,26 +93,37 @@ with tempfile.TemporaryDirectory() as td:
     check("recording is idempotent (a second call is not an error)",
           rc.record_baseline(out=out) == out)
 
-# ── 4. NEGATIVE CONTROL: the environment trap is real ──────────────────
-# Without `.env`, rag_legacy falls back to its code defaults and the mode reads
-# `mmr`. With it, `hybrid`. If these ever became equal the guard below would be
-# testing nothing, so the difference is asserted rather than assumed.
-_default = rl.__dict__.get("RAG_SEARCH_MODE")
+# ── 4. The environment trap, and its removal ───────────────────────────
+# This control INVERTED on 2026-09-21, and the inversion is the finding.
+#
+# It used to assert that a bare process reports the code default `mmr` while the
+# configured value is `hybrid` — proof that rag_legacy's constants depended on
+# whether some earlier importer had loaded `.env`. That is the trap
+# `rag_config._load_env_if_present()` guards against, and this control is what
+# caught the guard being in the wrong place (see its docstring).
+#
+# US-011 TAC-1 removed the trap: rag_legacy now resolves all six of
+# `_LIVE_SOURCES` through app.config, which loads `.env` itself. The two values
+# therefore AGREE, and the control asserts that rather than being deleted —
+# "import order no longer decides" is exactly the property a regression would
+# quietly take away, and nothing else checks it.
 _env_mode = b["values"]["search_mode"]
-check("NEGATIVE CONTROL: the recorded mode is the CONFIGURED one, not the "
-      "code default", _env_mode == "hybrid",
-      f"recorded {_env_mode!r}, expected 'hybrid' from .env:141")
+check("the recorded mode is the CONFIGURED one, not the code default",
+      _env_mode == "hybrid", f"recorded {_env_mode!r}, expected 'hybrid' from .env:141")
 
 import subprocess  # noqa: E402
 bare = subprocess.run(
     [sys.executable, "-c",
      "from app import rag_legacy as r; print(r.RAG_SEARCH_MODE)"],
     capture_output=True, text=True, cwd=str(PROJ),
+    # Deliberately stripped from the child's environment, so the only way it can
+    # be seen is by loading `.env` — which is the thing under test.
     env={k: v for k, v in os.environ.items() if k != "RAG_SEARCH_MODE"})
 bare_mode = (bare.stdout or "").strip()
-check("NEGATIVE CONTROL: a bare process reports the CODE DEFAULT instead, so "
-      "the two really do differ and the guard matters",
-      bare_mode == "mmr", f"bare process reported {bare_mode!r}")
+check("TAC-1: a bare process resolves the SAME value, so import order no "
+      "longer decides (it reported the code default 'mmr' before TAC-1)",
+      bare_mode == _env_mode,
+      f"bare process reported {bare_mode!r}, configured {_env_mode!r}")
 
 print()
 print(f"{passed} passed, {failed} failed")
