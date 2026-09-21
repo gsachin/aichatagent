@@ -255,6 +255,24 @@ class Settings:
         default_factory=lambda: float(_env("RAG_MCP_COOLDOWN", "30"))
     )
 
+    # ── Logging ─────────────────────────────────────────────────────
+    # `.strip().upper()` is the call site's normalisation. A value that is not
+    # a logging level name is handled there — it warns and falls back to INFO —
+    # so an unrecognised level has to reach it intact rather than being
+    # silently replaced here.
+    LOG_LEVEL: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO").strip().upper())
+    # Empty means no file handler is installed at all.
+    LOG_FILE: str = field(default_factory=lambda: _env("LOG_FILE", "").strip())
+
+    # ── Call audio ──────────────────────────────────────────────────
+    # AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so
+    # caller audio is dropped while the assistant's TTS is playing — it is
+    # mostly the caller's mic re-capturing our own speech. Exact "1" match, as
+    # at the call site, so "true" does NOT enable it.
+    MUTE_STT_DURING_TTS: bool = field(
+        default_factory=lambda: _env("MUTE_STT_DURING_TTS", "1") == "1"
+    )
+
     # ── Boot readiness ──────────────────────────────────────────────
     # The LAUNCHER's port key, which is not the same key as PORT above: both
     # live in .env and both default 8000, but the launcher reads this one

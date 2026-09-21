@@ -62,6 +62,12 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+# Deliberately below the load_dotenv() call above and the AppLocker setdefaults,
+# which must run first. Importing app.config also loads .env itself, so this is
+# order-independent in practice — but keeping it here means the module-level
+# reads below cannot run before the environment is prepared.
+from app.config import settings
+
 def _configure_logging() -> None:
     """Apply LOG_LEVEL and LOG_FILE from the environment.
 
@@ -71,9 +77,7 @@ def _configure_logging() -> None:
     a key that is set and read by nothing is invisible until someone sweeps
     for exactly that.
     """
-    import os as _os
-
-    level_name = _os.environ.get("LOG_LEVEL", "INFO").strip().upper()
+    level_name = settings.LOG_LEVEL
     level = getattr(logging, level_name, None)
     if not isinstance(level, int):
         logging.basicConfig(level=logging.INFO)
@@ -83,7 +87,7 @@ def _configure_logging() -> None:
     else:
         logging.basicConfig(level=level)
 
-    log_file = _os.environ.get("LOG_FILE", "").strip()
+    log_file = settings.LOG_FILE
     if not log_file:
         return
     try:
@@ -130,7 +134,7 @@ _crm_worker = None
 # while the assistant's TTS is playing we drop incoming caller audio —
 # it is mostly the caller's mic re-capturing our own speech ("Listen to
 # her again" artifacts). Set MUTE_STT_DURING_TTS=0 to disable.
-MUTE_STT_DURING_TTS = os.environ.get("MUTE_STT_DURING_TTS", "1") == "1"
+MUTE_STT_DURING_TTS = settings.MUTE_STT_DURING_TTS
 
 
 from contextlib import asynccontextmanager
@@ -3445,7 +3449,6 @@ async def api_upload_document(
     from app.offers.models import add_document
     from pathlib import Path
     import uuid
-    import os as _os
 
     lead = await get_lead(lead_id)
     if not lead:
@@ -3456,7 +3459,9 @@ async def api_upload_document(
     safe_name = safe_name.replace(" ", "_")
 
     # Determine storage path
-    data_dir = Path(_os.environ.get("DATA_DIR", "data"))
+    # The same field the offer-letter path near the top of this file uses, so
+    # the two can no longer disagree when .env was never loaded.
+    data_dir = Path(settings.DATA_DIR)
     lead_dir = data_dir / "documents" / lead_id
     lead_dir.mkdir(parents=True, exist_ok=True)
 
