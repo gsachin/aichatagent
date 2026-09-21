@@ -48,6 +48,18 @@ BLOCKING = {
     "_retrieve_context",        # retrieval, sync
     "_get_tts_engine",          # loads the ONNX model
     "_get_stt_model",           # loads faster-whisper
+
+    # The polled DB reads. Each is the sync core behind an async wrapper that
+    # hands it to `asyncio.to_thread`; the four wrappers are polled every
+    # 10/30/60 s whether or not there is work, so a direct call here stops the
+    # loop with no traffic to blame it on. py-spy put the MainThread in
+    # `psycopg2.connect <- _get_db <- get_next_queued_call <- _poll_loop`
+    # (2026-09-21, measured): one failed connect to a dead Postgres costs ~2 s
+    # per address family on this box, and the poll burned ~4 s of every 14.
+    "_get_next_queued_call_sync",
+    "_get_due_follow_ups_sync",
+    "_list_expired_offers_sync",
+    "_depth_sync",
 }
 
 #: Sources worth scanning: the request-handling surface. `to_thread` callers
@@ -63,7 +75,12 @@ BLOCKING = {
 #: reports green on the path nobody looked at.
 SOURCES = ("app/main.py", "app/pipeline.py", "app/voice_handler.py",
            "app/admission.py", "app/work_priority.py",
-           "app/database.py", "app/leads/service.py")
+           "app/database.py", "app/leads/service.py",
+           # Where the `_sync` cores live. Scanning their own files is what
+           # makes the four entries above enforceable rather than decorative:
+           # the async wrapper's `to_thread(core, ...)` is not a direct call,
+           # and anything else that reaches for a core directly is.
+           "app/leads/models.py", "app/offers/models.py", "app/crm/outbox.py")
 
 IN_SCOPE = os.environ.get("EVENT_LOOP_SCAN_PATHS")
 

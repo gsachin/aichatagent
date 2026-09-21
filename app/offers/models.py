@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
@@ -673,7 +674,16 @@ async def list_expired_offers(limit: int = 20) -> list[dict]:
     Only ``status = 'sent'`` qualifies: an accepted or rejected offer has an
     answer, and expiring it would overwrite that. ``crm_expired_at`` is what keeps
     this idempotent — without it the sweep would re-push the same expiry forever.
+
+    The `_sync` core runs in a worker thread: the CRM outbox worker sweeps this
+    every 60 s regardless of traffic, and a blocking connect to a dead Postgres
+    stops the event loop for every live call (see `get_next_queued_call` in
+    app/leads/models.py for the py-spy evidence).
     """
+    return await asyncio.to_thread(_list_expired_offers_sync, limit)
+
+
+def _list_expired_offers_sync(limit: int = 20) -> list[dict]:
     try:
         conn = _get_db()
         if not conn:

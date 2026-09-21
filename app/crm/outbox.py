@@ -24,6 +24,7 @@ forever, which is what a naive outbox does by default.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -133,7 +134,17 @@ async def enqueue(
 
 
 async def depth() -> int:
-    """How many writes are waiting. Surfaced as an operational metric."""
+    """How many writes are waiting. Surfaced as an operational metric.
+
+    The `_sync` core runs in a worker thread: the outbox worker calls this on
+    every tick (60 s), traffic or not, and a blocking connect to a dead
+    Postgres freezes the event loop for every live call (see
+    `get_next_queued_call` in app/leads/models.py for the py-spy evidence).
+    """
+    return await asyncio.to_thread(_depth_sync)
+
+
+def _depth_sync() -> int:
     with _get_db() as conn:
         if conn is None:
             return 0

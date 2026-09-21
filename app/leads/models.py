@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -726,7 +727,15 @@ async def schedule_follow_up(
 
 
 async def get_due_follow_ups() -> list[dict]:
-    """Return follow-ups that are scheduled and due now."""
+    """Return follow-ups that are scheduled and due now.
+
+    Off the event loop for the same reason as `get_next_queued_call`: the
+    follow-up scheduler polls this every 30 s with or without work to do.
+    """
+    return await asyncio.to_thread(_get_due_follow_ups_sync)
+
+
+def _get_due_follow_ups_sync() -> list[dict]:
     with _get_db() as conn:
         if conn is None:
             return []
@@ -817,7 +826,19 @@ async def get_next_queued_call() -> dict | None:
     """
     Atomically claim the next queued call (status='queued' -> 'ringing').
     Uses UPDATE ... RETURNING with FOR UPDATE SKIP LOCKED for concurrency.
+
+    The `_sync` core runs in a worker thread, not on the event loop. This is
+    polled every 10 s whether or not there is any traffic, so a blocking
+    connect here froze the entire server: py-spy put the MainThread in
+    `psycopg2.connect <- _get_db <- get_next_queued_call <- _poll_loop`
+    (2026-09-21). One failed connect to a dead Postgres costs ~2 s per address
+    family on this box, so the poll burned ~4 s of every 14 with the whole loop
+    stopped -- `/health` answered in 2.3 s having done no work at all.
     """
+    return await asyncio.to_thread(_get_next_queued_call_sync)
+
+
+def _get_next_queued_call_sync() -> dict | None:
     with _get_db() as conn:
         if conn is None:
             return None
