@@ -210,6 +210,29 @@ class Settings:
         default_factory=lambda: int(_env("RAG_MAX_CONTEXT_CHARS", "0"))
     )
 
+    # ── MCP retrieval service ───────────────────────────────────────
+    RAG_MCP_URL: str = field(
+        default_factory=lambda: _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp")
+    )
+    # The read timeout; connect is fixed at 1.0s in the client. 6.0s, raised
+    # from 2.5s: under load ERC's embedding call queues behind Ollama
+    # generation, so a 2.5s read timeout fired on a service that answers in
+    # milliseconds — and the fallback then paid for a SECOND embedding. Waiting
+    # is strictly cheaper than timing out and re-retrieving locally.
+    RAG_MCP_TIMEOUT: float = field(
+        default_factory=lambda: float(_env("RAG_MCP_TIMEOUT", "6.0"))
+    )
+    # US-013 AC-2: a half-open probe gets a fraction of the serving budget, so
+    # rediscovering "still down" costs a fraction of a full timeout. The floor
+    # in `_timeout` keeps a probe from reading a merely-busy service as dead.
+    RAG_MCP_PROBE_FRACTION: float = field(
+        default_factory=lambda: float(_env("RAG_MCP_PROBE_FRACTION", "0.25"))
+    )
+    # Circuit-breaker cooldown.
+    RAG_MCP_COOLDOWN: float = field(
+        default_factory=lambda: float(_env("RAG_MCP_COOLDOWN", "30"))
+    )
+
     # ── Public tunnel ───────────────────────────────────────────────
     # The hostname Twilio must call back on. Declared here so the four copies
     # of the resolver (app/main.py twice — once dead — app/offers/service.py,

@@ -238,6 +238,14 @@ DYNAMIC_KEYS: dict[str, str] = {
         "admission.asset_drift(), which test_us016_admission drives by changing "
         "the voice in-process and requiring the next status call to report the "
         "drift. The synthesiser's own copy of it resolves through Settings."),
+    "RAG_RETRIEVAL_BUDGET": (
+        "US-013 AC-1's serving budget. test_us013_breaker lowers it in-process "
+        "and requires the very next _timeout(probe=False) to observe the "
+        "tighter cap — an import-time value cannot express that."),
+    "RAG_FALLBACK_RESERVE": (
+        "The reserve kept inside RAG_RETRIEVAL_BUDGET for the local "
+        "re-retrieval. Changed beside the budget by test_us013_breaker, for the "
+        "same reason: the next call must see it."),
 }
 
 _READ_SITE_PATTERNS = (

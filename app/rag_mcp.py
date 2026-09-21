@@ -12,16 +12,19 @@ Contract (verified against the service's streamable-HTTP endpoint):
     header -> POST tools/call with that header. Session-expiry (400/404)
     triggers exactly one re-initialize + one re-call.
 
-Env (read lazily per call so tests can monkeypatch):
-  RAG_MCP_URL       default http://127.0.0.1:8010/mcp
-  RAG_MCP_TIMEOUT   read timeout, default 6.0s (connect fixed at 1.0s).
-                    Raised from 2.5s: under load ERC's embedding call queues
-                    behind Ollama generation, so a 2.5s read timeout fired on
-                    a service that answers in milliseconds -- and the fallback
-                    then paid for a SECOND embedding. Waiting is strictly
-                    cheaper than timing out and re-retrieving locally.
-  RAG_MCP_COOLDOWN  circuit-breaker cooldown seconds, default 30
-  USE_MCP_RAG       auto | on | off (dispatch lives in app/rag.py)
+Configuration (US-011 TAC-1):
+  RAG_MCP_URL, RAG_MCP_TIMEOUT, RAG_MCP_PROBE_FRACTION and RAG_MCP_COOLDOWN
+  resolve through app/config.py. RAG_MCP_TIMEOUT's 6.0s was raised from 2.5s:
+  under load ERC's embedding call queues behind Ollama generation, so a 2.5s
+  read timeout fired on a service that answers in milliseconds -- and the
+  fallback then paid for a SECOND embedding. Waiting is strictly cheaper than
+  timing out and re-retrieving locally.
+
+  RAG_RETRIEVAL_BUDGET, RAG_FALLBACK_RESERVE, RAG_BREAKER_MODE and USE_MCP_RAG
+  are still read PER CALL, deliberately: the suite changes them in-process and
+  requires the very next call to observe it, which an import-time value cannot
+  do. They are on `config_truth.DYNAMIC_KEYS` with their reasons. A test that
+  needs to vary one of the four above must now reload this module.
 """
 import json
 import os
@@ -30,6 +33,8 @@ import time
 from typing import Any
 
 import httpx
+
+from app.config import settings
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -47,9 +52,9 @@ def _timeout(probe: bool = False) -> httpx.Timeout:
     floor keeps a probe from being so short that a merely-busy service reads as
     dead.
     """
-    read = float(_env("RAG_MCP_TIMEOUT", "6.0"))
+    read = settings.RAG_MCP_TIMEOUT
     if probe:
-        fraction = float(_env("RAG_MCP_PROBE_FRACTION", "0.25"))
+        fraction = settings.RAG_MCP_PROBE_FRACTION
         read = max(read * fraction, 0.5)
     else:
         # US-013 AC-1: one failure must cost one budget, not two. The caller
@@ -58,6 +63,8 @@ def _timeout(probe: bool = False) -> httpx.Timeout:
         # retrieval budget. The default budget (8 s) minus the reserve (1.5 s)
         # is 6.5 s and does not bind on the tuned 6 s timeout -- it binds only
         # when someone sets a tighter budget deliberately.
+        # Still per call: test_us013_breaker changes both in-process and needs
+        # the next _timeout(probe=False) to see it. Allowlisted, with reasons.
         budget = float(_env("RAG_RETRIEVAL_BUDGET", "8.0"))
         reserve = float(_env("RAG_FALLBACK_RESERVE", "1.5"))
         read = max(min(read, budget - reserve), 0.5)
@@ -135,7 +142,7 @@ def _post(payload: dict, session_id: str | None = None) -> httpx.Response:
     # Per-request timeout, never a client default: the probe path carries its
     # own shorter budget, and a default would silently override it.
     return _get_client().post(
-        _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
+        settings.RAG_MCP_URL,
         json=payload,
         headers=_headers(session_id),
         timeout=_timeout(probe=_probe_in_flight()),
@@ -402,7 +409,7 @@ def breaker_state() -> str:
     """
     if _breaker["failed_at"] is None:
         return "closed"
-    cooldown = float(_env("RAG_MCP_COOLDOWN", "30"))
+    cooldown = settings.RAG_MCP_COOLDOWN
     elapsed = (time.monotonic() - _breaker["failed_at"]) >= cooldown
     if breaker_mode() == "flat":
         return "closed" if elapsed else "open"
@@ -425,7 +432,7 @@ def _probe_in_flight() -> bool:
     claimed = _breaker.get("probe_claimed_at")
     if claimed is None:
         return True
-    budget = float(_env("RAG_MCP_TIMEOUT", "6.0")) + 1.0
+    budget = settings.RAG_MCP_TIMEOUT + 1.0
     if (time.monotonic() - claimed) > budget:
         _breaker["probing"] = False
         _breaker["probe_claimed_at"] = None
@@ -466,7 +473,7 @@ def mcp_rag_status() -> dict:
     """Operational snapshot for logs / the migration script."""
     return {
         "mode": _env("USE_MCP_RAG", "auto"),
-        "url": _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp"),
+        "url": settings.RAG_MCP_URL,
         "session_ok": _state["session_id"] is not None,
         "last_error": _breaker["last_error"],
         "cooldown_active": breaker_state() == "open",
