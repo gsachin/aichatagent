@@ -158,10 +158,22 @@ if [ "$DEV_MODE" = true ]; then
         --reload \
         > "$PROJECT_ROOT/logs/fastapi.log" 2>&1 &
 else
+    # Single process, ALWAYS -- do not add --workers here.
+    #
+    # This stack holds model residency (whisper, Kokoro) and per-call session
+    # state in-process, so a second worker loads a second copy of every model:
+    # on a 16 GB card already holding ~13 GB that is a crash, not a speedup.
+    #
+    # This branch used to pass --workers "${FASTAPI_WORKERS:-4}", which made
+    # FASTAPI_WORKERS the running count on this launcher alone -- and 4 when the
+    # key was unset OR empty -- while start_services.ps1/.sh, the Dockerfile and
+    # docker-compose all start one process. Removed 2026-09-21 (US-011, TAC-3)
+    # so every launcher agrees. FASTAPI_WORKERS is machine-sizing metadata
+    # written by the hardware profiler and is not a worker count; see
+    # app/main.py::_reconcile_workers.
     nohup python -m uvicorn app.main:app \
         --host 0.0.0.0 \
         --port "$FASTAPI_PORT" \
-        --workers "${FASTAPI_WORKERS:-4}" \
         > "$PROJECT_ROOT/logs/fastapi.log" 2>&1 &
 fi
 log_success "FastAPI started (PID: $!)"

@@ -285,8 +285,10 @@ class Settings:
     # distinguishes "unset" (say nothing) from "set to something that is not a
     # number" (warn) — so `int("")` must not happen on the way in.
     #
-    # In effect on one launcher only, and conditionally: see start.sh:164. The
-    # rest of this stack runs a single uvicorn worker by design.
+    # Not in effect on any launcher, and it is not a worker count: this stack
+    # runs a single uvicorn worker by design, and app/main.py's
+    # `_reconcile_workers` reports the value as NOT IN EFFECT at boot. The key
+    # is sizing metadata, so its value does not need to be 1.
     FASTAPI_WORKERS: str = field(
         default_factory=lambda: _env("FASTAPI_WORKERS", "").strip()
     )
