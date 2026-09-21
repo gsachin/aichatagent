@@ -9,12 +9,17 @@
 
 ## Headline
 
-**Nothing is uncommitted and nothing is pushed** — the branch has no upstream
-configured. The tree is safe to lose; the work is on disk in git.
+**Everything is committed, and the branch is pushed** — `origin` has
+`sdlc/us011-tac1-config-migration`, and the local branch tracks it. The tree is
+safe to lose; the work is on disk in git *and* on the remote.
 
-> For the session's commits and their count, do not trust a number written here —
-> a count in a document is stale the moment anything else is committed (this line
-> said "eleven" for one commit). Ask git instead:
+> Both halves of that sentence are the drifting kind, so do not trust them here —
+> ask git. Uncommitted: `git status --short`. Unpushed:
+> `git log --oneline @{u}..HEAD` (empty output means none).
+>
+> For the session's commits and their count, a number written in a document is
+> stale the moment anything else is committed (this line said "eleven" for one
+> commit, and "nothing is pushed" survived exactly one push). Ask git instead:
 > `git log --oneline 13d204e..HEAD`, where `13d204e` was HEAD when the session
 > opened. The table below lists the substantive ones and is not exhaustive by
 > construction.
