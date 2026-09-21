@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
+
+from app.config import Settings, settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = PROJECT_ROOT / ".env"
@@ -90,14 +92,20 @@ class EffectiveValue:
     key: str
     value: str | None          # None when sensitive
     present: bool              # sensitive keys report presence, never value
-    source: str                # "authoritative (.env)" | "code default" | "detection artifact"
+    source: str                # "authoritative (.env)" | "code default"
     sensitive: bool
     inert: bool = False        # written but referenced from no code path
+    #: TAC-6's third origin: the detection artifact carried a value for this key
+    #: and did NOT win. Empty when the artifact said nothing about the key, which
+    #: is the distinction that was missing -- before this, a key the artifact
+    #: carried and a key it did not were indistinguishable.
+    artifact: str = ""
 
     def render(self) -> str:
         shown = "<present>" if self.sensitive else ("<unset>" if self.value is None else self.value)
         flags = "  [INERT - written but never read]" if self.inert else ""
-        return f"  {self.key:<28} {shown:<24} <- {self.source}{flags}"
+        note = f"  [{self.artifact}]" if self.artifact else ""
+        return f"  {self.key:<28} {shown:<24} <- {self.source}{note}{flags}"
 
 
 def is_sensitive(key: str) -> bool:
@@ -364,20 +372,78 @@ def validate_types(env: dict[str, str] | None = None) -> list[str]:
     return problems
 
 
+def _profile_applied() -> dict[str, str]:
+    """The detection artifact's `applied` block, or {} when it is absent.
+
+    Read through `hardware_profile.load_snapshot` so there is one reader of that
+    file, and never through `check_drift()` -- which probes the live machine and
+    has no business running inside a configuration report.
+
+    Never raises: a missing or unreadable artifact is "no evidence", which is a
+    valid state (a fresh clone has not run predeploy yet), not an error.
+    """
+    try:
+        from app.hardware_profile import load_snapshot
+
+        snap = load_snapshot()
+        if isinstance(snap, dict):
+            applied = snap.get("applied")
+            if isinstance(applied, dict):
+                return {str(k): str(v) for k, v in applied.items()}
+    except Exception:                              # noqa: BLE001
+        pass
+    return {}
+
+
 def effective_configuration() -> tuple[EffectiveValue, ...]:
-    """Value + provenance per key. Sensitive values are never rendered (TAC-4)."""
+    """Value + provenance per known setting. Sensitive values are never rendered (TAC-4).
+
+    TAC-6 names THREE origins -- the authoritative file, a documented code
+    default, and the detection artifact consulted and overridden -- and until
+    2026-09-21 this function reported ONE. It enumerated `.env`'s keys and
+    stamped every row "authoritative (.env)", which had two consequences:
+
+      * the `Settings` fields with no `.env` entry -- which is every documented
+        default -- were not listed at all, so "why is it this value" had no
+        answer for them, and that question is what TAC-6 exists to answer; and
+      * a key the artifact also carried was indistinguishable from one it did
+        not, so `overridden_detection_artifact` was unreachable.
+
+    The row set is now the union of `.env`'s keys and `Settings`' fields, and
+    `source` is COMPUTED from which of the two supplied the value rather than
+    stamped. A key absent from `.env` reports the value `settings` resolved,
+    i.e. the same resolution the process uses, rather than a re-derived guess.
+    """
     env = parse_env_file()
     corpus = _app_corpus()
+    applied = _profile_applied()
+
+    known = set(env) | {f.name for f in fields(Settings)}
     out: list[EffectiveValue] = []
-    for key in sorted(env):
+    for key in sorted(known):
         sens = is_sensitive(key)
+        in_env = key in env
+        if in_env:
+            raw = env[key]
+        else:
+            resolved = getattr(settings, key, None)
+            raw = "" if resolved is None else str(resolved)
+
+        note = ""
+        if in_env and key in applied and applied[key] != env[key]:
+            # TAC-6's third origin, in T-1's own words: `.env` wins and the
+            # artifact is recorded as the thing that was overridden, with the
+            # value it carried so the divergence is readable, not just flagged.
+            note = f"overridden_detection_artifact (applied={applied[key]})"
+
         out.append(EffectiveValue(
             key=key,
-            value=None if sens else env[key],
-            present=env[key] != "",
-            source="authoritative (.env)",
+            value=None if sens else raw,
+            present=bool(raw),
+            source="authoritative (.env)" if in_env else "code default",
             sensitive=sens,
             inert=not is_read_anywhere(key, corpus),
+            artifact=note,
         ))
     return tuple(out)
 

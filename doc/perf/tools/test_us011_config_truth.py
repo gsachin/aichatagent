@@ -39,8 +39,65 @@ report = ct.report()
 check("AC-1 .env is the authority and was actually parsed", len(env) > 20,
       f"{len(env)} keys")
 prov = {ev.key: ev.source for ev in ct.effective_configuration()}
+# This check used to read `all(s.startswith("authoritative"))`. That was true
+# only because `source` was a CONSTANT -- the assertion enshrined the defect,
+# and implementing TAC-6 correctly is what broke it (58 `Settings` fields with
+# no `.env` entry now report "code default", which is the point). The property
+# worth asserting is that each origin is a KNOWN one and that they are
+# DISTINGUISHED rather than stamped.
+_ORIGINS = {"authoritative (.env)", "code default"}
 check("AC-1 every key reports a provenance",
-      all(s.startswith("authoritative") for s in prov.values()) and prov)
+      bool(prov) and set(prov.values()) <= _ORIGINS, str(set(prov.values())))
+check("TAC-6 the origins are distinguished, not a single stamped value",
+      len(set(prov.values())) >= 2,
+      f"a constant source answers nothing: {set(prov.values())}")
+
+# TAC-6's third origin. Exactly the keys where the artifact disagrees with .env
+# must carry the note, and no others -- stated as an equality so the check holds
+# (and still tests something) on a box with no detection artifact at all.
+_env_now = ct.parse_env_file()
+_applied = ct._profile_applied()
+_divergent = {k for k, v in _applied.items() if k in _env_now and _env_now[k] != v}
+_noted = {e.key for e in ct.effective_configuration() if e.artifact}
+check("TAC-6 an overridden artifact value is recorded, and only where it was overridden",
+      _noted == _divergent, f"noted {sorted(_noted)}, expected {sorted(_divergent)}")
+
+# --- T-10: no authoritative file -> documented defaults, reported as such ----
+# Before 2026-09-21 this scenario was not merely untested, it was UNREACHABLE:
+# the row set WAS `.env`'s keys, so removing the file produced an EMPTY report
+# rather than a defaulted one, and "documented default" was not an origin the
+# code could express.
+#
+# The simulation has to strip os.environ as well as the file. `app/config.py`
+# calls `load_dotenv` at import, so the singleton `settings` already holds the
+# `.env` values; patching the file reader alone would leave `settings` serving
+# configured values while the report claimed "code default" -- a green test
+# asserting the wrong thing, which is the failure mode this whole file exists
+# to avoid. Rebuilding `Settings()` with the keys gone is what a fresh clone
+# actually does.
+import app.config as _cfg                                   # noqa: E402
+
+_removed = {k: os.environ.pop(k) for k in list(_env_now) if k in os.environ}
+_real_parse, _real_settings = ct.parse_env_file, ct.settings
+try:
+    ct.parse_env_file = lambda path=None: {}
+    ct.settings = _cfg.Settings()          # rebuilt with the keys absent
+    _defaults = ct.effective_configuration()
+finally:
+    ct.parse_env_file, ct.settings = _real_parse, _real_settings
+    os.environ.update(_removed)
+
+check("T-10 with no authoritative file every key still reports",
+      len(_defaults) > 20, f"{len(_defaults)} rows")
+check("T-10 ...and each is sourced from a documented code default",
+      all(v.source == "code default" for v in _defaults),
+      str({v.source for v in _defaults}))
+check("T-10 ...and none claims the artifact was overridden",
+      all(v.artifact == "" for v in _defaults),
+      str([v.key for v in _defaults if v.artifact][:5]))
+check("T-10 ...and the restored run is back to reporting both origins",
+      {v.source for v in ct.effective_configuration()} == _ORIGINS,
+      "the simulation leaked into the live configuration")
 
 # --- TAC-2: inert keys found, by name --------------------------------------
 inert = ct.sweep_inert_keys(env)

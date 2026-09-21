@@ -2,7 +2,7 @@
 
 # US-011 — One source of configuration truth [Lens: PO]
 
-- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; TAC-1 MIGRATION COMPLETE 2026-09-21 (Phase 1.2, zero unexplained reads; bucket D closed); AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` **40/40** · `test_us011_import_order.py` 13/13 · **DoD 6/8** · the two open boxes are sized in "Remaining DoD — assessed 2026-09-21": ~3–6 h, and only the TAC-8 load pair needs a quiet box · **T-14 is the one genuine code gap** (the harness does not carry the effective configuration into a run summary)
+- **Status:** **IMPLEMENTED - TAC-5 wired 2026-09-19; TAC-1 MIGRATION COMPLETE 2026-09-21 (Phase 1.2, zero unexplained reads; bucket D closed); AC-4/TAC-7 still partial; BRD-15 demonstrated** · `test_us011_config_truth.py` **46/46** · `test_us011_import_order.py` 13/13 · **DoD 6/8** · the two open boxes are sized in "Remaining DoD — assessed 2026-09-21": ~3–5 h, and only the TAC-8 load pair needs a quiet box · **TAC-6 implemented 2026-09-21** — provenance reported a constant until then, and the check asserting otherwise was enforcing the defect
 
   **TAC-1 migration, Phase 1.2 (2026-09-20, branch `sdlc/us011-tac1-config-migration`).** TAC-1 requires that no setting is read from `os.environ` directly in `app/`. The sweep that reports this returned *filenames*, so it could not tell a file reading an allowlisted dynamic key from one reading a key nobody had documented — the target was unverifiable, not just unmet. `sweep_unexplained_env_reads()` is now the gate: a per-read scan returning `(file, line, key)`, matched over whole files because several reads put the key on the line after the call. `DYNAMIC_KEYS` is the allowlist, derived from what actually mutates each key at runtime rather than from judgement — `USE_MCP_RAG` (14 mutation sites in the suite), `ADMISSION_ENABLED` and `BG_PRIORITY_ENABLED` (6 each), `RAG_BREAKER_MODE` (5), then four keys at 2 and `MACHINE_PROFILE_CHECK` at 1. Those reads must stay dynamic: the suite and the `BRD-15` rollback path change them in-process and require the very next call to observe it, which a value resolved once at import cannot do. So the target is **zero unexplained reads**, not zero reads, and the report states that split (total / kept by design / unexplained with `file:line:key`) rather than one file count.
 
@@ -232,15 +232,41 @@ def sweep_inert_keys() -> tuple[str, ...]: ...
 ### T-1 … T-17 — evidence mapped, 2026-09-21
 
 The DoD box asks that "tests from the LLD test scenarios pass". Mapped against
-the checks that actually exist, **nine pass, five are partial, three are not
-run**, and the partials are named rather than averaged away. A scenario marked
-PARTIAL is one whose *scenario* is not fully exercised even where the
-underlying behaviour is right — which is the distinction this story exists to
+the checks that actually exist: **eleven pass, four are partial, two are not
+run** (T-13/T-17, the TAC-8 load pair). The partials are named rather than
+averaged away — a scenario marked PARTIAL is one not fully exercised even where
+the underlying behaviour is right, which is the distinction this story exists to
 keep.
+
+**Mapping T-1 and T-10 found that TAC-6 was not implemented, and that a passing
+check was enforcing the defect.** TAC-6 names three origins — the authoritative
+file, a documented code default, and the detection artifact consulted and
+overridden. `effective_configuration()` reported **one**. It enumerated `.env`'s
+keys and stamped every row `"authoritative (.env)"`, so `source` was a
+*constant*, and two consequences followed:
+
+- the **58 `Settings` fields with no `.env` entry** — every documented default —
+  did not appear in the report at all, so "why is it this value" had no answer
+  for them, and that question is what TAC-6 exists to answer; and
+- a key the artifact also carried was indistinguishable from one it did not, so
+  `overridden_detection_artifact` was unreachable and T-1's scenario could not
+  be satisfied by any amount of testing.
+
+The check named *"AC-1 every key reports a provenance"* asserted
+`all(s.startswith("authoritative"))` — which was true only because the value was
+a constant. **It would have failed the moment provenance was implemented
+correctly**, so the suite was holding the defect in place: 58 keys correctly
+reporting "code default" is what broke it, not a regression. The row set is now
+the union of `.env`'s keys and `Settings`' fields (64 + 58 = **122 rows**), and
+`source` is computed from which of the two supplied the value. The three real
+divergences the report had been hiding are now visible — `OLLAMA_MODEL`
+(`applied=qwen2.5:14b` vs `llama3.2:3b`), `WHISPER_NUM_THREADS` (`6` vs `4`) and
+`LLM_PROVIDER` — which are precisely the `REC-05`/`DG-05` disagreements this
+module was built to surface.
 
 | # | Status | Evidence, or what is missing |
 |---|---|---|
-| T-1 | **PARTIAL** | The resolution is right, but two things the scenario claims are not. `overridden_detection_artifact` — the literal it says is recorded — is produced nowhere (0 matches). And the check that reads as its evidence, *"the authoritative file is .env, not the detection artifact"* (`doc/perf/tools/test_brd15_rollback.py:323`), asserts only that every `source` is one of the three known strings; it **would pass with every key sourced from the artifact**. Its name claims more than its assertion tests. |
+| T-1 | **PASS — closed 2026-09-21** | It was PARTIAL for two reasons, both now fixed. `overridden_detection_artifact` is produced: a key the artifact carries *and* `.env` overrides now records `overridden_detection_artifact (applied=…)`, so the divergence is readable and not merely flagged. And the check that reads as its evidence — *"the authoritative file is .env, not the detection artifact"* (`doc/perf/tools/test_brd15_rollback.py:323`) — asserted only that every `source` was one of three known strings, so it **would have passed with every key sourced from the artifact**. It now tests the keys where the two actually disagree, which is what "`.env` wins" means. |
 | T-2 | **PASS** | *"TAC-5 malformed int is named"*, *"malformed float is named"* (`test_us011_config_truth.py`), plus `check_config_keys` in the US-007 gate (46/46). |
 | T-3 | **PASS** | *"TAC-4 a sensitive value renders as a marker"*. |
 | T-4 | **PASS** | *"TAC-4 no secret value appears in the report"*, and now also the harness's `tac7_no_secret_value_is_carried` on the run artifact. |
@@ -249,7 +275,7 @@ keep.
 | T-7 | **PASS** | Closed by the launcher fix (`b175b97`): the boot report says NOT IN EFFECT and `start.sh` passes no `--workers`. Verified live in the boot log. |
 | T-8 | **PARTIAL** | *"changing it changes the effective value, with no code change"* demonstrates it **in-process**. "After a restart" is not exercised — deliberately, per that test's own comment, so the demonstration does not depend on restarting the process. |
 | T-9 | **PASS** | This is the `FASTAPI_WORKERS` / `start.sh` case, and it is the one where the disagreement was real. Closed by `b175b97`; the authority is `.env` and the script no longer has a competing default. |
-| T-10 | **NOT COVERED** | Nothing removes the authoritative file and asserts `source="default"` on every key. The behaviour exists (`_env` falls back and provenance reports `code default`); no test drives it. |
+| T-10 | **PASS — closed 2026-09-21** | It was not merely untested but **unreachable**: the row set was `.env`'s keys, so removing the file produced an *empty report*, and "documented default" was not an origin the code could express. Now covered by four checks, which rebuild `Settings()` with the keys stripped from `os.environ` as well as the file — patching the file reader alone would leave `settings` serving configured values while the report claimed "code default", a green test asserting the wrong thing. Non-vacuity shown against the old implementation, which yields **0 rows** here. |
 | T-11 | **PARTIAL** | *"the sweep still detects a planted unread key"* covers the mechanism the scenario needs. No test renames a real key end to end. |
 | T-12 | **PARTIAL** | The sweep reports zero inert keys, which is the stronger outcome. The scenario asks specifically that the **five known instances** each resolve to read-or-inert, and that enumeration is not asserted as such. |
 | T-13 | **NOT RUN** | Needs the stack; part of the TAC-8 pair with T-17. |
@@ -279,7 +305,7 @@ and is not done here.
 
 ## Definition of Done
 - [x] All ACs pass (AC-1 … AC-4, TAC-1 … TAC-8)
-- [ ] Tests from the LLD test scenarios pass (T-1 … T-17) — **mapped 2026-09-21: 9 pass, 5 partial, 3 not run** (evidence table above). T-14 was the code gap and is closed; the box stays open on the partials and the TAC-8 load pair, not on the mapping
+- [ ] Tests from the LLD test scenarios pass (T-1 … T-17) — **mapped 2026-09-21: 11 pass, 4 partial, 2 not run** (evidence table above). T-14, T-1 and T-10 are closed, and closing the last two is what exposed TAC-6 being unimplemented. The box stays open on T-8/T-11/T-12/T-15 and the TAC-8 load pair — not on the mapping, and not on TAC-6, which is now implemented
 - [ ] Perf/load test passed against the story's TACs (TAC-8 no start-time or per-turn regression)
 - [x] Schema migration applied — yes: `DAT-09` gains per-key provenance; `.machine_profile.json`'s `applied` block is marked non-authoritative in the docs and in the loader. **Closed 2026-09-21.** The provenance half was already live (`config_truth.EffectiveValue.source` classifies `authoritative (.env) | code default | detection artifact`, asserted by AC-1); the loader half was not — `load_snapshot` was a bare JSON read. It now carries the standing in its docstring, `write_snapshot` names `applied` for what it is ("written, not in force"), and B.4 records the demotion
 - [x] Module docs updated if contracts changed — `MOD-07` B.4 (`DAT-09` inventory gains provenance) and B.6 if the implementation differs from `TRD-24`. **Closed 2026-09-21.** B.4's inventory row read quality "4 keys inert, 3 disagree" / trust "conflicting" when the sweep has returned zero since Phase 1.2, and its `CONFIG_KEY.source` enum stopped at "explicit or default"; both now match the implementation, with the old wording quoted rather than deleted. B.6's as-built table listed **three** rows as having no implementation — two have since closed (the listening clause, and `TAC-5`'s malformed-value check), leaving one; the two were moved rather than dropped. A stale `start_services.ps1:635` citation in B.6 was corrected to `:153`
@@ -294,7 +320,7 @@ The four open boxes, sized. "Desk" means no live stack is needed.
 
 | # | Box | What is actually left | Kind | Estimate |
 |---|---|---|---|---|
-| 2 | LLD test mapping (T-1…T-17) | **Mapped 2026-09-21** (see the evidence table above) and **T-14 closed** — `load_harness.py` had no reference to the effective configuration at all; the run summary now embeds it, with three self-test checks. The mapping found more than the one gap it was predicted to: **9 pass, 5 partial, 3 not run**. The partials are T-1 (the literal it names is produced nowhere, and the check that reads as its evidence would pass with every key sourced from the artifact), T-8 (in-process only, not "after a restart"), T-11 (mechanism covered, no rename end-to-end), T-12 (the five-instance enumeration is not asserted), T-15 (gate half only). T-10 is NOT COVERED — nothing removes the authoritative file and asserts `source="default"`. T-13/T-17 are the load pair below. | Desk for T-8/T-12/T-15 notes; **code** for T-1's literal, T-10 and T-11 | mapping + T-14 **done**; remaining ≈ 2–4 h |
+| 2 | LLD test mapping (T-1…T-17) | **Mapped 2026-09-21**, and **T-14, T-1 and T-10 closed.** T-14: the run summary now embeds the effective configuration. T-1 + T-10: closing them exposed **TAC-6 being unimplemented** — `source` was a constant, so 58 `Settings` fields had no reported provenance and no key could record the artifact as overridden; the report is now 122 rows with computed provenance, surfacing the three real `.env`-vs-artifact divergences. **11 pass, 4 partial, 2 not run.** The remaining partials are T-8 (in-process only, not "after a restart"), T-11 (mechanism covered, no rename end-to-end), T-12 (the five-instance enumeration is not asserted), T-15 (gate half only). T-13/T-17 are the load pair below. | Desk for T-8/T-12/T-15/T-11 notes | mapping + T-14 + T-1 + T-10 + TAC-6 **done**; remaining ≈ 1–2 h |
 | 3 | TAC-8 no-regression load test | Start duration **and** per-turn p95, before vs after the resolution path. The "after" half is cheap. The "before" half is not: the pre-migration revision is 11+ commits back, so it means checking that revision out and running the same load against it. | **Live — needs a quiet box and the full stack resident** | 2–4 h wall-clock, two load runs |
 | ~~4~~ | ~~Schema migration — artifact marked non-authoritative~~ | **DONE 2026-09-21** — loader docstrings in `app/hardware_profile.py`, demotion recorded in B.4 | Desk | ~~30–60 min~~ |
 | ~~5~~ | ~~`MOD-07` B.4/B.6 reconciled~~ | **DONE 2026-09-21** — B.4 inventory + provenance enum; B.6's three "no implementation" rows reduced to one, the two closed ones moved rather than dropped; stale `ps1` citation fixed | Desk | ~~1–2 h~~ |

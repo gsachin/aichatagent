@@ -320,10 +320,21 @@ def us011() -> None:
     values = {v.key: v for v in ct.effective_configuration()}
     check("US-011  every managed key reports a provenance",
           all(v.source for v in values.values()) and len(values) > 20)
+    # The name of this check claimed more than its assertion tested: it passed
+    # for ANY of the three origins, so it would have passed with every key
+    # sourced from the detection artifact -- and when written, `source` was a
+    # constant, so that was not a hypothetical. What "the authoritative file is
+    # .env, not the detection artifact" MEANS is that .env wins where the two
+    # disagree, so the keys where they disagree are the ones that decide it.
+    applied = ct._profile_applied()
+    env_now = ct.parse_env_file()
+    divergent = {k for k, v in applied.items() if k in env_now and env_now[k] != v}
     check("US-011  the authoritative file is .env, not the detection artifact",
-          all("authoritative" in v.source or "default" in v.source
-              or "detection" in v.source for v in values.values()),
-          str({v.source for v in values.values()}))
+          all(values[k].source == "authoritative (.env)" for k in divergent if k in values)
+          and all(values[k].artifact for k in divergent if k in values),
+          f"{len(divergent)} divergent key(s), and each must be sourced from .env "
+          f"AND name the artifact it overrode: "
+          f"{ {k: (values[k].source, values[k].artifact) for k in divergent if k in values} }")
 
     # The revert: a value changed in the authoritative file changes the
     # effective value, and nothing else does. Demonstrated on a key whose
