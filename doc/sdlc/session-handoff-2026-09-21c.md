@@ -9,9 +9,15 @@
 
 ## Headline
 
-Eleven commits this session. **Nothing is uncommitted and nothing is pushed** — the
-branch has no upstream configured. The tree is safe to lose; the work is on disk
-in git.
+**Nothing is uncommitted and nothing is pushed** — the branch has no upstream
+configured. The tree is safe to lose; the work is on disk in git.
+
+> For the session's commits and their count, do not trust a number written here —
+> a count in a document is stale the moment anything else is committed (this line
+> said "eleven" for one commit). Ask git instead:
+> `git log --oneline 13d204e..HEAD`, where `13d204e` was HEAD when the session
+> opened. The table below lists the substantive ones and is not exhaustive by
+> construction.
 
 What landed, in order: the `start.sh` OOM path removed · Bucket D (engine-level
 `OLLAMA_*` keys) · **US-013's breaker finally wired to the serving path** · two
