@@ -29,6 +29,8 @@
 | `c127739` | `boot_readiness.py` + `hardware_profile.py` → 0. |
 | `3126a8d` | `main.py` 4 of 5 → 0. |
 | `e46efcb` | `FASTAPI_WORKERS` → 0, with its TAC-3 report corrected (below). |
+| `86065de` | The story, `MOD-03` and this handoff updated; two doc `file:line` citations this session had invalidated were corrected. |
+| `5fd363d` | **`test_us011_import_order.py`** — the migration's own claim, tested. 42 module-level constants across the six migrated modules, three child processes each (`bare` / `explicit` / `default`), all with the same `.env`-stripped environment: `bare == explicit` proves import order no longer decides, `bare != default` proves `.env` was genuinely consulted. Rendered non-vacuous by reverting `app/rag_legacy.py` alone to its pre-migration form and watching it fail with the real defect (`OLLAMA_MODEL: 'qwen2.5:7b-instruct-q3_K_M' != 'llama3.2:3b'`), then restoring. |
 
 ## The findings worth carrying forward
 
@@ -89,13 +91,23 @@ identical with the changes stashed.
 - Unexplained reads: **0** (of 16 direct reads, all allowlisted)
 - Files reading `os.environ` directly: **9**
 - `test_us011_config_truth.py`: **38/38** (was 34/34)
+- `test_us011_import_order.py`: **13/13, 2 noted** (~21 s) — new, see below
 - Full `tests/` suite: **550 passed**, 1 pre-existing failure
 - Targeted subset: **331 passed**
 - Doc gates: `test_doc_citations.py` 5/5, `test_doc_truth.py` 6/6
 
 ## Next actions, in order
 
-1. **Decide `start.sh`'s `${FASTAPI_WORKERS:-4}`** (finding 1). Either default it
+1. **Restart the stack and watch the boot.** The static half of this is now done
+   — `test_us011_import_order.py` proves the resolved values no longer depend on
+   import order, and the gate proves every read goes through `Settings`. What is
+   still unverified is that a real process boots and serves on the migrated code:
+   eleven commits changed how every module resolves configuration, and nothing
+   has run them as a process. Expect no behaviour change (`app/main.py` already
+   loaded `.env` early, so the app's own values were never wrong) — a difference
+   is the interesting signal, not a regression to shrug at.
+
+2. **Decide `start.sh`'s `${FASTAPI_WORKERS:-4}`** (finding 1). Either default it
    to 1 or make it read `.env`, and say which. Nothing else in this phase has
    this blast radius.
 2. **Bucket D** — the engine-level `OLLAMA_*` keys documented in `.env.example`
