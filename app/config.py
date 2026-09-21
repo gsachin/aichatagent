@@ -45,6 +45,79 @@ class Settings:
     # ── Chunk size for streaming (in frames) ────────────────────────
     CHUNK_FRAMES: int = 320          # 20 ms at 16 kHz
 
+    # ── Speech-to-text (faster-whisper) ─────────────────────────────
+    WHISPER_MODEL: str = field(default_factory=lambda: _env("WHISPER_MODEL", "small.en"))
+    # Sized per machine by scripts/predeploy.py. Note pipecat's
+    # WhisperSTTSettings has no cpu_threads param, so this reaches the
+    # voice_handler STT path only.
+    WHISPER_NUM_THREADS: int = field(
+        default_factory=lambda: int(_env("WHISPER_NUM_THREADS", "4"))
+    )
+    # A presence check, not a value: `_get_stt_model` picks cuda when this is
+    # set and non-empty. Kept as the raw string so the truthiness test is
+    # unchanged — "0" selects cuda here exactly as it did before, which is the
+    # behaviour CUDA_VISIBLE_DEVICES is documented to have.
+    CUDA_VISIBLE_DEVICES: str = field(
+        default_factory=lambda: _env("CUDA_VISIBLE_DEVICES", "")
+    )
+
+    # ── Text-to-speech (Kokoro) ─────────────────────────────────────
+    # `.strip() or` and `.strip().lower()` are the call sites' own
+    # normalisation, copied rather than re-invented so the value resolved here
+    # is the one the synthesiser used.
+    KOKORO_VOICE: str = field(
+        default_factory=lambda: _env("KOKORO_VOICE", "af_heart").strip() or "af_heart"
+    )
+    # The raw string, not a float. `_parse_tts_speed` clamps to [0.5, 2.0] and
+    # WARNS rather than raising — a typo in .env must not stop the stack from
+    # answering calls — and its warning quotes the offending text, so the
+    # unparsed value is what has to survive to the call site.
+    KOKORO_SPEED: str = field(default_factory=lambda: _env("KOKORO_SPEED", "1.0"))
+    # US-012 AC-4: the cache-isolation fallback must be a configuration change,
+    # not a code revert. "shared" is the DG-06 decision; "per_call" bounds the
+    # cache to one session's utterances.
+    TTS_CACHE_SCOPE: str = field(
+        default_factory=lambda: _env("TTS_CACHE_SCOPE", "shared").strip().lower()
+    )
+    # US-005 streaming TTS, behind a flag because adoption is gated on DG-03.
+    # The batch path is retained unchanged as the BRD-15 revert.
+    TTS_STREAM: bool = field(
+        default_factory=lambda: _env("TTS_STREAM", "0").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+
+    # ── STT noise gate (pre-LLM guardrails) ─────────────────────────
+    STT_MIN_AVG_LOGPROB: float = field(
+        default_factory=lambda: float(_env("STT_MIN_AVG_LOGPROB", "-4.0"))
+    )
+    STT_MAX_NO_SPEECH_PROB: float = field(
+        default_factory=lambda: float(_env("STT_MAX_NO_SPEECH_PROB", "0.8"))
+    )
+    STT_MIN_CHARS: int = field(default_factory=lambda: int(_env("STT_MIN_CHARS", "3")))
+    # Utterances shorter than this are noise bursts (15 x 20 ms = 300 ms).
+    MIN_UTTERANCE_FRAMES: int = field(
+        default_factory=lambda: int(_env("MIN_UTTERANCE_FRAMES", "15"))
+    )
+
+    # ── End-of-speech delay (BRD-04) ────────────────────────────────
+    # These two are the IMPORT-TIME fallbacks only. The live decision is read
+    # per session by `_vad_silence_frames()` / `_speculative_advance_ms()`,
+    # which read the environment directly and are on the dynamic allowlist:
+    # a deployment must be able to move the delay without a rebuild, and a test
+    # must be able to vary it without reloading the module.
+    #
+    # `or 600` / `or 220` mirror those readers' empty-value guard, which treats
+    # an empty value as unset. Without it `int("")` would raise at import while
+    # the live reader silently fell back — two answers to the same question,
+    # which is the defect US-011 exists to remove.
+    VAD_SILENCE_MS: int = field(
+        default_factory=lambda: int(_env("VAD_SILENCE_MS", "600") or 600)
+    )
+    # Read the speculative lead (the measured STT p50, 203 ms, rounded up).
+    VAD_SPECULATIVE_ADVANCE_MS: int = field(
+        default_factory=lambda: int(_env("VAD_SPECULATIVE_ADVANCE_MS", "220") or 220)
+    )
+
     # ── Public tunnel ───────────────────────────────────────────────
     # The hostname Twilio must call back on. Declared here so the four copies
     # of the resolver (app/main.py twice — once dead — app/offers/service.py,

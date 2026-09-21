@@ -36,6 +36,11 @@ from pathlib import Path
 import numpy as np
 from typing import AsyncIterator, Callable
 
+# US-011 TAC-1: settings resolve once, through one loader that also reads .env.
+# Reading os.environ here meant the value in force depended on whether some
+# other importer had already loaded .env — this module never did.
+from app.config import settings
+
 logger = logging.getLogger("voice_handler")
 
 # Structured call-event timeline (Phase 0 observability): every line is
@@ -47,7 +52,7 @@ voice_events = logging.getLogger("voice_events")
 
 _stt_model = None
 _tts_engine = None
-_STT_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small.en")  # small.en or medium.en
+_STT_MODEL_SIZE = settings.WHISPER_MODEL  # small.en or medium.en
 
 
 def _get_stt_model():
@@ -64,7 +69,7 @@ def _get_stt_model():
         from app.platform import get_whisper_device_config
         device, compute_type = get_whisper_device_config()
     except Exception:
-        device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+        device = "cuda" if settings.CUDA_VISIBLE_DEVICES else "cpu"
         compute_type = "int8" if device == "cuda" else "float32"
 
     logger.info(f"Loading faster-whisper {_STT_MODEL_SIZE} on {device} ({compute_type})...")
@@ -75,7 +80,7 @@ def _get_stt_model():
         _STT_MODEL_SIZE,
         device=device,
         compute_type=compute_type,
-        cpu_threads=int(os.environ.get("WHISPER_NUM_THREADS", "4")),
+        cpu_threads=settings.WHISPER_NUM_THREADS,
     )
     logger.info(f"faster-whisper {_STT_MODEL_SIZE} ready on {device}")
     return _stt_model
@@ -163,7 +168,7 @@ def _get_tts_engine():
 #: degrades into artefacts, which is worse than ignoring the setting. A value
 #: that will not parse falls back to 1.0 with a warning rather than raising --
 #: a typo in .env must not stop the stack from answering calls.
-TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart").strip() or "af_heart"
+TTS_VOICE = settings.KOKORO_VOICE
 
 
 def _parse_tts_speed(raw: str) -> float:
@@ -180,20 +185,19 @@ def _parse_tts_speed(raw: str) -> float:
     return clamped
 
 
-TTS_SPEED = _parse_tts_speed(os.environ.get("KOKORO_SPEED", "1.0"))
+TTS_SPEED = _parse_tts_speed(settings.KOKORO_SPEED)
 
 #: US-012 AC-4: the isolation fallback must be a CONFIGURATION change, not a code
 #: revert. "shared" is the DG-06 decision (one process-wide cache, reused across
 #: callers); "per_call" bounds the cache to a single session's utterances and
 #: gives up cross-caller reuse in exchange for isolation that needs no argument.
-TTS_CACHE_SCOPE = os.environ.get("TTS_CACHE_SCOPE", "shared").strip().lower()
+TTS_CACHE_SCOPE = settings.TTS_CACHE_SCOPE
 
 #: US-005 (streaming TTS, PO build-approved 2026-09-19): the FIRST audio chunk
 #: of an answer is sent while the rest is still being synthesised. Behind a
 #: flag because adoption is gated on DG-03; the batch path (`_synthesise`) is
 #: retained unchanged as the BRD-15 revert (flip the flag, no code change).
-TTS_STREAM = os.environ.get("TTS_STREAM", "0").strip().lower() in (
-    "1", "true", "yes", "on")
+TTS_STREAM = settings.TTS_STREAM
 
 
 def _cache_key_sha(cache_key: tuple) -> str:
@@ -332,11 +336,11 @@ def _is_clarification(text: str) -> bool:
 
 # ── STT noise gate + deterministic hangup (pre-LLM guardrails) ────────
 
-STT_MIN_AVG_LOGPROB = float(os.environ.get("STT_MIN_AVG_LOGPROB", "-4.0"))
-STT_MAX_NO_SPEECH_PROB = float(os.environ.get("STT_MAX_NO_SPEECH_PROB", "0.8"))
-STT_MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "3"))
+STT_MIN_AVG_LOGPROB = settings.STT_MIN_AVG_LOGPROB
+STT_MAX_NO_SPEECH_PROB = settings.STT_MAX_NO_SPEECH_PROB
+STT_MIN_CHARS = settings.STT_MIN_CHARS
 # Utterances shorter than this are treated as noise bursts (15 × 20 ms = 300 ms).
-MIN_UTTERANCE_FRAMES = int(os.environ.get("MIN_UTTERANCE_FRAMES", "15"))
+MIN_UTTERANCE_FRAMES = settings.MIN_UTTERANCE_FRAMES
 
 # ── BRD-04: the ONE live end-of-speech decision ─────────────────────────
 # "The system shall have exactly one live end-of-speech decision, its delay
@@ -355,7 +359,7 @@ MIN_UTTERANCE_FRAMES = int(os.environ.get("MIN_UTTERANCE_FRAMES", "15"))
 # because 600 ms is the pause tolerance callers are given, and the fixtures
 # encode a 240 ms mid-turn hesitation as a real caller behaviour that must
 # survive. Lowering it is not a free win: it splits callers who pause.
-VAD_SILENCE_MS = int(os.environ.get("VAD_SILENCE_MS", "600"))
+VAD_SILENCE_MS = settings.VAD_SILENCE_MS
 VAD_SILENCE_FRAMES = max(1, round(VAD_SILENCE_MS / 20))
 
 
@@ -383,7 +387,7 @@ def _vad_silence_frames() -> int:
 #: 0 to disable. Default: start STT 220 ms before the endpoint fires, which is
 #: the measured STT p50 (203 ms) rounded up -- starting earlier would usually
 #: finish before the window closed and waste a GPU pass on resumed callers.
-VAD_SPECULATIVE_ADVANCE_MS = int(os.environ.get("VAD_SPECULATIVE_ADVANCE_MS", "220"))
+VAD_SPECULATIVE_ADVANCE_MS = settings.VAD_SPECULATIVE_ADVANCE_MS
 
 
 def _speculative_advance_ms() -> int:

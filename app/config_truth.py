@@ -223,6 +223,21 @@ DYNAMIC_KEYS: dict[str, str] = {
         "Trace destination, set per test to keep runs out of the real file."),
     "MACHINE_PROFILE_CHECK": (
         "Boot drift report switch (DG-05). Read at boot, tested both ways."),
+    "VAD_SILENCE_MS": (
+        "BRD-04's live end-of-speech delay. Read per session so a deployment "
+        "can move it without a rebuild, and so a test can vary it without "
+        "reloading the module — test_endpointing sets 400 ms and asserts the "
+        "next session's frame count follows. The import-time fallback for it "
+        "resolves through Settings.VAD_SILENCE_MS."),
+    "VAD_SPECULATIVE_ADVANCE_MS": (
+        "The speculative-STT lead, read per session for the same reason and "
+        "varied per case by test_endpointing. The import-time fallback resolves "
+        "through Settings.VAD_SPECULATIVE_ADVANCE_MS."),
+    "KOKORO_VOICE": (
+        "Compared against the recorded call-asset manifest by "
+        "admission.asset_drift(), which test_us016_admission drives by changing "
+        "the voice in-process and requiring the next status call to report the "
+        "drift. The synthesiser's own copy of it resolves through Settings."),
 }
 
 _READ_SITE_PATTERNS = (
