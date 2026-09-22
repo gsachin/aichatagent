@@ -143,7 +143,7 @@ The admissions counselor opens `https://xxx.trycloudflare.com/dashboard` and see
 
 ### 3.2 Live Call Monitor (Row 2 — Left)
 
-**Data source:** `GET /api/calls/live` (new SSE endpoint needed) + `GET /api/call-queue?status=active`
+**Data source:** `GET /api/calls/live` (JSON form, polled every 2 s)
 
 **What it shows:**
 - Every active call (inbound or outbound) as a card
@@ -164,7 +164,17 @@ New lines append at the bottom. Auto-scroll. Fade-in animation (300ms).
 
 **When no active calls:** Section collapses to "No active calls" with a phone icon. Click expands the quick-call panel.
 
-**Implementation:** SSE (Server-Sent Events) endpoint streams transcript updates. Fallback: poll `/api/call-queue` every 3 seconds.
+**Implementation (as built; corrected 2026-09-22):** polled, not streamed. The panel
+originally used the `?stream=true` SSE form and showed nothing for a whole call: through
+the Cloudflare tunnel the response headers arrive but the body never does, so the
+`EventSource` sat open and empty with no error to see. Measured against the live stack —
+the event arrives in 29 ms on a direct `127.0.0.1:8000` connection and never through the
+tunnel (10/12/20/35 s windows, both SSE endpoints in this app), while the JSON form moves
+10 KB through the same tunnel in 0.15 s. `pollLiveCalls()` in `app/static/dashboard.js`
+reads the whole active-call state every 2 s, which also covers what the stream could not:
+a page opened mid-call fills on the first tick, where the stream began at the newest event
+and so never announced a call already in progress. The SSE form is still served by
+`app/main.py` for callers that terminate at the origin.
 
 **New endpoint needed:** `GET /api/calls/live` — returns current active calls with their latest transcript snippet. Accepts `?stream=true` for SSE mode.
 
@@ -490,9 +500,8 @@ dashboard.js
 ├── Data Layer
 │   ├── fetchJSON(url)       ← generic API caller with error handling
 │   ├── pollStats()          ← GET /api/dashboard/summary (every 10s)
-│   ├── pollActiveCalls()    ← GET /api/calls/live (every 3s)
-│   ├── pollBatchStatus(id)  ← GET /api/quick-call/batch/{id} (every 3s)
-│   └── sseConnect()         ← SSE for real-time transcript streaming
+│   ├── pollLiveCalls()      ← GET /api/calls/live (every 2s; see §3.2)
+│   └── pollBatchStatus(id)  ← GET /api/quick-call/batch/{id} (every 3s)
 │
 ├── Render Layer
 │   ├── renderStatCards()    ← Row 1

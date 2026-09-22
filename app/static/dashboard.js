@@ -4,7 +4,7 @@ const state = {
   leads: [],
   conversations: [],
   stats: {},
-  activeCalls: [],
+  activeCalls: {},  // stream_sid -> call, filled by pollLiveCalls()
   batchJobs: {},
   ui: { activeTab: 'tabConversations' }
 };
@@ -89,8 +89,9 @@ async function init() {
   setInterval(loadLeads, 30000);
   setInterval(loadConversations, 30000);
 
-  // SSE for live calls
-  connectSSE();
+  // Live calls: polled, not streamed — pollLiveCalls() records why
+  pollLiveCalls();
+  setInterval(pollLiveCalls, LIVE_POLL_MS);
 
   // Load settings
   loadSettings();
@@ -116,7 +117,7 @@ async function loadSummary() {
   document.getElementById('statHotLeads').textContent = s.hot_leads || 0;
   document.getElementById('statTotalPipeline').textContent = s.total_pipeline || 0;
 
-  // Update active calls from SSE state
+  // Update the active-call count and pulse from the monitor's state
   const activeCount = Object.keys(state.activeCalls).length;
   document.getElementById('statActiveCalls').textContent = activeCount;
   const dot = document.getElementById('dotActiveCalls');
@@ -151,7 +152,7 @@ async function loadStats() {
   const health = await fetchJSON('/');
   state.stats = data;
 
-  document.getElementById('statActiveCalls').textContent = '0'; // populated by pollActiveCalls
+  document.getElementById('statActiveCalls').textContent = '0'; // populated by pollLiveCalls
   document.getElementById('statNewLeads').textContent = data.new_leads_today || data.total_leads || 0;
   document.getElementById('statDueFollowUps').textContent = data.upcoming_follow_ups || 0;
   document.getElementById('statHotLeads').textContent = Math.floor((data.total_leads || 0) * 0.3);
@@ -189,20 +190,6 @@ async function loadConversations() {
   state.conversations = Array.isArray(data) ? data : [];
   renderActivity();
   renderConversationsList();
-}
-
-async function pollActiveCalls() {
-  const data = await fetchJSON('/api/call-queue?status=active');
-  // activeCalls is any call in ringing or in-progress
-  const active = [];
-  document.getElementById('statActiveCalls').textContent = active.length;
-
-  const dot = document.getElementById('dotActiveCalls');
-  if (active.length > 0) {
-    dot.classList.add('pulse');
-  } else {
-    dot.classList.remove('pulse');
-  }
 }
 
 async function loadSettings() {
@@ -524,37 +511,57 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// ===== SSE: LIVE CALL MONITOR =====
-function connectSSE() {
-  const es = new EventSource(`${API_BASE}/api/calls/live?stream=true`);
-  es.addEventListener('call_started', (e) => {
-    const data = JSON.parse(e.data);
-    state.activeCalls[data.call_sid] = data;
-    renderLiveCalls();
-    document.getElementById('statActiveCalls').textContent = Object.keys(state.activeCalls).length;
+// ===== LIVE CALL MONITOR (polled) =====
+// Polled rather than streamed, because the stream does not survive the trip the
+// cockpit actually takes. It is normally opened through the Cloudflare tunnel,
+// and that hop returns the SSE response headers but never delivers the body: the
+// EventSource sits at readyState OPEN receiving nothing, so the panel showed
+// "No active calls right now" for the whole call, with no error anywhere to see.
+// Measured 2026-09-22 against the live stack — the same event arrives in 29 ms
+// direct on 127.0.0.1:8000 and never arrives through the tunnel (10 s, 12 s,
+// 20 s HTTP/1.1 and 35 s identity-encoding windows), on both SSE endpoints in
+// this app. A plain fetch of the JSON form moves 10 KB through the same tunnel
+// in 0.15 s.
+//
+// Polling also fixes what the stream never did: it began at the newest event
+// (`last_idx = len(_transcript_events) - 1` in app/main.py), so a page opened
+// mid-call never learned the call existed, and its transcript listener dropped
+// every turn for a call it had not seen start. This reads the whole active-call
+// state each tick, so opening or reloading the cockpit during a call fills the
+// panel on the first poll.
+const LIVE_POLL_MS = 2000;
+
+async function pollLiveCalls() {
+  const data = await fetchJSON('/api/calls/live');
+  if (!data) return;  // a blip keeps the last render rather than blanking it
+
+  const details = data.details || {};
+  const calls = {};
+  Object.keys(details).forEach(sid => {
+    const c = details[sid];
+    calls[sid] = {
+      call_sid: c.call_sid || sid,
+      direction: c.direction,
+      started_at: c.started_at,
+      transcripts: c.transcript || []
+    };
   });
-  es.addEventListener('transcript', (e) => {
-    const data = JSON.parse(e.data);
-    if (state.activeCalls[data.call_sid]) {
-      if (!state.activeCalls[data.call_sid].transcripts) {
-        state.activeCalls[data.call_sid].transcripts = [];
-      }
-      state.activeCalls[data.call_sid].transcripts.push(data.dialogue || '');
-      renderLiveCalls();
-    }
-  });
-  es.addEventListener('call_ended', (e) => {
-    const data = JSON.parse(e.data);
-    delete state.activeCalls[data.call_sid];
-    renderLiveCalls();
-    document.getElementById('statActiveCalls').textContent = Object.keys(state.activeCalls).length;
-  });
-  es.onerror = () => { /* Reconnect handled by browser */ };
-  state._sse = es;
+  state.activeCalls = calls;
+
+  const n = Object.keys(calls).length;
+  const el = document.getElementById('statActiveCalls');
+  if (el) el.textContent = n;
+  const dot = document.getElementById('dotActiveCalls');
+  if (dot) {
+    if (n > 0) { dot.classList.add('pulse'); } else { dot.classList.remove('pulse'); }
+  }
+
+  renderLiveCalls();
 }
 
 function renderLiveCalls() {
   const container = document.getElementById('liveCallsContent');
+  if (!container) return;
   const callIds = Object.keys(state.activeCalls);
   if (!callIds.length) {
     container.innerHTML = '<div class="empty-state"><span class="empty-icon">📞</span><p>No active calls right now</p><p class="empty-hint">Calls will appear here in real-time when active</p></div>';

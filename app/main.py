@@ -3156,6 +3156,13 @@ async def api_calls_live(stream: bool = False):
     """
     Get active calls with transcript snippets.
     Set ?stream=true for SSE (Server-Sent Events) real-time streaming.
+
+    The cockpit polls the JSON form (app/static/dashboard.js, every 2 s) instead
+    of using the stream: measured 2026-09-22, a Cloudflare tunnel returns this
+    response's headers but never its body, so the EventSource stayed silently
+    empty for a whole call. The stream still works on a direct connection and is
+    left in place for callers that terminate at the origin; both forms read the
+    same in-memory state.
     """
     if not stream:
         call_sids = list(_active_call_sids.keys())
