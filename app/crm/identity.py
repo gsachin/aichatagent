@@ -218,6 +218,46 @@ def normalize_email(raw: object) -> str:
     return email
 
 
+# ── The placeholder email ────────────────────────────────────────────────────
+#
+# ``POST /users/lookup-or-create`` requires ``email`` as a string of at least one
+# character, so a phone-only student is refused with a 422 before the API touches
+# any record. That refusal is a *permanent* failure, so it is never queued for
+# replay (see ``sync.push_status``) — the student is simply never linked. This is
+# what happened to the outbound call on 2026-09-20 to +917016872149, whose lead
+# row carried the literal string "null": normalized to "", refused, dropped.
+#
+# The obvious fix — one shared address such as ``emailnotfound@gmail.com`` — is
+# worse than the bug it repairs. The API resolves a person by email *first* and
+# falls back to phone only when the email finds nothing (``find_user`` in
+# salesforce-admission-api). A shared address therefore matches the first
+# placeholder record ever created, for every later student: the second
+# phone-only student's lookup hits the first one's row and returns *their*
+# userId, and the phone fallback is never reached. Every phone-only student
+# after the first would be silently merged into a single CRM record.
+#
+# Making the local part unique per phone keeps the address unique per person, so
+# the email lookup can only ever match that same person and the phone fallback
+# still does the real work.
+PLACEHOLDER_EMAIL_LOCAL = "emailnotfound"
+PLACEHOLDER_EMAIL_DOMAIN = "gmail.com"
+
+
+def placeholder_email(phone_number: object) -> str:
+    """
+    A stand-in address for a student who has none. Returns "" without a phone.
+
+    Unique per phone number, which is the whole point — see the note above.
+    Deliberately not routed through :func:`normalize_email`: this is a synthetic
+    value built here, not user input to be shape-checked, and the shape is
+    already known-good.
+    """
+    digits = normalize_phone(phone_number).lstrip("+")
+    if not digits:
+        return ""
+    return f"{PLACEHOLDER_EMAIL_LOCAL}+{digits}@{PLACEHOLDER_EMAIL_DOMAIN}"
+
+
 # ── Value mappings (R16) ─────────────────────────────────────────────────────
 
 def map_sentiment(value: object) -> str | None:
@@ -441,10 +481,20 @@ class ChannelIdentity:
         ``name``, ``email`` and ``phoneNumber`` are all required and typed as
         plain ``str`` upstream, so they are always present — as empty strings,
         never omitted. Callers must have checked :attr:`is_sendable` first.
+
+        ``email`` is the one field the API refuses when it is *empty* as well as
+        absent (``min_length=1``), so a phone-only student is given a placeholder
+        derived from their number — see :func:`placeholder_email` for why it is
+        per-phone rather than one shared address.
+
+        The placeholder is confined to this payload. :attr:`email` itself,
+        :attr:`has_identifier` and :meth:`dedupe_key` all keep working on the
+        real (empty) value, so what this app believes about the person — and
+        which lookups collapse into one request — does not change.
         """
         payload: dict[str, object] = {
             "name": self.name,
-            "email": self.email,
+            "email": self.email or placeholder_email(self.phone_number),
             "phoneNumber": self.phone_number,
             "conversationId": self.conversation_id,
         }

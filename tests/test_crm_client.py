@@ -191,8 +191,81 @@ def test_lookup_payload_always_carries_the_required_keys():
     """name/email/phoneNumber are required str upstream — present, never omitted."""
     payload = from_channel("whatsapp", conversation_id="c", phone_number="+14155550100").lookup_payload()
     assert set(payload) >= {"name", "email", "phoneNumber", "conversationId"}
-    assert payload["email"] == ""
     assert "course" not in payload  # optional, omitted when empty
+
+
+# ── the placeholder email ────────────────────────────────────────────────────
+
+def test_a_phone_only_student_gets_a_usable_email_not_an_empty_one():
+    """
+    The 2026-09-20 incident: the API refuses an empty ``email`` with a 422
+    (``min_length=1``) and, being a permanent failure, that is never replayed —
+    so the student is never linked at all. Sending "" is not a safe default.
+    """
+    payload = from_channel(
+        "outbound_call", conversation_id="c", phone_number="+917016872149"
+    ).lookup_payload()
+
+    assert payload["email"] == "emailnotfound+917016872149@gmail.com"
+    assert payload["phoneNumber"] == "+917016872149"
+
+
+def test_the_placeholder_is_unique_per_phone():
+    """
+    This is the reason it is not one shared address. The API resolves by email
+    *first*, falling back to phone only when the email finds nothing. A shared
+    ``emailnotfound@gmail.com`` would match the first placeholder record ever
+    created — so the second phone-only student's lookup would return the *first*
+    student's userId, and their own phone would never be consulted.
+    """
+    a = from_channel("outbound_call", conversation_id="c", phone_number="+917016872149")
+    b = from_channel("outbound_call", conversation_id="c", phone_number="+14155550100")
+
+    assert a.lookup_payload()["email"] != b.lookup_payload()["email"]
+    assert a.lookup_payload()["email"] != "emailnotfound@gmail.com"
+
+
+def test_a_real_email_is_never_replaced_by_the_placeholder():
+    payload = from_channel(
+        "whatsapp", conversation_id="c", phone_number="+14155550100", email="ana@example.com"
+    ).lookup_payload()
+
+    assert payload["email"] == "ana@example.com"
+
+
+def test_the_literal_string_null_is_treated_as_no_email():
+    """
+    How the incident actually arrived: ``batch-dashboard`` wrote the string
+    "null" into ``leads.email``. It fails the shape check, so it normalises to ""
+    and the placeholder takes over — the fix does not need a data migration.
+    """
+    ident = from_channel(
+        "outbound_call", conversation_id="c", phone_number="+917016872149", email="null"
+    )
+
+    assert ident.email == ""
+    assert ident.lookup_payload()["email"] == "emailnotfound+917016872149@gmail.com"
+
+
+def test_no_placeholder_without_a_phone_to_derive_it_from():
+    """Nothing to make it unique with — leave it empty rather than share one."""
+    assert identity_mod.placeholder_email("") == ""
+    assert identity_mod.placeholder_email(None) == ""
+    assert identity_mod.placeholder_email("not-a-number") == ""
+
+
+def test_the_placeholder_does_not_change_who_this_person_is():
+    """
+    The placeholder is wire-only. ``has_identifier``, ``is_sendable`` and the
+    single-flight key must all keep seeing the real (empty) email — otherwise an
+    anonymous caller would become "sendable" on the strength of an address this
+    app invented.
+    """
+    ident = from_channel("outbound_call", conversation_id="c", phone_number="+917016872149")
+
+    assert ident.email == ""
+    assert ident.has_identifier, "the phone is the identifier"
+    assert ident.dedupe_key() == "phone:+917016872149"
 
 
 def test_dedupe_key_prefers_email():
