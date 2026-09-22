@@ -39,6 +39,7 @@ from typing import AsyncIterator, Callable
 # US-011 TAC-1: settings resolve once, through one loader that also reads .env.
 # Reading os.environ here meant the value in force depended on whether some
 # other importer had already loaded .env — this module never did.
+from app import audio_format
 from app.config import settings
 
 logger = logging.getLogger("voice_handler")
@@ -226,15 +227,20 @@ def _tts_speed() -> float:
 
 
 # ── u-law ↔ PCM conversion (stdlib audioop) ───────────────────────────
+# Every conversion in the voice path funnels through these two, and both take the
+# sample width as an argument — so the number comes from `app/audio_format.py`
+# instead of a literal at each call site. Twilio's wire format carries 8-bit
+# u-law samples; what these produce and consume is the pipeline's 16-bit linear
+# PCM.
 
 def ulaw_to_pcm(ulaw_bytes: bytes) -> bytes:
     import audioop
-    return audioop.ulaw2lin(ulaw_bytes, 2)
+    return audioop.ulaw2lin(ulaw_bytes, audio_format.SAMPLE_WIDTH)
 
 
 def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
     import audioop
-    return audioop.lin2ulaw(pcm_bytes, 2)
+    return audioop.lin2ulaw(pcm_bytes, audio_format.SAMPLE_WIDTH)
 
 
 # ── Standalone helper for main.py greeting ────────────────────────────

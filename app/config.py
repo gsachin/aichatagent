@@ -113,12 +113,15 @@ class Settings:
     PORT: int = field(default_factory=lambda: _env_int("PORT", 8000))
 
     # ── Audio format (PCM) ──────────────────────────────────────────
-    AUDIO_SAMPLE_RATE: int = 16000   # 16 kHz
-    AUDIO_CHANNELS: int = 1          # mono
-    AUDIO_SAMPLE_WIDTH: int = 2      # 16-bit
-
-    # ── Chunk size for streaming (in frames) ────────────────────────
-    CHUNK_FRAMES: int = 320          # 20 ms at 16 kHz
+    # Deliberately not here. `AUDIO_SAMPLE_RATE`, `AUDIO_CHANNELS`,
+    # `AUDIO_SAMPLE_WIDTH` and `CHUNK_FRAMES` were fields that nothing read, and
+    # none of them is a deployment setting: the middle two are invariants of the
+    # codecs in use (audioop's u-law conversions are mono only, and the pipeline
+    # is 16-bit linear PCM), and the last is 20 ms of audio, which follows the
+    # rate rather than being independently settable. They are constants in
+    # `app/audio_format.py` now (US-011 clause 4). Every key in this class is
+    # environment-backed; a number an operator could set to a value that breaks
+    # the audio does not belong among them.
 
     # ── Speech-to-text (faster-whisper) ─────────────────────────────
     WHISPER_MODEL: str = field(default_factory=lambda: _env("WHISPER_MODEL", "small.en"))

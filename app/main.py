@@ -59,13 +59,14 @@ import logging
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 # Deliberately below the load_dotenv() call above and the AppLocker setdefaults,
 # which must run first. Importing app.config also loads .env itself, so this is
 # order-independent in practice — but keeping it here means the module-level
 # reads below cannot run before the environment is prepared.
+from app import audio_format
 from app.config import settings
 
 def _configure_logging() -> None:
@@ -577,17 +578,20 @@ def _busy_twiml(host: str) -> str:
 
 
 # ── u-law conversion utilities ───────────────────────────────────────
+# The width argument is the pipeline's, from `app/audio_format.py`, rather than a
+# literal repeated at each call site. The voice pipeline's own copy of this pair
+# lives in `app/voice_handler.py` and reads the same constant.
 
 def ulaw_to_pcm(ulaw_bytes: bytes) -> bytes:
     """Convert 8 kHz u-law bytes to 16-bit linear PCM bytes."""
     import audioop
-    return audioop.ulaw2lin(ulaw_bytes, 2)
+    return audioop.ulaw2lin(ulaw_bytes, audio_format.SAMPLE_WIDTH)
 
 
 def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
     """Convert 16-bit linear PCM bytes to 8 kHz u-law bytes."""
     import audioop
-    return audioop.lin2ulaw(pcm_bytes, 2)
+    return audioop.lin2ulaw(pcm_bytes, audio_format.SAMPLE_WIDTH)
 
 
 # ── WebSocket: Raw PCM (local voice pipeline) ────────────────────────
@@ -3768,14 +3772,31 @@ async def health_check(request: Request):
 
 @app.get("/voice")
 async def voice_page():
-    """Serve the browser-based voice client page."""
+    """Serve the browser-based voice client page, with its audio format injected.
+
+    The page captures at the rate `/ws/voice` is built around, and both used to
+    state that format independently — the page in JavaScript, the endpoint in a
+    docstring. Serving `app/audio_format.py`'s constants gives that contract one
+    home. The `<!--AUDIO_CONFIG-->` placeholder stays an HTML comment if the same
+    file is fetched from `/static/` (which is mounted), and the page's own
+    defaults then apply, so both routes work.
+    """
     html_path = Path(__file__).resolve().parent / "static" / "voice_client.html"
     if not html_path.is_file():
         return JSONResponse(
             {"message": "Voice client page not found.", "status": "error"},
             status_code=404,
         )
-    return FileResponse(html_path, media_type="text/html")
+    audio_config = (
+        "<script>window.AUDIO_CONFIG = {"
+        f"sampleRate: {audio_format.SAMPLE_RATE}, "
+        f"channels: {audio_format.CHANNELS}, "
+        f"chunkFrames: {audio_format.CHUNK_FRAMES}"
+        "};</script>"
+    )
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8").replace("<!--AUDIO_CONFIG-->", audio_config)
+    )
 
 
 # ── HTTP: Quick call page ─────────────────────────────────────────────

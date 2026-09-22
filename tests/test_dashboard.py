@@ -76,6 +76,20 @@ class TestStaticFiles:
         resp = client.get("/voice")
         assert resp.status_code == 200
 
+    def test_voice_page_carries_the_audio_format(self):
+        """The page's format is the server's, not a second copy of it (US-011 clause 4)."""
+        from app import audio_format
+        resp = client.get("/voice")
+        assert f"sampleRate: {audio_format.SAMPLE_RATE}" in resp.text
+        assert f"channels: {audio_format.CHANNELS}" in resp.text
+        assert f"chunkFrames: {audio_format.CHUNK_FRAMES}" in resp.text
+
+    def test_static_serve_of_the_page_leaves_the_placeholder_as_a_comment(self):
+        """`/static` is mounted, so the injection has to be harmless without the route."""
+        resp = client.get("/static/voice_client.html")
+        assert "<!--AUDIO_CONFIG-->" in resp.text
+        assert "window.AUDIO_CONFIG = {" not in resp.text
+
     def test_quick_call_page_served(self):
         resp = client.get("/call")
         assert resp.status_code == 200

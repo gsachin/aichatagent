@@ -190,12 +190,12 @@ class TestPhase5MuLawConversion:
         """μ-law for Twilio must operate at 8000 Hz."""
         # Twilio Media Streams specification: 8 kHz μ-law
         # Verify our config or conversion utilities respect this
-        from app.config import settings
+        from app.audio_format import SAMPLE_RATE
 
-        # The app config has AUDIO_SAMPLE_RATE = 16000 for internal processing,
+        # The pipeline's rate is 16000 Hz (app/audio_format.py),
         # but Twilio output must be resampled to 8000 Hz.
         # This test documents the requirement.
-        assert settings.AUDIO_SAMPLE_RATE == 16000, (
+        assert SAMPLE_RATE == 16000, (
             "Internal sample rate should be 16000 Hz"
         )
 

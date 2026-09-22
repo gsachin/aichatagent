@@ -81,12 +81,12 @@ pytest tests/test_task2_config.py -v
 
 **Step 1:** Verify Python can import and read settings:
 ```powershell
-python -c "from app.config import settings; print('Provider:', settings.TRANSPORT_PROVIDER); print('Host:', settings.HOST); print('Port:', settings.PORT); print('Sample rate:', settings.AUDIO_SAMPLE_RATE)"
+python -c "from app.config import settings; from app import audio_format; print('Provider:', settings.TRANSPORT_PROVIDER); print('Host:', settings.HOST); print('Port:', settings.PORT); print('Sample rate:', audio_format.SAMPLE_RATE)"
 ```
 
 **Step 2:** Verify all expected fields are print-able:
 ```powershell
-python -c "from app.config import settings; print(settings.TRANSPORT_PROVIDER, settings.HOST, settings.PORT, settings.AUDIO_SAMPLE_RATE, settings.AUDIO_CHANNELS, settings.AUDIO_SAMPLE_WIDTH)"
+python -c "from app.config import settings; from app import audio_format; print(settings.TRANSPORT_PROVIDER, settings.HOST, settings.PORT, audio_format.SAMPLE_RATE, audio_format.CHANNELS, audio_format.SAMPLE_WIDTH)"
 ```
 
 ### Pass Criteria
@@ -95,7 +95,7 @@ python -c "from app.config import settings; print(settings.TRANSPORT_PROVIDER, s
 |---|---|
 | 1 | `TRANSPORT_PROVIDER` prints as `"websocket"` |
 | 2 | `PORT` prints as `8000` |
-| 3 | `AUDIO_SAMPLE_RATE` prints as `16000` |
+| 3 | `audio_format.SAMPLE_RATE` prints as `16000` |
 | 4 | No import errors or missing attribute errors |
 
 ### Fail Conditions
@@ -497,7 +497,7 @@ http://localhost:8000/voice
 | `GET /voice` returns 404 | Route not defined or static file path wrong | Check `app.mount()` or file-serving route |
 | Page loads but can't connect (status stays "Connecting...") | WebSocket URL is hardcoded to wrong host | Make sure WS URL is `ws://localhost:8000/ws/voice` (relative to origin) |
 | Mic permission granted but no audio | `AudioContext` suspended (browser autoplay policy) | Add `audioContext.resume()` on user click |
-| Echo is garbled/robotic | Sample rate mismatch between mic and WS | Mic capture sample rate should match `AUDIO_SAMPLE_RATE` (16000) in config |
+| Echo is garbled/robotic | Sample rate mismatch between mic and WS | Mic capture sample rate should match `SAMPLE_RATE` (16000) in `app/audio_format.py` |
 | Echo is deafening (feedback) | Speakers too close to mic or volume too high | Use headphones for testing |
 | `WebSocket connection to ... failed` | Server not running (Task 3) | Start the server first |
 | Static file not found (500 error) | `static/` directory not in correct location | Should be `app/static/voice_client.html` relative to project root |
