@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!--AUDIO_CONFIG-->  <!-- GET /voice replaces this with window.AUDIO_CONFIG; a /static/ fetch leaves it as a comment -->
 <title>Voice Assistant — University Admissions</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -155,9 +156,15 @@
   let playing    = false;     // user-facing on/off
   let playbackNext = 0;       // scheduled playback time offset
 
-  const SAMPLE_RATE  = 16000;
+  /* Audio format is the server's, injected by GET /voice from app/config.py —
+     the same values /ws/voice is built around, so the page cannot drift from the
+     endpoint it talks to. The fallbacks are what a /static/ fetch gets (the
+     placeholder in <head> stays a comment there), so both routes work. */
+  const AUDIO_CFG    = window.AUDIO_CONFIG || {};
+  const SAMPLE_RATE  = AUDIO_CFG.sampleRate  || 16000;
+  const CHANNELS     = AUDIO_CFG.channels    || 1;
   const CHUNK_MS     = 20;
-  const CHUNK_FRAMES = Math.round(SAMPLE_RATE * CHUNK_MS / 1000); // 320
+  const CHUNK_FRAMES = AUDIO_CFG.chunkFrames || Math.round(SAMPLE_RATE * CHUNK_MS / 1000); // 320
 
   /* ── Helpers ──────────────────────────────────────────────────── */
   function setUI(state) {
@@ -303,7 +310,7 @@
 
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        channelCount:    { ideal: 1 },
+        channelCount:    { ideal: CHANNELS },
         sampleRate:      { ideal: SAMPLE_RATE },
         echoCancellation: false,
         noiseSuppression: false,
