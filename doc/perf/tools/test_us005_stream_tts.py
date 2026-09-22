@@ -119,12 +119,26 @@ check("AC-1   one sentence stays one chunk",
 check("AC-1   empty input yields nothing", split("   ") == [])
 
 # ── AC-2 / a cache hit is served immediately, stream or batch ───────────────
-fake0 = install_fake()
-s = fresh_session()
-VoiceCallSession._shared_tts_cache.clear()
-cache = VoiceCallSession._shared_tts_cache
-cache[("hello", vh._tts_voice(), vh._tts_speed())] = (
-    np.zeros(2400, dtype=np.float32), 24000, "MZother")
+#
+# The scope is FORCED below, never inherited. Which cache a hit lands in is
+# chosen by TTS_CACHE_SCOPE (voice_handler.py:1224, :1342) -- a module constant
+# fixed at import, so ambient `.env` decides it and a suite cannot opt out.
+# Ambient is `per_call` (deliberate: US-012, 2026-09-19). This setup used to
+# seed `_shared_tts_cache` regardless, so under ambient config the lookup went
+# to `_session_tts_cache`, the seeded entry was never consulted, and the check
+# failed for a reason that had nothing to do with its claim -- while a doc
+# quoted the shared-scope run as though it were the ambient one. Both scopes
+# are exercised now, because AC-2's claim is about the HIT, not about which
+# dict happens to hold it.
+
+_AMBIENT_SCOPE = vh.TTS_CACHE_SCOPE
+
+
+def cached_under(session: VoiceCallSession, scope: str) -> dict:
+    """Force the scope; return the cache production will actually consult."""
+    vh.TTS_CACHE_SCOPE = scope
+    return (session._session_tts_cache if scope == "per_call"
+            else VoiceCallSession._shared_tts_cache)
 
 
 async def drain(generator):
@@ -136,12 +150,23 @@ async def drain(generator):
 
 import asyncio  # noqa: E402
 
-hit = asyncio.run(drain(s.synthesise_stream("hello")))
-check("AC-2   a cache hit yields once, immediately, without the engine",
-      len(hit) == 1 and hit[0][1] == 24000
-      and not fake0.calls, "engine was touched on a hit")
+for _scope in ("shared", "per_call"):
+    fake0 = install_fake()
+    s = fresh_session()
+    VoiceCallSession._shared_tts_cache.clear()
+    cache = cached_under(s, _scope)
+    cache[("hello", vh._tts_voice(), vh._tts_speed())] = (
+        np.zeros(2400, dtype=np.float32), 24000, "MZother")
+
+    hit = asyncio.run(drain(s.synthesise_stream("hello")))
+    check(f"AC-2   [{_scope}] a cache hit yields once, immediately, without the engine",
+          len(hit) == 1 and hit[0][1] == 24000
+          and not fake0.calls, "engine was touched on a hit")
 
 # ── AC-1 / a miss streams: first chunk while the rest still synthesises ─────
+# The streaming checks below hold for either scope, so this section runs at the
+# ambient one -- i.e. as the deployment actually resolves it.
+vh.TTS_CACHE_SCOPE = _AMBIENT_SCOPE
 fake = install_fake()
 s = fresh_session()
 miss = asyncio.run(drain(s.synthesise_stream("Tuition is here. Scholarships too.")))
@@ -153,10 +178,20 @@ check("AC-1   the engine is called PER SENTENCE, so the first chunk is one sente
       len(fake.calls) == 2 and all(kind == "stream" for kind, *_ in fake.calls)
       and fake.calls[0][1] == "Tuition is here." and fake.calls[1][1] == "Scholarships too.",
       str(fake.calls))
-key = ("Tuition is here. Scholarships too.", vh._tts_voice(), vh._tts_speed())
-check("AC-1   the assembled audio is cached, so the DAT-11 entry shape is unchanged",
-      key in cache and cache[key][1] == 24000
-      and len(cache[key][0]) == 9600, "assembled length")
+# Same forcing rule as AC-2: the claim is "cached", not "cached in a chosen
+# dict", so it must hold for both values of the setting.
+for _scope in ("shared", "per_call"):
+    install_fake()
+    s = fresh_session()
+    VoiceCallSession._shared_tts_cache.clear()
+    cache = cached_under(s, _scope)
+    asyncio.run(drain(s.synthesise_stream("Tuition is here. Scholarships too.")))
+    key = ("Tuition is here. Scholarships too.", vh._tts_voice(), vh._tts_speed())
+    check(f"AC-1   [{_scope}] the assembled audio is cached, so the DAT-11 entry shape is unchanged",
+          key in cache and cache[key][1] == 24000
+          and len(cache[key][0]) == 9600, "assembled length")
+
+vh.TTS_CACHE_SCOPE = _AMBIENT_SCOPE      # leave the module as we found it
 
 # ── AC-3 / a failure before any audible chunk ends in the fallback ──────────
 fake = install_fake(fail_after=0)      # raise before the first chunk

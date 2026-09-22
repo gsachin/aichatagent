@@ -48,8 +48,23 @@ print("=" * 74)
 # ── The KB parses into sections, and the preamble is not one ────────────
 secs = M.sections()
 check("the KB parses into sections", len(secs) >= 20, str(len(secs)))
-check("section ids are heading text, so they match the retrieval path's [§ ...]",
-      "Achievements & Accreditation" in secs)
+
+# This asserted a hardcoded heading, "Achievements & Accreditation". That was
+# true of the pre-C5 KB; the rebuild to meridian_kb__v1 restructured it into
+# `## Human Title` with `### slug` children, so the topic is now two sections,
+# `accreditation` and `achievements`, and the literal went stale.
+#
+# The literal was standing in for a property, so assert the property instead.
+# `sections()` keys on `m.group(2)` -- the heading text -- so ids are heading
+# text BY CONSTRUCTION and re-asserting that would be vacuous. What is NOT
+# guaranteed is that distinct headings stay distinct: two headings sharing a
+# line silently collapse into one dict entry, and the second body is served by
+# nobody. That is the real failure this check can catch, and it is reachable.
+_src = M.KB_PATH.read_text(encoding="utf-8")
+_heading_texts = [m.group(2).strip() for m in M._HEADING.finditer(_src)]
+check("every heading becomes its own section -- no id collision drops a body",
+      len(secs) == len(_heading_texts),
+      f"{len(_heading_texts)} headings -> {len(secs)} sections")
 check("the document preamble is NOT a section (else everything is relevant)",
       not any(k.lower().startswith("meridian university") for k in secs),
       str(list(secs)[:2]))
