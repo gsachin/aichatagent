@@ -50,6 +50,15 @@ _PERMANENT_MARKERS = (
     # 'NOT_FOUND', ...}]`), so without this marker a write to a deleted record
     # would retry three times, queue, and keep failing on every replay.
     "NOT_FOUND",
+    # The same condition in the shape the org reports now (observed live
+    # 2026-09-22): the code is ENTITY_IS_DELETED inside the same "Resource
+    # Customer Not Found" wrapper, which carries no `NOT_FOUND` substring — the
+    # words are split, and the code is different — so the marker above missed it.
+    # That is not a slower retry, it is a self-feeding loop: `status.push_profile`
+    # queues whatever the open breaker refuses, and replaying that queue re-enters
+    # the refusal, so one deleted record grew a 248-row outbox and held the
+    # breaker — shared by every caller — open for hours.
+    "ENTITY_IS_DELETED",
 )
 
 

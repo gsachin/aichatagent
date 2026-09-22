@@ -236,6 +236,22 @@ def test_404_and_422_are_permanent():
                       CrmPermanentError)
 
 
+def test_deleted_record_500_is_permanent_not_transient():
+    """
+    The live shape of "the record is gone" (observed 2026-09-22): the code is
+    ENTITY_IS_DELETED inside a "Resource Customer Not Found" wrapper, which the
+    NOT_FOUND marker does not match. Read as transient it did not just retry —
+    the queue is refilled by the refusal that replaying it causes — so one
+    deleted record produced 248 outbox rows and kept the breaker, shared by
+    every caller, open.
+    """
+    response = httpx.Response(500, json={"detail": (
+        "Resource Customer Not Found. Response content: [{'message': 'entity is "
+        "deleted', 'errorCode': 'ENTITY_IS_DELETED', 'fields': []}]"
+    )})
+    assert isinstance(classify_response(response, is_create=False), CrmPermanentError)
+
+
 def test_429_is_transient():
     assert isinstance(classify_response(httpx.Response(429, text="slow down"), is_create=False),
                       CrmTransientError)
