@@ -89,6 +89,15 @@ ALTER_LEADS_CRM_COURSE_SQL = """
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_course VARCHAR(255);
 """
 
+# The last conversation we pointed the CRM at. Same shape and same reason as
+# ``crm_course`` above: ``lookup-or-create`` writes ``Conversation_ID__c`` at
+# create time and never again, so a returning student's later conversations have
+# to be pushed through the profile route — and only when the id actually
+# changed, because the link runs on every turn of every channel.
+ALTER_LEADS_CRM_CONVERSATION_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_conversation_id VARCHAR(64);
+"""
+
 # offer_letters is created by app/offers/schema.py, but the CRM integration owns
 # the columns CRM writes — the same precedent as the conversations ALTER above.
 # This is why ALL_CRM_SQL must stay last in init_db(): it ALTERs tables that the
@@ -123,6 +132,7 @@ ALL_CRM_SQL = "\n".join(
         CREATE_CRM_INDEXES_SQL,
         ALTER_LEADS_CRM_APPLICATION_SQL,
         ALTER_LEADS_CRM_COURSE_SQL,
+        ALTER_LEADS_CRM_CONVERSATION_SQL,
         ALTER_OFFER_LETTERS_CRM_SQL,
         ALTER_LEAD_DOCUMENTS_CRM_SQL,
     ]

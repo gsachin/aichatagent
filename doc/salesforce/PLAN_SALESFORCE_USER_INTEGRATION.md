@@ -294,7 +294,7 @@ Rows marked **✅ resolved** were closed by the Phase 0 verification run (§9).
 | **R3** | 🟠 High | **SOQL injection / query breakage.** `email` and `phone_number` are f-string interpolated directly into SOQL. An apostrophe in an email or a crafted name breaks the query (500) or alters it. | `salesforce_user_repository.py:find_user` (f-string `WHERE Email__c = '{email}'`) |
 | **R4** | 🟠 High | **Partial success returning 500.** `format_user_response` returns `user.get("Email__c")` etc., which may be `None`, while `UserResponse.email/phoneNumber/conversationId` are **required `str`**. A record created *without* email ⇒ response-validation failure ⇒ 500 — **after** the Salesforce row was created. The caller cannot tell "created" from "failed", so any retry duplicates. | `user_service.py:format_user_response` vs `user_schema.py:UserResponse` |
 | **R5** | 🟠 High | **No uniqueness / race window.** Two concurrent inbound calls from the same number can both miss the lookup and both create ⇒ duplicate `Customer` rows. Nothing upstream prevents it. | `user_service.py:lookup_or_create_user` (find-then-create, no lock) |
-| **R6** | 🟠 High | **`Conversation_ID__c` is never updated for a returning user.** Create-time only; the existing-user branch returns early. Every new conversation therefore leaves the CRM pointing at the *first* conversation. This directly breaks the feature's stated purpose. | `user_service.py:lookup_or_create_user` — `if existing_user: return format_user_response(...)` |
+| **R6** | ✅ resolved | ~~**`Conversation_ID__c` is never updated for a returning user.** Create-time only; the existing-user branch returns early.~~ **Closed 2026-09-20** by `sync.sync_conversation_id` writing the field through `PATCH /admissions/{id}` — the same route that already carried `Course__c`. See D1 and `scripts/verify_gate7_status.py` clause C9. | `user_service.py:lookup_or_create_user` still returns early — the API is untouched; the fix is client-side, as D1 requires |
 | **R7** | 🟠 High | **Latency on the answer path.** Every repository call re-runs the OAuth token fetch (`get_salesforce()` per call). One `lookup-or-create` = **up to 3 token fetches + 3 Salesforce round trips**. Voice turn latency is already 12–35s. | `app/core/salesforce.py:get_salesforce`; `user_service.py` (find + create + get_by_id) |
 | **R8** | 🟠 High | **No authentication on the API at all.** No API key, no signature, no CORS config. Anyone who reaches `baseUrl` can read, mutate, and delete the entire CRM. | `main.py` (no middleware); no auth dependency in any route |
 | **R9** | ✅ resolved | ~~Port collision.~~ **Closed by D2:** the API runs on **`127.0.0.1:8098`** — no clash with this repo's `:8000` or enterprise-rag-core's `:8010`. It is loopback-only, which also mitigates R8 for now, but see **D5** before this leaves a dev machine. | Live probe 2026-09-11 |
@@ -595,14 +595,23 @@ All via `app/config.py`'s existing `_env()` pattern. Secrets stay in `.env` (nev
 
 **D1 — Frozen external contract.**
 The API is called as-is; we do not modify it. Every upstream defect is therefore defended
-against client-side, and **R2, R6 and R16 are permanent constraints**:
+against client-side, and **R2 and R16 are permanent constraints**:
 
-- **R6** cannot be fully solved from the client at all. The CRM will keep showing the
-  *first* conversation for a repeat caller. Mitigation: keep the authoritative
-  conversation linkage local (`conversations.crm_user_id` + our own `conversation_id`) and
-  treat the CRM's `conversationId` as stale-but-harmless. **If a report ever keys off the
-  CRM's conversation field, it will be wrong for repeat callers** — worth stating to
-  whoever consumes the CRM.
+- **R6 — solved 2026-09-20 (was: "cannot be fully solved from the client").** The original
+  entry conflated *`lookup-or-create` cannot fix it* with *we cannot fix it*. It is true
+  that `POST /users/lookup-or-create` writes `Conversation_ID__c` at create time only; it
+  is **not** true that the link must therefore stay stale. `PATCH /admissions/{id}` accepts
+  the field (`AdmissionUpdate.Conversation_ID__c` in the API's own schema), which is the
+  same profile-update route that already solved the identical create-time-only problem for
+  `Course__c`, and the same route whose null-clears-the-field behaviour
+  (`app/crm/status.py:17-21`) proves it writes the field at all. The client now repoints it
+  on every conversation through `sync.sync_conversation_id`, cache-gated so the per-turn
+  link does not become a per-turn write, and pushed from `log_interaction` so the voice
+  path — which never reaches `link_conversation` — is covered too. Acceptance criterion
+  **A4** is now met; it should not have been marked satisfiable and unreachable at the same
+  time. Proven live by clause **C9** in `scripts/verify_gate7_status.py`, which repoints a
+  record's link and re-reads it. The local tables remain authoritative; this only stops the
+  CRM's copy from contradicting them.
 - **R2** is defended by never sending a blank identifier (§8.3 rule 1). Since there is no
   way to fix the query, the client's discipline is the only control.
 - **R16** is defended by the mapping table in §4.2.

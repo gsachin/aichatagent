@@ -26,6 +26,7 @@ never what we sent:
     C6  sentiment lands on both category fields, with each field's own spelling
     C7  a CRM outage loses nothing — the write queues and is replayed
     C8  a record that no longer exists is dropped, not retried forever
+    C9  the conversation link can be repointed, and a blank push cannot clear it
     cleanup  the test record is deleted
 
 C7 is the one that has never been exercised before: `flush_outbox` existed with
@@ -305,6 +306,23 @@ def main() -> int:
             run.add("C8 gone-record", FAIL,
                     f"the failure was queued ({after - remaining} row(s)) and would retry forever")
 
+        # ── C9: the conversation link follows the caller (plan R6 / A4) ───────
+        # lookup-or-create writes Conversation_ID__c when it *creates* a record
+        # and never again, so a repeat caller's row would name their first
+        # conversation forever. The profile route is the only thing that can
+        # repoint it — this is the clause that proves it can.
+        asyncio.run(status_mod.push_conversation_id(user_id, f"gate7-{runid}-b"))
+        check(run, "C9 repointed", read_record(user_id),
+              {"Conversation_ID__c": f"gate7-{runid}-b"},
+              fields_note="Conversation_ID__c names the current conversation, not the first")
+
+        # A blank id must be a no-op, not a clear: the null trap documented in
+        # app/crm/status.py was found on this very field.
+        asyncio.run(status_mod.push_conversation_id(user_id, ""))
+        check(run, "C9 blank-id", read_record(user_id),
+              {"Conversation_ID__c": f"gate7-{runid}-b"},
+              fields_note="a blank push left the link alone")
+
         # ── the record survived every write ──────────────────────────────────
         record = read_record(user_id)
         intact = {k: record.get(k) for k in ("First_Name__c", "Email__c", "Phone__c",
@@ -313,8 +331,10 @@ def main() -> int:
         if (intact["First_Name__c"] == expected_name
                 and intact["Email__c"] == f"verify+g7{runid}@example.com"
                 and intact["Phone__c"] == phone
-                and intact["Conversation_ID__c"] == f"gate7-{runid}"):
-            run.add("intact", PASS, "identity fields untouched by seven status writes")
+                and intact["Conversation_ID__c"] == f"gate7-{runid}-b"):
+            run.add("intact", PASS,
+                    "identity fields untouched by every status write; only the "
+                    "conversation link moved, and only because C9 moved it")
         else:
             run.add("intact", FAIL, f"a status write damaged the record: {intact}")
 

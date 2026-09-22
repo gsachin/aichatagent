@@ -68,7 +68,7 @@ def queued(monkeypatch):
 
 @pytest.mark.anyio
 async def test_only_allowlisted_fields_can_be_written(crm_on, transport):
-    """The route accepts 35 fields; this module must accept nine."""
+    """The route accepts 35 fields; this module must accept ten."""
     sent, _ = transport
 
     assert await status_mod.push_profile(USER, Email__c="not-ours@example.com") is False
@@ -118,6 +118,51 @@ async def test_nothing_happens_when_the_crm_is_off(transport, queued, override_s
 
     assert await status_mod.push_profile(USER, Course__c="MBA") is False
     assert sent == [] and queued == []
+
+
+# ── the conversation link (plan R6 / A4) ─────────────────────────────────────
+#
+# ``lookup-or-create`` writes ``Conversation_ID__c`` when it *creates* a record
+# and never again, so without this route a repeat caller's CRM row names their
+# first conversation forever. It is also the field the null trap was found on.
+
+@pytest.mark.anyio
+async def test_the_conversation_id_is_written_through_the_profile_route(crm_on, transport):
+    sent, _ = transport
+
+    assert await status_mod.push_conversation_id(USER, "conv-2") is True
+
+    assert sent[0]["method"] == "PATCH"
+    assert sent[0]["path"] == f"/admissions/{USER}"
+    assert sent[0]["body"] == {"Conversation_ID__c": "conv-2"}
+
+
+@pytest.mark.anyio
+async def test_a_blank_conversation_id_is_never_sent(crm_on, transport):
+    """
+    Nothing at all, rather than a null: on this route a null *clears* the field,
+    and the dry run proved it by erasing a live ``Conversation_ID__c``. A blank
+    id must leave the CRM's existing link alone.
+    """
+    sent, _ = transport
+
+    assert await status_mod.push_conversation_id(USER, "") is False
+    assert await status_mod.push_conversation_id(USER, "   ") is False
+    assert sent == []
+
+
+@pytest.mark.anyio
+async def test_pushing_a_conversation_id_keeps_the_other_fields_intact(crm_on, transport):
+    """
+    The regression the whole allowlist exists for: a conversation write must not
+    round-trip the record, because every field it mentions it also sets.
+    """
+    sent, _ = transport
+
+    await status_mod.push_conversation_id(USER, "conv-2")
+
+    assert sent[0]["body"] == {"Conversation_ID__c": "conv-2"}
+    assert "Course__c" not in sent[0]["body"]
 
 
 # ── failure policy ───────────────────────────────────────────────────────────

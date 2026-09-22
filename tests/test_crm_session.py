@@ -15,6 +15,17 @@ import pytest
 
 from app.crm import session as crm_session
 
+# Imported at module scope deliberately, and this import is load-bearing.
+#
+# ``app.config`` runs ``load_dotenv()`` the first time it is imported, and
+# ``load_dotenv`` *adds* every variable that is missing from ``os.environ``. A
+# test that imports it from inside its own body therefore re-populates
+# ``CRM_ENABLED`` immediately after ``monkeypatch.delenv`` removed it, and can
+# never observe the code default. That is why ``test_crm_is_disabled_by_default``
+# below used to pass only when some other module had already imported
+# ``app.config`` first — and failed whenever it ran on its own.
+from app.config import Settings  # noqa: F401  (see note above)
+
 
 @pytest.fixture(autouse=True)
 def clean_registry():
@@ -429,10 +440,13 @@ def test_crm_is_disabled_by_default(monkeypatch):
     environment variable removed rather than reading the running singleton: a
     deployment that opts in via .env has not changed the default, and these
     tests must not have to be edited every time one does.
+
+    ``Settings`` comes from the module-scope import above, not from one here —
+    see the note there. Importing it in this body would reload ``.env`` over the
+    deleted variable and the assertion below could never fail.
     """
     monkeypatch.delenv("CRM_ENABLED", raising=False)
     monkeypatch.delenv("CRM_IDLE_WINDOW_HOURS", raising=False)
-    from app.config import Settings
 
     fresh = Settings()
     assert fresh.CRM_ENABLED is False

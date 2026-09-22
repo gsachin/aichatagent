@@ -44,8 +44,8 @@ def client(monkeypatch):
 
 @pytest.fixture
 def lead_store(monkeypatch):
-    """The lead columns the course sync reads and writes."""
-    store = {"crm_course": ""}
+    """The lead columns the course and conversation syncs read and write."""
+    store = {"crm_course": "", "crm_conversation_id": ""}
     calls = {"sets": 0}
 
     async def get_lead_crm_course(lead_id):
@@ -56,11 +56,24 @@ def lead_store(monkeypatch):
         store["crm_course"] = course or ""
         return True
 
+    async def get_lead_crm_conversation_id(lead_id):
+        return store["crm_conversation_id"]
+
+    async def set_lead_crm_conversation_id(lead_id, conversation_id):
+        store["crm_conversation_id"] = conversation_id or ""
+        return True
+
     async def get_lead_crm_user_id(lead_id):
         return USER
 
     monkeypatch.setattr("app.leads.models.get_lead_crm_course", get_lead_crm_course)
     monkeypatch.setattr("app.leads.models.set_lead_crm_course", set_lead_crm_course)
+    monkeypatch.setattr(
+        "app.leads.models.get_lead_crm_conversation_id", get_lead_crm_conversation_id
+    )
+    monkeypatch.setattr(
+        "app.leads.models.set_lead_crm_conversation_id", set_lead_crm_conversation_id
+    )
     monkeypatch.setattr("app.leads.models.get_lead_crm_user_id", get_lead_crm_user_id)
     return store, calls
 
@@ -124,6 +137,60 @@ async def test_no_course_and_no_link_are_both_no_ops(crm_on, client, lead_store)
     assert sent == []
 
 
+# ── conversation id: the fact the CRM could only ever learn once ─────────────
+
+@pytest.mark.anyio
+async def test_a_new_conversation_repoints_the_crm(crm_on, client, lead_store):
+    """
+    ``lookup-or-create`` writes ``Conversation_ID__c`` at create time and never
+    again, so a repeat caller's row names their first conversation forever.
+    """
+    sent, _ = client
+    store, _ = lead_store
+    store["crm_conversation_id"] = "conv-1"
+
+    assert await sync_mod.sync_conversation_id(LEAD, USER, "conv-2") is True
+    assert sent[0]["path"] == f"/admissions/{USER}"
+    assert sent[0]["body"] == {"Conversation_ID__c": "conv-2"}
+    assert store["crm_conversation_id"] == "conv-2"
+
+
+@pytest.mark.anyio
+async def test_the_same_conversation_costs_no_request(crm_on, client, lead_store):
+    """
+    This is offered on every turn, so a conversation the CRM already points at
+    must not become a per-turn write.
+    """
+    sent, _ = client
+    store, _ = lead_store
+    store["crm_conversation_id"] = "conv-2"
+
+    assert await sync_mod.sync_conversation_id(LEAD, USER, "conv-2") is False
+    assert sent == []
+
+
+@pytest.mark.anyio
+async def test_a_failed_conversation_push_is_not_cached(crm_on, client, lead_store):
+    """Caching a failure would mean the CRM never learns the new conversation."""
+    _, state = client
+    store, _ = lead_store
+    store["crm_conversation_id"] = "conv-1"
+    state["response"] = httpx.Response(500, json={"detail": "crm down"})
+
+    assert await sync_mod.sync_conversation_id(LEAD, USER, "conv-2") is False
+    assert store["crm_conversation_id"] == "conv-1", "still points at the old one"
+
+
+@pytest.mark.anyio
+async def test_no_conversation_and_no_link_are_both_no_ops(crm_on, client, lead_store):
+    """A chat with no session id must not blank a link the CRM already holds."""
+    sent, _ = client
+
+    assert await sync_mod.sync_conversation_id(LEAD, USER, "") is False
+    assert await sync_mod.sync_conversation_id(LEAD, "", "conv-2") is False
+    assert sent == []
+
+
 @pytest.mark.anyio
 async def test_an_already_linked_lead_still_publishes_a_changed_program(
     crm_on, client, lead_store
@@ -135,6 +202,11 @@ async def test_an_already_linked_lead_still_publishes_a_changed_program(
     link — and that early return is the *only* path a returning student takes,
     so a course sync placed after the lookup would never run for the one case it
     exists to fix: a student changing their mind.
+
+    The conversation id rides the same branch for the same reason: the CRM holds
+    whichever conversation was current when the record was created, so a repeat
+    caller needs this early return to repoint it (plan R6/A4). Two writes, in
+    this order — course first, so the request sequence stays stable.
     """
     sent, _ = client
     store, _ = lead_store
@@ -148,8 +220,10 @@ async def test_an_already_linked_lead_still_publishes_a_changed_program(
     )
 
     assert result == USER
-    assert len(sent) == 1, "the changed program must still be published"
+    assert len(sent) == 2, "the changed program and the conversation must be published"
     assert sent[0]["body"] == {"Course__c": "MBA"}
+    assert sent[1]["body"] == {"Conversation_ID__c": "conv-2"}
+    assert store["crm_conversation_id"] == "conv-2"
 
 
 # ── replaying the wider profile write ────────────────────────────────────────
@@ -291,6 +365,145 @@ async def test_no_category_yet_publishes_nothing(monkeypatch):
     await lead_service._publish_sentiment(LEAD, "")
 
     assert pushed == []
+
+
+# ── the post-call publish: how a voice call reaches the CRM at all ───────────
+#
+# A voice call never goes through link_conversation: mid-call there is no lead
+# row to write against, and the linker will not link until the caller has given
+# a name. So this helper is the only thing that repoints the CRM for a repeat
+# caller — which is the reported failure.
+
+@pytest.mark.anyio
+async def test_the_program_published_is_the_one_just_discussed(monkeypatch):
+    """
+    A lead whose stored program is MBA who spends the call asking about M.Tech.
+
+    ``log_interaction`` only *back-fills* ``program_interest``, so a publish that
+    read the stored column would re-send MBA forever — the exact symptom.
+    """
+    from app.leads import service as lead_service
+
+    published = []
+
+    async def fake_upsert(phone_number, **kwargs):
+        return {"id": LEAD, "name": "Sachin", "email": "", "program_interest": "MBA"}
+
+    async def fake_create_conversation(**kwargs):
+        return {"id": "conv-row", **kwargs}
+
+    async def fake_publish(lead_id, crm_user_id="", *, course="", conversation_id=""):
+        published.append((lead_id, crm_user_id, course, conversation_id))
+
+    monkeypatch.setattr("app.leads.models.upsert_lead_by_phone", fake_upsert)
+    monkeypatch.setattr("app.leads.models.create_conversation", fake_create_conversation)
+    monkeypatch.setattr("app.leads.models.update_lead", fake_create_conversation)
+    monkeypatch.setattr("app.leads.service._publish_profile_facts", fake_publish)
+
+    await lead_service.log_interaction(
+        phone_number="+17208402670",
+        channel="inbound_call",
+        # Short enough to skip the sentiment block, so this test stays about the
+        # publish and does not need the scorer mocked.
+        transcript="Caller: engineering?",
+        extracted_lead={"program": "M.Tech"},
+        conversation_id="conv-2",
+        crm_user_id=USER,
+    )
+
+    assert published == [(LEAD, USER, "M.Tech", "conv-2")]
+
+
+@pytest.mark.anyio
+async def test_a_call_that_says_nothing_new_reuses_the_stored_program(monkeypatch):
+    """No program in this call means the lead's own answer, not a blank push."""
+    from app.leads import service as lead_service
+
+    published = []
+
+    async def fake_upsert(phone_number, **kwargs):
+        return {"id": LEAD, "name": "Sachin", "email": "", "program_interest": "MBA"}
+
+    async def fake_create_conversation(**kwargs):
+        return {"id": "conv-row", **kwargs}
+
+    async def fake_publish(lead_id, crm_user_id="", *, course="", conversation_id=""):
+        published.append((course, conversation_id))
+
+    monkeypatch.setattr("app.leads.models.upsert_lead_by_phone", fake_upsert)
+    monkeypatch.setattr("app.leads.models.create_conversation", fake_create_conversation)
+    monkeypatch.setattr("app.leads.models.update_lead", fake_create_conversation)
+    monkeypatch.setattr("app.leads.service._publish_profile_facts", fake_publish)
+
+    await lead_service.log_interaction(
+        phone_number="+17208402670",
+        channel="inbound_call",
+        transcript="Caller: hello",
+        extracted_lead={},
+        conversation_id="conv-3",
+        crm_user_id=USER,
+    )
+
+    assert published == [("MBA", "conv-3")]
+
+
+@pytest.mark.anyio
+async def test_a_lead_with_no_crm_link_publishes_nothing(monkeypatch):
+    """Nothing to address the write to — and no reason to look one up twice."""
+    from app.leads import service as lead_service
+
+    called = []
+
+    async def no_link(lead_id):
+        return ""
+
+    async def record(*args, **kwargs):
+        called.append(args)
+
+    monkeypatch.setattr("app.leads.models.get_lead_crm_user_id", no_link)
+    monkeypatch.setattr("app.crm.sync.sync_course", record)
+    monkeypatch.setattr("app.crm.sync.sync_conversation_id", record)
+
+    await lead_service._publish_profile_facts(
+        LEAD, "", course="M.Tech", conversation_id="conv-2"
+    )
+
+    assert called == []
+
+
+@pytest.mark.anyio
+async def test_the_post_call_publish_writes_both_facts(monkeypatch):
+    """One resolution of the CRM link, then both writes, course first."""
+    from app.leads import service as lead_service
+
+    written = []
+
+    async def record(lead_id, crm_user_id, value):
+        written.append((lead_id, crm_user_id, value))
+
+    monkeypatch.setattr("app.crm.sync.sync_course", record)
+    monkeypatch.setattr("app.crm.sync.sync_conversation_id", record)
+
+    await lead_service._publish_profile_facts(
+        LEAD, USER, course="M.Tech", conversation_id="conv-2"
+    )
+
+    assert written == [(LEAD, USER, "M.Tech"), (LEAD, USER, "conv-2")]
+
+
+@pytest.mark.anyio
+async def test_the_post_call_publish_never_raises(monkeypatch):
+    """It runs after the conversation row is written; nothing may undo that."""
+    from app.leads import service as lead_service
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("crm exploded")
+
+    monkeypatch.setattr("app.crm.sync.sync_course", boom)
+
+    await lead_service._publish_profile_facts(
+        LEAD, USER, course="M.Tech", conversation_id="conv-2"
+    )
 
 
 @pytest.mark.anyio

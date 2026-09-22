@@ -131,6 +131,23 @@ async def log_interaction(
         except Exception:
             logger.exception("Sentiment scoring failed (non-fatal)")
 
+    # 6. Publish the conversation linkage and the program. Deliberately outside
+    #    the block above: this is the only write that reaches the CRM for a voice
+    #    call, because the mid-call linker needs a name the caller may never give
+    #    and has no lead row to write against even when it does. A scorer failure
+    #    must not cost us the linkage.
+    await _publish_profile_facts(
+        lead_id,
+        crm_user_id,
+        # The freshly extracted program, not the stored one: the back-fill in
+        # step 3 only writes when the field is blank, so a student who switches
+        # program mid-call would otherwise re-push their first answer forever.
+        course=str((extracted_lead or {}).get("program") or "").strip()
+        or lead.get("program_interest", "")
+        or "",
+        conversation_id=conversation_id,
+    )
+
     return conv
 
 
@@ -172,6 +189,55 @@ async def _publish_sentiment(lead_id: str, crm_user_id: str = "") -> None:
         await push_sentiment(crm_user_id, category)
     except Exception:
         logger.exception("Sentiment publish failed (non-fatal)")
+
+
+async def _publish_profile_facts(
+    lead_id: str,
+    crm_user_id: str = "",
+    *,
+    course: str = "",
+    conversation_id: str = "",
+) -> None:
+    """
+    Keep the CRM record pointed at this conversation and this program.
+
+    Both fields share one defect: ``lookup-or-create`` writes them when it
+    *creates* a record and never again, so for a returning student the CRM would
+    name their first conversation and their first program forever (plan R6/A4
+    and A3). The profile route is what fixes both — it is the same workaround
+    ``sync_course`` already applies on the chat and WhatsApp turns.
+
+    This is the hook that covers the voice path, which never reaches
+    ``link_conversation``: mid-call there is no lead row to write against, and
+    the linker will not link at all until the caller has given a name.
+
+    Never raises. Both writes are cache-gated in ``app.crm.sync``, so the common
+    case — nothing changed since the last turn — costs two database reads and no
+    network call.
+    """
+    if not lead_id:
+        return
+
+    if not crm_user_id:
+        try:
+            from app.leads.models import get_lead_crm_user_id
+
+            crm_user_id = await get_lead_crm_user_id(lead_id)
+        except Exception:
+            logger.exception("CRM profile publish: could not resolve the CRM link")
+            return
+    if not crm_user_id:
+        return
+
+    try:
+        from app.crm.sync import sync_conversation_id, sync_course
+
+        await sync_course(lead_id, crm_user_id, course)
+        await sync_conversation_id(lead_id, crm_user_id, conversation_id)
+    except Exception:
+        # The helpers are already non-fatal; this is belt-and-braces so a bug in
+        # one can never cost the conversation row that was just written.
+        logger.exception("CRM profile publish failed (non-fatal)")
 
 
 async def _auto_schedule_follow_up(lead_id: str, reason: str):

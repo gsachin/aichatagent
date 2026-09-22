@@ -241,6 +241,14 @@ async def link_conversation(
         # This is the branch that catches it, because from the second turn
         # onward it is the only branch that runs.
         await sync_course(lead_id, existing, course or lead.get("program_interest") or "")
+
+        # The conversation linkage has the same create-time-only problem, and
+        # this is the branch that can fix it on every turn after the first.
+        await sync_conversation_id(
+            lead_id,
+            existing,
+            conversation_id or lead.get("conversation_id") or "",
+        )
         return existing
 
     try:
@@ -276,6 +284,11 @@ async def link_conversation(
     # a change is pushed.
     if lead_id and ident.course:
         await sync_course(lead_id, user_id, ident.course)
+
+    # Point the CRM at this conversation too — ``lookup-or-create`` will have
+    # written the id for a new record, but not for an existing one.
+    if lead_id:
+        await sync_conversation_id(lead_id, user_id, ident.conversation_id)
 
     # Keep the live session in step so the rest of this conversation can read
     # the id without another database round trip.
@@ -332,6 +345,60 @@ async def sync_course(lead_id: str, crm_user_id: str, course: str) -> bool:
         except Exception:
             logger.exception("crm.sync: could not cache the pushed course")
     logger.info(f"crm.sync: course for {crm_user_id} published as {wanted!r}")
+    return True
+
+
+# ── conversation id ──────────────────────────────────────────────────────────
+
+async def sync_conversation_id(
+    lead_id: str,
+    crm_user_id: str,
+    conversation_id: str,
+) -> bool:
+    """
+    Point the CRM at this conversation, and skip the write if it already does.
+
+    ``lookup-or-create`` writes ``Conversation_ID__c`` at create time and never
+    again — the existing-user branch returns early — so without this a repeat
+    caller's CRM row names their *first* conversation forever, which is what the
+    feature exists to prevent (plan R6 / A4). The profile route can write it.
+
+    Same shape as :func:`sync_course`, and for the same reason: this is called
+    from ``link_conversation``, which runs on every turn of every channel, so the
+    comparison is against the last value we pushed and the common case costs a
+    database read and no network call.
+    """
+    wanted = str(conversation_id or "").strip()
+    if not lead_id or not crm_user_id or not wanted:
+        return False
+
+    try:
+        from app.leads.models import (
+            get_lead_crm_conversation_id,
+            set_lead_crm_conversation_id,
+        )
+
+        if await get_lead_crm_conversation_id(lead_id) == wanted:
+            return False  # already published
+    except Exception:
+        logger.exception(
+            "crm.sync: could not read the cached conversation id — pushing anyway"
+        )
+        set_lead_crm_conversation_id = None  # type: ignore[assignment]
+
+    from app.crm.status import push_conversation_id
+
+    if not await push_conversation_id(crm_user_id, wanted):
+        return False
+
+    if set_lead_crm_conversation_id is not None:
+        try:
+            await set_lead_crm_conversation_id(lead_id, wanted)
+        except Exception:
+            logger.exception("crm.sync: could not cache the pushed conversation id")
+    logger.info(
+        f"crm.sync: {crm_user_id} now points at conversation {wanted}"
+    )
     return True
 
 

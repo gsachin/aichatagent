@@ -642,6 +642,53 @@ async def set_lead_crm_course(lead_id: str, course: str) -> bool:
             return False
 
 
+async def get_lead_crm_conversation_id(lead_id: str) -> str:
+    """The conversation we last pointed the CRM at, or "" if we never have."""
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT crm_conversation_id FROM leads WHERE id = %s", (lead_id,)
+                )
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_conversation_id from lead")
+            return ""
+
+
+async def set_lead_crm_conversation_id(lead_id: str, conversation_id: str) -> bool:
+    """
+    Remember the conversation the CRM now points at.
+
+    Only written after a successful push, so a failed write leaves the cache
+    stale and the next turn tries again.
+    """
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_conversation_id = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (conversation_id or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to cache crm_conversation_id on lead")
+            return False
+
+
 async def get_recent_conversation_for_phone(
     phone_number: str,
     within_seconds: float,

@@ -49,8 +49,13 @@ logger = logging.getLogger("crm.status")
 # The only fields this module will ever send. An allowlist rather than a
 # passthrough because the route accepts 35 fields and treats an explicit null as
 # a clear: a caller bug must not be able to reach the record.
+#
+# ``Conversation_ID__c`` is here because ``lookup-or-create`` writes it only when
+# it *creates* a record, so without this a returning student's CRM row would
+# point at their first conversation forever (plan R6 / A4).
 WRITABLE_FIELDS = frozenset({
     "Course__c",
+    "Conversation_ID__c",
     "Sentiment__c",
     "Lead_Category__c",
     "Offer_Status__c",
@@ -149,6 +154,20 @@ async def _queue(crm_user_id: str, payload: dict, error: str) -> None:
 async def push_course(crm_user_id: str, course: str) -> bool:
     """Publish the program a student is interested in. ``Course__c`` is free text."""
     return await push_profile(crm_user_id, Course__c=str(course).strip() or None)
+
+
+async def push_conversation_id(crm_user_id: str, conversation_id: str) -> bool:
+    """
+    Point the CRM at the conversation that is happening now (plan A4).
+
+    ``lookup-or-create`` sets this field at create time only, so for a returning
+    student the CRM would otherwise name their first conversation forever. An
+    empty id is dropped by ``_clean`` rather than sent as a null, which on this
+    route would *erase* the value instead of leaving it alone.
+    """
+    return await push_profile(
+        crm_user_id, Conversation_ID__c=str(conversation_id).strip() or None
+    )
 
 
 async def push_offer_released(

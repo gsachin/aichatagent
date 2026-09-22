@@ -161,7 +161,10 @@ Fine at 204 rows; not fine at 200,000.
 We are not asking for changes to `POST /users/lookup-or-create`'s find-or-create semantics. It is a
 genuine constraint that a hit writes nothing back — no conversation-id update, no course update —
 and we have worked around it by treating the admissions PATCH as the profile-update route. Changing
-lookup-or-create would be a bigger design change than the problem justifies. Flagging it here only
+lookup-or-create would be a bigger design change than the problem justifies. (For the avoidance of
+doubt: that workaround now covers `Conversation_ID__c` as well as `Course__c`, so a repeat caller's
+record tracks their latest conversation. Both are written client-side; the constraint above stands,
+and nothing here is a request.) Flagging it here only
 so the behaviour is a decision rather than an oversight.
 
 Two smaller notes, offered as observations rather than requests:
