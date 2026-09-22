@@ -296,7 +296,7 @@ Rows marked **✅ resolved** were closed by the Phase 0 verification run (§9).
 | **R5** | 🟠 High | **No uniqueness / race window.** Two concurrent inbound calls from the same number can both miss the lookup and both create ⇒ duplicate `Customer` rows. Nothing upstream prevents it. | `user_service.py:lookup_or_create_user` (find-then-create, no lock) |
 | **R6** | ✅ resolved | ~~**`Conversation_ID__c` is never updated for a returning user.** Create-time only; the existing-user branch returns early.~~ **Closed 2026-09-20** by `sync.sync_conversation_id` writing the field through `PATCH /admissions/{id}` — the same route that already carried `Course__c`. See D1 and `scripts/verify_gate7_status.py` clause C9. | `user_service.py:lookup_or_create_user` still returns early — the API is untouched; the fix is client-side, as D1 requires |
 | **R7** | 🟠 High | **Latency on the answer path.** Every repository call re-runs the OAuth token fetch (`get_salesforce()` per call). One `lookup-or-create` = **up to 3 token fetches + 3 Salesforce round trips**. Voice turn latency is already 12–35s. | `app/core/salesforce.py:get_salesforce`; `user_service.py` (find + create + get_by_id) |
-| **R8** | 🟠 High | **No authentication on the API at all.** No API key, no signature, no CORS config. Anyone who reaches `baseUrl` can read, mutate, and delete the entire CRM. | `main.py` (no middleware); no auth dependency in any route |
+| **R8** | 🟠 High | **No authentication on the API at all.** No API key, no signature, no CORS config. Anyone who reaches `baseUrl` can read, mutate, and delete the entire CRM. **Still true of the pinned copy; no longer true of upstream, which added JWT auth on 2026-09-15 — see the D5 finding below.** | `main.py` (no middleware); no auth dependency in any route **in the pinned copy.** Upstream: `app/core/security.py` + `Depends(get_current_user)` on three routers |
 | **R9** | ✅ resolved | ~~Port collision.~~ **Closed by D2:** the API runs on **`127.0.0.1:8098`** — no clash with this repo's `:8000` or enterprise-rag-core's `:8010`. It is loopback-only, which also mitigates R8 for now, but see **D5** before this leaves a dev machine. | Live probe 2026-09-11 |
 | **R10** | 🟡 Medium | **No `GET /users/{id}`.** No way to re-read state without a creating POST. | `user_routes.py` (only POST/PATCH/DELETE) |
 | **R11** | ✅ resolved | ~~`offerLetterAccepted` vocabulary unconfirmed.~~ **Closed — it is a restricted picklist:** `UNKNOWN` · `ACCEPTED` · `NOT_ACCEPTED`. The app's `"rejected"` must be sent as **`NOT_ACCEPTED`**, not `REJECTED` or `DECLINED`. Round-tripped live. Same picklist failure mode as R16. | Verified live 2026-09-11; `app/main.py:1494,1500` |
@@ -579,7 +579,7 @@ down-migration.
 ```
 CRM_ENABLED=false          # master switch, default off
 CRM_BASE_URL=              # e.g. http://127.0.0.1:8030 — must not collide (R9)
-CRM_API_KEY=               # if D1 = shared secret
+CRM_API_KEY=               # if D1 = shared secret — an X-API-Key header will NOT satisfy upstream's JWT (R8/D5)
 CRM_TIMEOUT_CONNECT_S=2
 CRM_TIMEOUT_READ_S=5
 CRM_MAX_RETRIES=3
@@ -629,10 +629,22 @@ the moment this moves anywhere reachable, so D5 still matters.
 **D4** *(Phase 3)* — WhatsApp session idle window. Proposed default: 6 hours. What makes
 two WhatsApp threads "one conversation"?
 
-**D5** *(before leaving a dev machine)* — Auth. Today the API has none (R8), and
+**D5** *(before leaving a dev machine)* — Auth. The pinned copy has none (R8), and
 loopback-only access is the sole control. Once it is reachable at call time from anything
-other than this host, a shared-secret header plus network isolation becomes mandatory.
-Note the whole CRM is readable *and deletable* by anyone who reaches the port.
+other than this host, authentication becomes mandatory. Note the whole CRM is readable *and
+deletable* by anyone who reaches the port.
+
+**But not in the shape this plan assumed — finding, 2026-09-22.** Upstream `origin/main` @
+`22dc995` (2026-09-15, Leah Xing) added `app/core/security.py` — `validate_jwt_token` /
+`get_current_user`, reading `JWT_ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`,
+`JWT_PUBLIC_KEY` and `JWT_JWKS_URL` — and wired `dependencies=[Depends(get_current_user)]`
+into `user_routes.py`, `admission_routes.py` and `document_routes.py`, with the four `JWT_*`
+vars added to `.env.example`. So the API owner closed the no-auth gap with a **Bearer JWT**,
+and the shared-secret header this plan prepared — `CRM_API_KEY` → `X-API-Key`
+(`app/config.py:484-486`, sent only when set, currently unset) — will never satisfy it. The
+pinned copy at `:8098` is unaffected until upstream is merged; when it is, every CRM call
+from the voice path returns 401 until the client can present a token the API accepts. The
+decision is therefore: obtain such a token, or keep the pin.
 
 **D6** *(Phase 8)* — Compliance sign-off: does pushing student PII to Salesforce need
 consent/retention changes? Ties to R12 and `OPEN_QUESTIONS.md` Q18.
@@ -669,8 +681,9 @@ R4 remain source-read, not reproduced.
 **D4** *(Phase 3)* — WhatsApp session idle window (default proposed: 6h). What makes two
 WhatsApp threads "one conversation"?
 
-**D5** *(Phase 0.3)* — Is a shared-secret header acceptable, or is network isolation alone
-enough? Note R8 means *anyone* who reaches `baseUrl` owns the CRM.
+**D5** *(Phase 0.3 — reshaped 2026-09-22; see the D5 finding above and R8)* — Now: take a
+JWT the upstream API accepts, or keep the pinned unauthenticated copy and rely on
+loopback-only isolation? Note R8 means *anyone* who reaches `baseUrl` owns the CRM.
 
 **D6** *(Phase 8)* — Compliance sign-off: does pushing student PII to Salesforce need
 consent/retention changes? Ties to `OPEN_QUESTIONS.md` Q18 (R12).
