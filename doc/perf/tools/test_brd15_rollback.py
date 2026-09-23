@@ -431,6 +431,67 @@ def us001() -> None:
         pt.LOG_PATH = original_path
 
 
+# ───────────────────────── US-014 ─────────────────────────
+
+def us014() -> None:
+    banner("US-014  caller interruption", "BARGE_IN_ENABLED")
+    import numpy as np
+
+    import app.voice_handler as vh
+
+    def tone(amp: int) -> bytes:
+        return vh.pcm_to_ulaw(np.full(160, amp, dtype=np.int16).tobytes())
+
+    original = vh.BARGE_IN_ENABLED
+    try:
+        # Shipped: the voice yields. The caller speaking over the agent is
+        # admitted, and the turn is handed back to them.
+        s = vh.VoiceCallSession()
+        s.mark_speaking([tone(200)] * 40)
+        verdicts = [s.admit_inbound_frame(tone(3000)) for _ in range(vh.BARGE_IN_MIN_FRAMES)]
+        check("US-014  shipped: a caller over the agent is admitted",
+              verdicts[-1] == vh.FRAME_INTERRUPTION,
+              f"verdicts={verdicts}")
+        check("US-014  shipped: the turn is handed back to the caller",
+              s.state == vh.STATE_LISTENING and s._turn_began_as_interruption is True)
+        check("US-014  shipped: a click shorter than MIN_FRAMES does NOT interrupt",
+              (lambda c: (c.mark_speaking([tone(200)] * 40),
+                          c.admit_inbound_frame(tone(3000)))[1] != vh.FRAME_INTERRUPTION
+               )(vh.VoiceCallSession()))
+
+        # REVERT. Note this flag is read at IMPORT -- like TTS_STREAM and
+        # LLM_STREAM, and unlike ADMISSION_ENABLED -- so the revert takes effect
+        # at the next start rather than per call. That is the same contract the
+        # other two streaming flags ship with.
+        vh.BARGE_IN_ENABLED = False
+        s2 = vh.VoiceCallSession()
+        s2.mark_speaking([tone(200)] * 40)
+        s2._audio_buffer.extend([tone(500), tone(600)])
+        check("US-014  reverted: the caller's overlapping frame is discarded",
+              s2.admit_inbound_frame(tone(3000)) == vh.FRAME_MUTED)
+        check("US-014  reverted: and the partial utterance does not survive it",
+              s2._audio_buffer == [], f"buffer={s2._audio_buffer!r}")
+        check("US-014  reverted: the session still believes it is speaking",
+              s2.state == vh.STATE_SPEAKING)
+
+        # The other key keeps its meaning in the reverted configuration: with
+        # MUTE_STT_DURING_TTS=0 the pre-existing escape hatch still lets the
+        # bleed (and the caller) through, exactly as it did before US-014.
+        original_mute = vh.MUTE_STT_DURING_TTS
+        try:
+            vh.MUTE_STT_DURING_TTS = False
+            s3 = vh.VoiceCallSession()
+            s3.mark_speaking([tone(200)] * 40)
+            check("US-014  reverted: MUTE_STT_DURING_TTS=0 still opens the old hatch",
+                  s3.admit_inbound_frame(tone(3000)) == vh.FRAME_LISTENING)
+        finally:
+            vh.MUTE_STT_DURING_TTS = original_mute
+    finally:
+        vh.BARGE_IN_ENABLED = original
+
+    check("US-014  restored: the voice yields again", vh.BARGE_IN_ENABLED is True)
+
+
 def main() -> int:
     print("=" * 74)
     print("BRD-15 -- rollback demonstrated, not asserted")
@@ -440,6 +501,7 @@ def main() -> int:
     us012()
     us013()
     us016()
+    us014()
     us017()
     us006()
     us011()

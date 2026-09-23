@@ -1,10 +1,43 @@
-> **Lens:** Architect (options, costs, evidence) + TPO (feasibility, sequencing) · **Decided by:** **Product Owner — NOT YET DECIDED** · **Class: C** (changes user-perceivable turn-taking) · **Inputs:** `01-brd.md` BRD-19, `03-data-state-analysis.md` SM-01/SM-02, `07-brownfield-reconciliation.md` REC-01, `09-intent-catalog.md` row 22 · **Closes:** `CV-01`
+> **Lens:** Architect (options, costs, evidence) + TPO (feasibility, sequencing) · **Decided by:** **Product Owner** · **Class: C** (changes user-perceivable turn-taking) · **Inputs:** `01-brd.md` BRD-19, `03-data-state-analysis.md` SM-01/SM-02, `07-brownfield-reconciliation.md` REC-01, `09-intent-catalog.md` row 22 · **Closes:** `CV-01`
 
 # Decision Record — Caller interruption (`US-014`)
 
-## STATUS: AWAITING PO SIGN-OFF
+## STATUS: DECIDED — Option 2 (enable with a bounded guard)
 
-No option below has been adopted. Engineering has produced the options, the costs, and a recommendation; the decision is a behaviour change to a live phone line and is the Product Owner's under `01-brd.md` §5.
+Adopted in `doc/perf/decisions/2026-09-19-po-rulings-phase-4a.md` ruling 5, recorded here in the
+machine-readable form `TAC-1` requires:
+
+```jsonc
+{ "decision": "enable_with_guard",
+  "class": "C",
+  "signed_off_by": "Product Owner (2026-09-19 Phase 4a ruling, ruling 5)",
+  "date": "2026-09-22",
+  "options_considered": ["keep_and_document", "enable_with_guard",
+                         "enable_with_echo_suppression"],
+  "artifacts_touched": ["app/main.py", "app/voice_handler.py",
+                        "app/voice_system_prompt.py", "app/config.py"] }
+```
+
+**What was adopted.** The Option 2 in the table below — not Option 3, and the distinction is
+load-bearing. There is **no acoustic echo cancellation**: the gate is a bounded, reference-aware
+energy test, and the carrier's echo path is a *declared assumption* (`BARGE_IN_ECHO_GAIN`), not a
+measurement. The Phase 4a ruling's phrase "enable with echo-suppression" is the same decision
+labelled from the story's option set; the reconciliation is recorded here rather than by editing a
+signed ruling.
+
+**It is ON by default.** The PO ruling is that the voice yields: a caller who speaks over the agent
+takes the floor. `BARGE_IN_ENABLED=1` is the shipped value and the code default, recorded in `.env`
+so it is visible; `0` is the `BRD-15` revert and is a one-line configuration change.
+
+The gate's operating point is **measured**, not assumed —
+`doc/perf/tools/measure_us014_guard.py` over the app's own rendered speech, recorded in
+`doc/perf/us014-echo-guard-tuning.md`: 0 false-admits on the agent's own voice across echo gains
+−6…−24 dB and delays 0…160 ms, and a caller at the agent's own level heard in 35/35 cells at 8–9
+frames (~160 ms). Two limits are stated there rather than smoothed over: the carrier's echo path is
+**modelled, not measured** (`ECHO_GAIN` is a declared, deliberately pessimistic assumption), and a
+caller ~12 dB quieter than the passage they talk over is heard about half the time. What remains
+unmeasured: in-situ loopback confirmation, any live call, and N=2 isolation with both callers
+interrupting.
 
 ---
 
@@ -17,15 +50,62 @@ No option below has been adopted. Engineering has produced the options, the cost
 | **The prompt** | "Immediately yield to the caller… Treat the caller's new utterance as the highest-priority current input" | `app/voice_system_prompt.py` §211 *Interruption Handling*, §502 *Interrupted Agent Responses* |
 | **The architecture** | While the agent speaks, every inbound audio frame is **discarded** and the partial buffer is reset | `app/main.py:624–627`; `MUTE_STT_DURING_TTS` defaults to `1` (`main.py:87–91`), not overridden in `.env` |
 
-The agent is instructed to do something the platform makes impossible. Roughly **300–500 of the prompt's 3,558 tokens** describe behaviour that cannot fire. The caller who interrupts is not heard, while the assistant has been told to act as though they were.
+The agent is instructed to do something the platform makes impossible. The caller who interrupts is not heard, while the assistant has been told to act as though they were.
 
-`09-intent-catalog.md` row 22 records this as a **known-false capability** — the only row in the catalog whose "expected behaviour" describes something the architecture prevents.
+**CORRECTION, 2026-09-22 — the "architecture" column above was wrong, and the code was worse than
+the record.** That guard *could not execute*. It sat at the WebSocket receive site and its
+`tts_playing` flag was True only while the turn was running — and the turn runs *inside* the
+receive loop, so the loop was never reading the socket while the flag was set. `BARGE_IN_DETECTED`
+appears **0 times** in 13.7 MB of live call logs (2026-09-19 → 2026-09-22), which is what a dead
+branch looks like from outside.
+
+The real behaviour was neither "yield" nor "discard" but **defer and replay**: frames arriving
+mid-turn were buffered by the ASGI layer and delivered after playback, where `feed_audio` took them
+as a fresh caller turn. The 2026-09-22 call shows it — `AGENT_SPEECH_STARTED chunks=1376` →
+`AGENT_SPEECH_STOPPED` **13 ms later**, with 27.5 s of audio still to play out of the carrier's
+buffer, and the caller speaking 3 ms after queueing began:
+
+```
+15:51:38,264  TTS generated (27.5s at 24000 Hz)
+15:51:38,286  turn=6 AGENT_SPEECH_STARTED chunks=1376
+15:51:38,299  turn=6 AGENT_SPEECH_STOPPED        <- 13 ms: written to socket, not played
+15:51:38,302  turn=6 USER_SPEECH_STARTED         <- the caller, talking over it
+15:51:38,308  turn=7 UTTERANCE_PROCESSING frames=98   <- answered, late, as a fresh turn
+```
+
+Three consequences the record's original framing missed, all now fixed or recorded:
+
+1. The caller's interruption was answered **late and out of context**, as a new question, after the
+   agent had finished a script they were talking over.
+2. `AGENT_SPEECH_STOPPED` meant "handed to the socket", never "the caller stopped hearing us" — a
+   telemetry statement that was false in the same direction as the defect, which is why four days of
+   logs and every perf run failed to surface it.
+3. The same root cause killed the stream with **WS 1011**: a handler busy in a thread reads nothing,
+   so the carrier's keepalive pings go unanswered (`doc/perf/tools/_ws1011_probe.py` had already
+   diagnosed exactly this; the two harness-clean cold N=2 runs in `doc/perf/runs` died that way).
+
+The estimate of "roughly 300–500 prompt tokens" describing unreachable behaviour was also an
+overestimate. Measured against the engine (`llama3.2:3b`, `prompt_eval_count`, 2026-09-22):
+
+| Assembled prompt | `prompt_eval_count` | chars |
+|---|---|---|
+| before (as shipped) | 3,615 | 17,832 |
+| after — `BARGE_IN_ENABLED=0` (the shipped default) | 3,595 | 17,665 |
+| after — `BARGE_IN_ENABLED=1` | 3,635 | 17,885 |
+
+The net change is −20 tokens in the OFF configuration and +20 in the ON one: the unreachable
+*claims* are removed and the honest contract replaces them, so the saving is far smaller than the
+story assumed — and in the enabled configuration the prompt is slightly *longer*, which the story's
+"removing 300–500 tokens" framing did not anticipate. This is why `TAC-2` says the counts are
+recorded rather than estimated.
 
 ## 2. Why the guard exists (do not treat it as a bug)
 
 `main.py:87–91` states it plainly: Twilio `<Stream>` has no echo-cancellation attribute, so while TTS plays, the microphone re-captures the agent's own voice. Without the guard, the transcript of "Listen to her again" artifacts gets fed back to the model — the agent answers itself, then answers that answer. **The guard is a workaround for a missing carrier feature, not an oversight.**
 
-Any option that removes the guard must answer what replaces it.
+Any option that removes the guard must answer what replaces it. Option 2's answer is the gate in
+§5: the reference signal is already in hand because we synthesised the µ-law we sent, so admission
+can be decided against what the caller is hearing *now*, without an acoustic canceller.
 
 ## 3. Options
 

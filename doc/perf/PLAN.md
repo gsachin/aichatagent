@@ -83,7 +83,7 @@ Measured consequence: **prefill is 1,587-1,990 ms and decode runs at 36.6-38.9 t
 | **Reranker loaded at boot, never called** (23.2 MB ONNX) | Only invoked by `execute_agent_context`; that symbol appears **nowhere** in this repo (verified by grep) |
 | **Semantic cache configured, bypassed** | Same reason; `retrieve_context` skips it |
 | **ERC retrieval is a serialization point** | `cli.py:83` single worker; `hybrid.py:141-144` `gather` over two *synchronous CPU-bound* calls; full-corpus BM25 in Python |
-| **Barge-in impossible** — caller audio discarded during TTS | `main.py:624-627`, `MUTE_STT_DURING_TTS=1` default |
+| **Barge-in ON by default** — the voice yields; `BARGE_IN_ENABLED=0` is the revert | `app/voice_handler.py:admit_inbound_frame`; operating point measured in `doc/perf/us014-echo-guard-tuning.md`. The cited guard (`main.py:624-627`) was **unreachable**, so the real pre-`US-014` behaviour was defer-and-replay; see `doc/perf/decisions/US-014-caller-interruption.md` §1 |
 | Greeting synthesis blocks the event loop | `main.py:593` — sync call in async handler |
 | Two divergent KB stores (different chunkers) | local `langchain` ~47 recs vs ERC `meridian-kb` 37 chunks |
 
@@ -184,7 +184,7 @@ Sequenced by **impact ÷ (effort × risk)**. Every experiment carries a **numeri
 | E1 | **De-serialize ERC retrieval** — thread the sync legs, or raise workers | G2: caller B no longer stalls behind caller A | **A/B** |
 | E2 | `OLLAMA_NUM_PARALLEL=2` + KV budget check | 2 streams at ~19 tok/s each; VRAM ~90% | **A** |
 | E3 | Model candidate sweep: 7B/8B vs 14B, Q4/Q5/Q6, **measured at N=1 and N=2** | 7B ≈ 2× decode → restores single-user feel to each of 2 callers | **C** |
-| E4 | Barge-in — requires the AEC trade-off decision | G8 passes | **C — needs your sign-off** |
+| E4 | Barge-in — the AEC trade-off decision | **Taken** (`US-014` Option 2, Class C, 2026-09-19). What remains is not a decision but the `TAC-4` threshold sweep and the `DG-03` adoption gate | ~~C — needs your sign-off~~ **C — signed off; sweep pending** |
 
 **Gate to Phase F:** G2 passes on 3 consecutive runs; VRAM ≤ 90%.
 

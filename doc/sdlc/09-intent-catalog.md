@@ -33,7 +33,7 @@
 | 19 | Noise / fragment / unintelligible | One short check; never guess intent | — | — | — | ✓ | — | noise ladder, `NOISE_REPLY` |
 | 20 | STT error correction / clarification | Disambiguate from context; ask at most once | — | ✓ | ✓ | ✓ | — | prompt §"Clarification and STT Error Correction" |
 | 21 | Multiple requests in one turn | Address all important requests | — | ✓ | ✓ | ✓ | — | prompt §"Multiple Requests" |
-| 22 | **Interruption / barge-in** | Currently **not supported** — caller audio discarded (`CV-01`) | **✓ Critical** | — | — | ✓ | — | `US-014` — **decision pending PO sign-off** |
+| 22 | **Interruption / barge-in** | Decided and built: the caller may be heard while the agent speaks, the gate admits speech above the echo, and the interrupting words become the next turn (`US-014` Option 2). Ships behind `BARGE_IN_ENABLED=0`, so with the flag off this row is **explicitly unsupported** — the caller's overlapping speech is discarded — and the prompt says so | **✓ Critical** | — | — | ✓ | — | `US-014` — decided 2026-09-19 (Phase 4a ruling 5); thresholds provisional, adoption gated on `DG-03`; see `doc/perf/us014-echo-guard-tuning.md` |
 | 23 | Backchannel ("mm-hm") | Treat as continuation, not a turn | — | — | ✓ | ✓ | — | prompt §"Backchannel Handling" |
 | 24 | Caller silence | Prompt appropriately; do not hang up | — | — | ✓ | ✓ | — | prompt §"Caller Silence" |
 | 25 | Topic change | Follow the caller's new topic | — | ✓ | ✓ | ✓ | — | prompt §"Topic Changes" |
@@ -48,7 +48,7 @@
 > **Count correction.** Earlier prose in this file and in `BRD-18` said "eleven". The table marks **twelve** rows Critical (4, 5, 6, 7, 9, 13, 14, 15, 17, 18, 22, 28). The table is authoritative; the count is twelve. The golden set was built against the table and gives all twelve ≥8 cases, so the set is correct either way — but the discrepancy is recorded rather than quietly fixed, because a protected-intent list is not a place for an off-by-one.
 - **Critical-intent ground truth is a PO sign-off item.** The six rows marked "**PO sign-off required**" (4, 5, 6, 7, 14, 22) are the ones where a wrong answer is materially harmful — a wrong fee, a wrong deadline, a missed handoff, an unsupported capability. This is `DG-03`'s human dependency, made concrete.
 - **`UC-08`** scores per intent, never only in aggregate: a candidate that improves the mean while regressing row 4 or 6 is rejected (`BRD-09`).
-- **Row 22 is a known-false capability today.** The agent's prompt instructs it to yield to interruptions while the platform discards the audio (`CV-01`). Until `US-014` decides, this row's "expected behaviour" column describes an **aspiration the architecture prevents** — recorded here rather than left implicit, because a catalog that lists a capability as working when it cannot work is the same class of defect as the inert config keys.
+- **Row 22 is no longer a known-false capability.** It was: the prompt instructed the agent to yield to interruptions while the platform could not deliver one (`CV-01`). `US-014` has now decided the behaviour *and* the prompt is assembled from the mechanism actually in force, so the two agree in both configurations while the feature is off. Row 22 remains a **PO sign-off item** for its ground truth (`DG-03`), which is a different thing from the capability being false — the golden set's interruption cases stay `PENDING_PO_SIGNOFF` and the intent still reports BLOCKED until that sign-off exists.
 
 ## Provenance limits
 

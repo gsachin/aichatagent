@@ -17,7 +17,7 @@
 | Noise gate + closing detection | `voice_handler.py:451,469` | **Reusable** | Deterministic short-circuits; they save whole model calls |
 | Conversation history | `voice_handler.py:301,605` | **Reusable** | Correctly windowed to 6; not the prefill problem |
 | `app/main.py` WS handler | `main.py:495–690` | **Refactor** | Owns the AEC guard (`CV-01`) and must emit the first-audio mark |
-| AEC / `MUTE_STT_DURING_TTS` guard | `main.py:87–91,624–627` | **Debt** | Works around a missing carrier feature; blocks barge-in (`BRD-19`) — decision owned by `UC-09` |
+| AEC / `MUTE_STT_DURING_TTS` guard | `main.py:144–153,858–861,1166–1169` → `voice_handler.py:admit_inbound_frame` | **Resolved 2026-09-22** | The decision was `US-014` Option 2: the guard moved onto the session as a bounded, reference-aware echo gate (one decision point, TRD-05), so barge-in is possible with `BARGE_IN_ENABLED=1`. The old line numbers were stale, and the guard they named was **unreachable** — see `doc/perf/decisions/US-014-caller-interruption.md` §1 |
 | `llm_backend.chat` / `_chat_ollama` | `llm_backend.py:135–175` | **Refactor** | Non-streaming is the largest single latency term; add streaming + counter capture |
 | `pick_model()` per-call `/api/tags` | `llm_backend.py:180–204` | **Debt** | Uncached HTTP round trip per utterance — **resolve now** (trivial, Class A) |
 | RAG dispatcher + fallback | `app/rag.py:93–205` | **Reusable** | The MCP-first/legacy-fallback seam is sound; keep it |
@@ -147,6 +147,6 @@
 | Four inert config keys | **Resolve now** | "Set ≠ live" already produced one wrong conclusion |
 | Two divergent stores | **Resolve in `MOD-02`** | Highest-effort correctness item; sequenced separately |
 | Pipecat dependency | **Accept for this program** | Removing or wiring it is a re-architecture; `REC-01` defers it |
-| AEC guard blocking barge-in | **Accept pending `UC-09`** | The trade (agent hearing itself) needs a PO decision, not an engineering default |
+| AEC guard blocking barge-in | **DECIDED 2026-09-22 (`US-014` Option 2)** | The trade (agent hearing itself) was answered with a bounded echo gate rather than an engineering default. ON by default — the voice yields; `BARGE_IN_ENABLED=0` reverts. Thresholds measured (`doc/perf/us014-echo-guard-tuning.md`) |
 | No `SM-xx` in code | **Accept** | Analytical instruments; not a refactor mandate (`REC-10`) |
 | No session idle timeout | **Accept** | Costs a held session, not inference (`SM-01` Q10) |

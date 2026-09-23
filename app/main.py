@@ -57,6 +57,8 @@ from xml.sax.saxutils import escape
 import json
 import logging
 from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -139,10 +141,17 @@ _outbound_worker = None
 _follow_up_scheduler = None
 _crm_worker = None
 
-# AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so
-# while the assistant's TTS is playing we drop incoming caller audio —
-# it is mostly the caller's mic re-capturing our own speech ("Listen to
-# her again" artifacts). Set MUTE_STT_DURING_TTS=0 to disable.
+# AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so the
+# caller's mic re-captures our own speech ("Listen to her again" artifacts) and
+# that bleed must not reach the STT.
+#
+# The DECISION moved to the session in US-014 (`VoiceCallSession.
+# admit_inbound_frame`, app/voice_handler.py) so that both Twilio handlers share
+# one decision point (TRD-05) instead of each holding a copy. This name is kept
+# because it is the setting an operator reaches for, and because the pre-US-014
+# escape hatch still means what it always did: with `BARGE_IN_ENABLED=0`,
+# MUTE_STT_DURING_TTS=1 discards the caller's overlapping speech and 0 lets the
+# bleed through. With the gate ON, the gate supersedes it.
 MUTE_STT_DURING_TTS = settings.MUTE_STT_DURING_TTS
 
 
@@ -708,6 +717,171 @@ async def websocket_voice_text(websocket: WebSocket):
             pass
 
 
+# ── US-014: the turn as its own task ─────────────────────────────────
+# One cause, two defects. `process_utterance` used to be awaited inline in the
+# receive loop, so nothing read the socket while a turn ran:
+#
+#   1. **No barge-in.** A caller frame arriving mid-turn is buffered by the
+#      ASGI layer and delivered only after playback had finished, so the
+#      caller's interruption was answered late as a brand-new question. The
+#      guard meant to drop those frames lived at the receive site, and its
+#      `tts_playing` flag was True only while the receive site was NOT running
+#      -- `BARGE_IN_DETECTED` appears 0 times in 13.7 MB of live call logs.
+#   2. **WS 1011.** A handler busy in a thread reads nothing, so the carrier's
+#      keepalive pings went unanswered and the stream died. That is the
+#      measured conclusion of `doc/perf/tools/_ws1011_probe.py`, and it is how
+#      both harness-clean cold N=2 runs in `doc/perf/runs` ended.
+#
+# So the receive loop owns the socket for the life of the connection and the
+# turn owns the audio. Nothing cancels the turn task: it is the only sender, so
+# it is also the only thing that can stop what the caller HEARS, and letting it
+# stop itself keeps its cleanup off the reader's critical path.
+
+@dataclass
+class _VoiceTurn:
+    """What one turn needs, grouped so the turn can be a task of its own."""
+
+    websocket: Any
+    session: Any
+    label: str                       # "WS /ws/twilio" / "WS /ws/twilio-outbound"
+    stream_sid: str = ""
+    call_sid: str = ""
+    transcript_parts: list[str] = field(default_factory=list)
+    call_linker: Any = None
+    #: Set when the turn itself ended the call, so the reader's disconnect path
+    #: does not hang up a second time -- Twilio answers the repeat with a 404
+    #: and the log calls it "Twilio hangup failed", which is a red herring that
+    #: has already cost one investigation.
+    ended: dict = field(default_factory=lambda: {"by_turn": False})
+
+
+async def _clear_carrier_playback(websocket, stream_sid: str) -> bool:
+    """Empty the carrier's buffered playback (Twilio Media Streams `clear`).
+
+    Stopping our sends is not enough on its own: Twilio plays out what it has
+    already buffered, so without this the caller keeps hearing the agent for as
+    long as that buffer lasts. Measured on the 2026-09-22 call: 601 chunks --
+    12.02 s of audio -- were written to the socket in 7 ms and the log declared
+    the agent finished, while the caller went on hearing it. `clear` is the only
+    message that stops audio already handed over, and it is available because
+    `_stream_markup` builds a bidirectional <Connect><Stream>.
+    """
+    return await _ws_send(websocket, json.dumps({
+        "event": "clear", "streamSid": stream_sid or "",
+    }))
+
+
+async def _run_voice_turn(t: _VoiceTurn) -> None:
+    """One caller turn: pipeline, playback, transcript, hangup. Never raises."""
+    session = t.session
+    sent = {"n": 0}
+    marked = {"first": False}
+
+    async def _send_chunks(frames: list[bytes]) -> None:
+        """Write frames to the carrier, stopping the moment the caller speaks."""
+        for chunk in frames:
+            if session.cancel_requested():
+                # The caller is talking. Stop feeding the carrier -- the caller
+                # of this function sends `clear` so they stop HEARING us too.
+                return
+            out_payload = base64.b64encode(chunk).decode("ascii")
+            response = json.dumps({
+                "event": "media",
+                "streamSid": t.stream_sid or "",
+                "media": {"payload": out_payload},
+            })
+            if not await _ws_send(t.websocket, response):
+                raise WebSocketDisconnect(code=1000)
+            # The echo gate's reference is what was SENT, in send order: one
+            # inbound frame consumes one of these, which is what keeps the gate
+            # aligned with what the caller is hearing right now.
+            session.note_playback([chunk])
+            sent["n"] += 1
+            # US-001: first_audio_sent is taken at the socket write, not at the
+            # end of synthesis — this is the end of BRD-02's measured segment.
+            if not marked["first"]:
+                marked["first"] = True
+                _t = getattr(session, "_trace", None)
+                if _t is not None:
+                    _t.mark("first_audio_sent")
+                    _t.emit()
+
+    # Armed BEFORE any send, because under TTS_STREAM the synthesiser sends
+    # mid-pipeline through this same sink.
+    session.mark_speaking()
+
+    try:
+        from app.voice_handler import TTS_STREAM
+
+        tts_chunks, dialogue, end_call = await session.process_utterance(
+            chunk_sink=_send_chunks if TTS_STREAM else None)
+    except WebSocketDisconnect:
+        session.end_turn()
+        raise                       # stream is dead — let the handler exit
+    except Exception:
+        logger.exception(f"{t.label}: pipeline failed")
+        tts_chunks, dialogue, end_call = [], "", False
+
+    try:
+        # Save transcript for post-call lead extraction
+        if dialogue:
+            t.transcript_parts.append(dialogue)
+            # Push to SSE for live dashboard
+            if t.stream_sid and t.stream_sid in _active_call_sids:
+                _active_call_sids[t.stream_sid]["transcript"].append(dialogue)
+                _push_transcript_event("transcript", t.stream_sid, {
+                    "dialogue": dialogue,
+                })
+
+            # ── CRM: link as soon as the caller's name is known ──
+            # Spawned, never awaited: this is a live call, and an attempt runs an
+            # LLM extraction. The linker declines once linked or out of tries, so
+            # the cost is bounded and usually paid once. See app/crm/voice.py.
+            if t.call_linker is not None and t.call_linker.can_try:
+                from app.crm.tasks import spawn as _spawn_crm_task
+
+                _spawn_crm_task(
+                    t.call_linker.attempt(" ".join(t.transcript_parts)),
+                    label=f"crm link for call {t.stream_sid}",
+                )
+
+        # The batch path sends everything here; a streamed turn already went out
+        # through the sink, chunk by chunk, mid-pipeline.
+        remaining = tts_chunks[sent["n"]:]
+        session.log_event("AGENT_SPEECH_STARTED", chunks=len(remaining))
+        if remaining and not session.cancel_requested():
+            await _send_chunks(remaining)
+        if session.cancel_requested():
+            await _clear_carrier_playback(t.websocket, t.stream_sid)
+            if sent["n"] < len(tts_chunks):
+                # Frames were written but not all of them, so the caller heard a
+                # prefix. On the batch path generation has already finished and
+                # the whole answer is in the history -- see the method's note.
+                session.note_answer_truncated()
+            # `reason` is the point: `AGENT_SPEECH_STOPPED` used to mean "handed
+            # to the socket", which is not the same event as "the caller stopped
+            # hearing us", and the difference is exactly what this story is.
+            session.log_event("AGENT_SPEECH_STOPPED", reason="interrupted",
+                              played_chunks=sent["n"])
+        else:
+            session.log_event("AGENT_SPEECH_STOPPED", reason="complete",
+                              played_chunks=sent["n"])
+    finally:
+        # Every exit path, or the gate would keep rejecting the caller's
+        # ordinary speech as echo for the rest of the call.
+        session.end_turn()
+
+    # Deterministic hangup: caller sign-off detected → end call
+    if end_call:
+        logger.info(f"{t.label}: ending call after sign-off ({t.stream_sid})")
+        t.ended["by_turn"] = True
+        await _hangup_twilio_call(t.call_sid)
+        try:
+            await t.websocket.close()
+        except Exception:
+            pass
+
+
 # ── WebSocket: Twilio Media Streams ──────────────────────────────────
 
 @app.websocket("/ws/twilio")
@@ -722,18 +896,37 @@ async def websocket_twilio(websocket: WebSocket):
       4. Synthesise answer with Kokoro TTS → stream back as µ-law.
     """
     from app.voice_handler import VoiceCallSession
+    from app.voice_handler import FRAME_ECHO, FRAME_MUTED
 
     await websocket.accept()
     logger.info("WS /ws/twilio: inbound call connected (AI pipeline active)")
 
     stream_sid: str | None = None
     call_sid: str = ""
-    tts_playing: bool = False
     transcript_parts: list[str] = []
     session = VoiceCallSession()  # direction defaults to "inbound"
     # Created when the stream starts, once the caller's number is known. None
     # until then, so a media frame arriving first cannot NameError.
     call_linker = None
+
+    # US-014: the turn runs as its own task so this loop keeps reading the
+    # socket. `transcript_parts` is handed over as the same list object, so the
+    # post-call handler in the `finally` below sees everything the turn appended.
+    call = _VoiceTurn(websocket=websocket, session=session,
+                      label="WS /ws/twilio", transcript_parts=transcript_parts)
+    turn: dict = {"task": None, "deferred": False}
+
+    async def _run_turn() -> None:
+        """Start one turn. Swallows everything: a task's exception has no reader."""
+        call.stream_sid = stream_sid or ""
+        call.call_sid = call_sid
+        call.call_linker = call_linker
+        try:
+            await _run_voice_turn(call)
+        except WebSocketDisconnect:
+            logger.info("WS /ws/twilio: turn ended with the stream")
+        except Exception:
+            logger.exception("WS /ws/twilio: turn failed")
 
     try:
         while True:
@@ -826,15 +1019,24 @@ async def websocket_twilio(websocket: WebSocket):
                     # behind it. `to_thread` gives it a worker thread instead.
                     chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
                     logger.info(f"AI greeting: {len(chunks)} chunks")
-                    for chunk in chunks:
-                        out_payload = base64.b64encode(chunk).decode("ascii")
-                        response = json.dumps({
-                            "event": "media",
-                            "streamSid": stream_sid or "",
-                            "media": {"payload": out_payload},
-                        })
-                        if not await _ws_send(websocket, response):
-                            raise WebSocketDisconnect(code=1000)
+                    # US-014: the greeting is agent speech, so the echo gate is
+                    # armed for it exactly as for a turn. Otherwise the greeting
+                    # window is the one window where the caller is measured
+                    # against nothing while our own voice is in their ear.
+                    session.mark_speaking()
+                    try:
+                        for chunk in chunks:
+                            out_payload = base64.b64encode(chunk).decode("ascii")
+                            response = json.dumps({
+                                "event": "media",
+                                "streamSid": stream_sid or "",
+                                "media": {"payload": out_payload},
+                            })
+                            if not await _ws_send(websocket, response):
+                                raise WebSocketDisconnect(code=1000)
+                            session.note_playback([chunk])
+                    finally:
+                        session.mark_listening()
                     logger.info("AI greeting sent via TTS")
                 except WebSocketDisconnect:
                     raise  # stream is dead — exit the handler cleanly
@@ -851,105 +1053,41 @@ async def websocket_twilio(websocket: WebSocket):
                 except Exception:
                     continue
 
-                # AEC workaround: drop caller audio while our TTS is
-                # playing (it is mostly the mic re-capturing our own speech).
-                # Logged as BARGE_IN_DETECTED — pre-Wave-1 the system cannot
-                # cancel TTS playback, only shield STT from the bleed.
-                if MUTE_STT_DURING_TTS and tts_playing:
-                    session.log_event("BARGE_IN_DETECTED")
-                    session.reset_utterance()
-                    continue
+                # ── US-014: the ONE inbound-frame decision (TRD-05) ──
+                # This was four copy-pasted lines per handler, and its condition
+                # -- `tts_playing` -- was True only while this loop was NOT
+                # reading the socket, so neither copy could ever run. The
+                # decision lives on the session now, where the audio buffer is.
+                verdict = session.admit_inbound_frame(ulaw_bytes)
+                if verdict == FRAME_ECHO:
+                    continue            # our own playback coming back, rejected
+                if verdict == FRAME_MUTED:
+                    continue            # BARGE_IN_ENABLED=0: the documented discard
+                # FRAME_INTERRUPTION needs nothing here. The turn task notices
+                # the cancel itself -- it owns the sends, so it is also what
+                # flushes the carrier's buffer -- and this frame falls through
+                # to feed_audio, so the words the caller interrupted with are
+                # the first words of their next turn.
 
                 # Feed audio to VAD + utterance detector
                 utterance_ready = session.feed_audio(ulaw_bytes)
 
                 if utterance_ready:
-                    # Process the utterance through the full AI pipeline.
-                    # US-005: under TTS_STREAM the synthesiser hands chunks out
-                    # as produced and the sink sends them mid-pipeline, so
-                    # first audio reaches the socket while later clauses are
-                    # still synthesising. The batch path sends after return,
-                    # exactly as before (BRD-15: the flag is the revert).
-                    tts_playing = True
-                    _marked_first_frame = False
-                    sent = {"n": 0}
-
-                    async def _send_chunks(frames: list[bytes]) -> None:
-                        nonlocal _marked_first_frame
-                        for chunk in frames:
-                            out_payload = base64.b64encode(chunk).decode("ascii")
-                            response = json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid or "",
-                                "media": {"payload": out_payload},
-                            })
-                            if not await _ws_send(websocket, response):
-                                raise WebSocketDisconnect(code=1000)
-                            sent["n"] += 1
-                            # US-001: first_audio_sent is taken at the socket
-                            # write, not at the end of synthesis — this is the
-                            # end of BRD-02's measured segment.
-                            if not _marked_first_frame:
-                                _marked_first_frame = True
-                                _t = getattr(session, "_trace", None)
-                                if _t is not None:
-                                    _t.mark("first_audio_sent")
-                                    _t.emit()
-
-                    stream = False
-                    try:
-                        from app.voice_handler import TTS_STREAM
-
-                        stream = TTS_STREAM
-                        tts_chunks, dialogue, end_call = await session.process_utterance(
-                            chunk_sink=_send_chunks if stream else None)
-                    except WebSocketDisconnect:
-                        tts_playing = False
-                        raise  # stream is dead — exit the handler cleanly
-                    except Exception:
-                        logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks, dialogue, end_call = [], "", False
-
-                    # Save transcript for post-call lead extraction
-                    if dialogue:
-                        transcript_parts.append(dialogue)
-                        # Push to SSE for live dashboard
-                        if stream_sid and stream_sid in _active_call_sids:
-                            _active_call_sids[stream_sid]["transcript"].append(dialogue)
-                            _push_transcript_event("transcript", stream_sid, {
-                                "dialogue": dialogue,
-                            })
-
-                        # ── CRM: link as soon as the caller's name is known ──
-                        # Spawned, never awaited: this is a live call, and an
-                        # attempt runs an LLM extraction. The linker declines
-                        # once linked or out of tries, so the cost is bounded and
-                        # usually paid once. See app/crm/voice.py.
-                        if call_linker is not None and call_linker.can_try:
-                            from app.crm.tasks import spawn as _spawn_crm_task
-
-                            _spawn_crm_task(
-                                call_linker.attempt(" ".join(transcript_parts)),
-                                label=f"crm link for call {stream_sid}",
-                            )
-
-                    # Send TTS audio chunks back through the WebSocket. The
-                    # batch path sends everything here; a streamed turn already
-                    # went out through the sink, chunk by chunk, mid-pipeline.
-                    try:
-                        session.log_event("AGENT_SPEECH_STARTED",
-                                          chunks=len(tts_chunks) - sent["n"])
-                        for chunk in tts_chunks[sent["n"]:]:
-                            await _send_chunks([chunk])
-                        session.log_event("AGENT_SPEECH_STOPPED")
-                    finally:
-                        tts_playing = False
-
-                    # Deterministic hangup: caller sign-off detected → end call
-                    if end_call:
-                        logger.info(f"WS /ws/twilio: ending call after sign-off ({stream_sid})")
-                        await _hangup_twilio_call(call_sid)
-                        break
+                    task = turn["task"]
+                    if task is not None and not task.done():
+                        # Still speaking. feed_audio does NOT clear the buffer,
+                        # so the utterance is intact and the next frame
+                        # re-triggers this; it starts the moment the turn ends.
+                        # In practice the gap is one frame, because the turn
+                        # stops itself as soon as the cancel is set. Logged on
+                        # the transition only: the condition stays true for every
+                        # frame of the deferral.
+                        if not turn["deferred"]:
+                            turn["deferred"] = True
+                            session.log_event("TURN_DEFERRED")
+                    else:
+                        turn["deferred"] = False
+                        turn["task"] = _asyncio.create_task(_run_turn())
 
             elif event == "dtmf":
                 dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
@@ -967,12 +1105,28 @@ async def websocket_twilio(websocket: WebSocket):
         # Stream died while the call may still be live (caller hangup,
         # no-answer, or tunnel blip) — end the call via REST so Twilio
         # never plays the "We seem to have lost the connection" fallback
-        # <Say> into the caller's ear.
-        await _hangup_twilio_call(call_sid)
+        # <Say> into the caller's ear. Unless the turn already ended it:
+        # `_run_voice_turn` closes the socket after a sign-off hangup, so the
+        # reader wakes here on a call that is already completed. Twilio answers
+        # the repeat with a 404 and the log reports "Twilio hangup failed",
+        # which reads like a defect and is not one.
+        if not call.ended["by_turn"]:
+            await _hangup_twilio_call(call_sid)
     except Exception:
         logger.exception("WS /ws/twilio: unexpected error")
-        await _hangup_twilio_call(call_sid)
+        if not call.ended["by_turn"]:
+            await _hangup_twilio_call(call_sid)
     finally:
+        # The reader no longer owns the turn, so nothing else will stop it. At
+        # teardown it is cancelled here -- its own `finally` still runs, which is
+        # what leaves the session LISTENING for the post-call path below.
+        task = turn["task"]
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (_asyncio.CancelledError, Exception):
+                pass
         # Clear the active-call entry on ANY exit path — prevents phantom
         # "active calls" when Twilio's stop event never arrives.
         if stream_sid and stream_sid in _active_call_sids:
@@ -1025,15 +1179,32 @@ async def websocket_twilio_outbound(websocket: WebSocket):
       4. Synthesise answer with Kokoro TTS → stream back as µ-law.
     """
     from app.voice_handler import VoiceCallSession
+    from app.voice_handler import FRAME_ECHO, FRAME_MUTED
 
     await websocket.accept()
     logger.info("WS /ws/twilio-outbound: outbound call connected (AI pipeline active)")
 
     stream_sid: str | None = None
     call_sid: str = ""
-    tts_playing: bool = False
     transcript_parts: list[str] = []
     session = VoiceCallSession(direction="outbound")
+
+    # US-014: as in the inbound handler, the turn is a task so this loop keeps
+    # reading the socket. Same cause, same two defects -- see `_run_voice_turn`.
+    call = _VoiceTurn(websocket=websocket, session=session,
+                      label="WS /ws/twilio-outbound", transcript_parts=transcript_parts)
+    turn: dict = {"task": None, "deferred": False}
+
+    async def _run_turn() -> None:
+        """Start one turn. Swallows everything: a task's exception has no reader."""
+        call.stream_sid = stream_sid or ""
+        call.call_sid = call_sid
+        try:
+            await _run_voice_turn(call)
+        except WebSocketDisconnect:
+            logger.info("WS /ws/twilio-outbound: turn ended with the stream")
+        except Exception:
+            logger.exception("WS /ws/twilio-outbound: turn failed")
 
     try:
         while True:
@@ -1132,17 +1303,24 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     logger.info(
                         f"AI greeting: {len(chunks)} chunks"
                     )
-                    for chunk in chunks:
-                        out_payload = base64.b64encode(chunk).decode("ascii")
-                        response = json.dumps(
-                            {
-                                "event": "media",
-                                "streamSid": stream_sid or "",
-                                "media": {"payload": out_payload},
-                            }
-                        )
-                        if not await _ws_send(websocket, response):
-                            raise WebSocketDisconnect(code=1000)
+                    # US-014: agent speech, so the echo gate is armed for it
+                    # exactly as for a turn (see the inbound handler).
+                    session.mark_speaking()
+                    try:
+                        for chunk in chunks:
+                            out_payload = base64.b64encode(chunk).decode("ascii")
+                            response = json.dumps(
+                                {
+                                    "event": "media",
+                                    "streamSid": stream_sid or "",
+                                    "media": {"payload": out_payload},
+                                }
+                            )
+                            if not await _ws_send(websocket, response):
+                                raise WebSocketDisconnect(code=1000)
+                            session.note_playback([chunk])
+                    finally:
+                        session.mark_listening()
                     logger.info("AI greeting sent via TTS")
                 except WebSocketDisconnect:
                     raise  # stream is dead — exit the handler cleanly
@@ -1159,60 +1337,27 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 except Exception:
                     continue
 
-                # AEC workaround: drop caller audio while our TTS is
-                # playing (it is mostly the mic re-capturing our own speech).
-                # Logged as BARGE_IN_DETECTED — pre-Wave-1 the system cannot
-                # cancel TTS playback, only shield STT from the bleed.
-                if MUTE_STT_DURING_TTS and tts_playing:
-                    session.log_event("BARGE_IN_DETECTED")
-                    session.reset_utterance()
-                    continue
+                # US-014: the ONE inbound-frame decision (TRD-05). This was the
+                # second copy of a guard that could not execute -- see the
+                # inbound handler for the full note.
+                verdict = session.admit_inbound_frame(ulaw_bytes)
+                if verdict == FRAME_ECHO:
+                    continue            # our own playback coming back, rejected
+                if verdict == FRAME_MUTED:
+                    continue            # BARGE_IN_ENABLED=0: the documented discard
 
                 # Feed audio to VAD + utterance detector
                 utterance_ready = session.feed_audio(ulaw_bytes)
 
                 if utterance_ready:
-                    # Process the utterance through the full AI pipeline
-                    try:
-                        tts_chunks, dialogue, end_call = await session.process_utterance()
-                    except Exception:
-                        logger.exception("VoiceCall: pipeline failed")
-                        tts_chunks, dialogue, end_call = [], "", False
-
-                    # Save transcript for post-call lead extraction
-                    if dialogue:
-                        transcript_parts.append(dialogue)
-                        # Push to SSE for live dashboard
-                        if stream_sid and stream_sid in _active_call_sids:
-                            _active_call_sids[stream_sid]["transcript"].append(dialogue)
-                            _push_transcript_event("transcript", stream_sid, {
-                                "dialogue": dialogue,
-                            })
-
-                    # Send TTS audio chunks back through the WebSocket
-                    session.log_event("AGENT_SPEECH_STARTED", chunks=len(tts_chunks))
-                    tts_playing = True
-                    try:
-                        for chunk in tts_chunks:
-                            out_payload = base64.b64encode(chunk).decode("ascii")
-                            response = json.dumps(
-                                {
-                                    "event": "media",
-                                    "streamSid": stream_sid or "",
-                                    "media": {"payload": out_payload},
-                                }
-                            )
-                            if not await _ws_send(websocket, response):
-                                raise WebSocketDisconnect(code=1000)
-                    finally:
-                        tts_playing = False
-                    session.log_event("AGENT_SPEECH_STOPPED")
-
-                    # Deterministic hangup: caller sign-off detected → end call
-                    if end_call:
-                        logger.info(f"WS /ws/twilio-outbound: ending call after sign-off ({stream_sid})")
-                        await _hangup_twilio_call(call_sid)
-                        break
+                    task = turn["task"]
+                    if task is not None and not task.done():
+                        if not turn["deferred"]:
+                            turn["deferred"] = True
+                            session.log_event("TURN_DEFERRED")
+                    else:
+                        turn["deferred"] = False
+                        turn["task"] = _asyncio.create_task(_run_turn())
 
             elif event == "dtmf":
                 dtmf_digit = msg.get("dtmf", {}).get("digit", "?")
@@ -1231,11 +1376,22 @@ async def websocket_twilio_outbound(websocket: WebSocket):
         logger.info("WS /ws/twilio-outbound: client disconnected")
         # Stream died while the call may still be live — end it via REST
         # so Twilio never plays the "lost connection" fallback <Say>.
-        await _hangup_twilio_call(call_sid)
+        # Unless the turn already ended it (see the inbound handler).
+        if not call.ended["by_turn"]:
+            await _hangup_twilio_call(call_sid)
     except Exception:
         logger.exception("WS /ws/twilio-outbound: unexpected error")
-        await _hangup_twilio_call(call_sid)
+        if not call.ended["by_turn"]:
+            await _hangup_twilio_call(call_sid)
     finally:
+        # The reader no longer owns the turn; at teardown it is stopped here.
+        task = turn["task"]
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (_asyncio.CancelledError, Exception):
+                pass
         # Clear the active-call entry on ANY exit path — prevents phantom
         # "active calls" when Twilio's stop event never arrives.
         if stream_sid and stream_sid in _active_call_sids:

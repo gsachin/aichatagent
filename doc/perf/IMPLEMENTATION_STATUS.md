@@ -47,7 +47,7 @@ Every story file in `doc/sdlc/stories/` now carries a `**Status:**` line and a t
 | **US-004** | Stream LLM generation | MOD-03 | **B** | US-001, US-002 | **BLOCKED** | `DG-03` — changes what the model returns |
 | **US-005** | Stream TTS synthesis | MOD-04 | **B** | US-002 | **BLOCKED** | `DG-03` — changes what the caller hears |
 | **US-003** | Frozen golden set + eval runner | MOD-06 | A | — | **AWAITING SIGN-OFF** | `eval/` built: 161 cases, 28/28 intents, `checks.py` exit 0. **137 of 161 ground truths PENDING. 12/12 critical intents BLOCKED.** Cannot freeze without PO approval |
-| **US-014** | Interruption decision | MOD-01 | **C** | — | **AWAITING SIGN-OFF** | `doc/perf/decisions/US-014-caller-interruption.md` — 3 options costed, recommendation recorded, nothing adopted |
+| **US-014** | Interruption decision | MOD-01 | **C** | — | **DONE · ON BY DEFAULT** | `doc/perf/decisions/US-014-caller-interruption.md` — Option 2 adopted (Phase 4a ruling 5); the voice yields by default. Thresholds measured (`doc/perf/us014-echo-guard-tuning.md`); `BARGE_IN_ENABLED=0` reverts in one line |
 | **US-015** | Model/runtime benchmark | MOD-03 | C | `DG-03` | **PARTIAL** | `doc/perf/us015-benchmark-results.md` — latency leg measured; **quality leg blocked**. Two plan assumptions falsified |
 
 ## Unblocked work queue (Class A, no `DG-03` dependency)

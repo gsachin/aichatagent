@@ -1278,14 +1278,18 @@ class SessionDriver:
 
     * A turn's trailing silence must exceed the app's 600 ms endpoint gate or the
       turn never fires (`app/voice_handler.py:369`).
-    * The app drops inbound frames while its own TTS is playing and resets the
-      utterance buffer (`app/main.py:624`), so the next turn's speech must not be
-      sent until the previous response has finished. The driver waits for
-      outbound quiescence; `post_turn_quiet_ms` is recorded in the summary.
+    * The driver waits for outbound quiescence before sending the next turn's
+      speech, and `post_turn_quiet_ms` is recorded in the summary. The reason
+      this rule used to cite - "the app drops inbound frames while its own TTS is
+      playing and resets the utterance buffer (`app/main.py:624`)" - was false:
+      that guard was unreachable (its `tts_playing` flag was true only while the
+      receive site was not running), and the frames were replayed as a fresh
+      turn instead. See US-014. The wait remains the right pacing; it is this
+      harness's convention, not a workaround for an app behaviour.
     * Between turns the driver sends NOTHING rather than a continuous silence
-      stream. The app drops those frames anyway, so they cannot change what is
-      measured - their only effect is one BARGE_IN_DETECTED log line per frame,
-      i.e. avoidable disk I/O inside the measured window.
+      stream, so nothing unrelated to the fixture sits inside the measured
+      window. With `BARGE_IN_ENABLED=1` that matters more: silence is fed to the
+      echo gate like any other frame.
     """
 
     def __init__(

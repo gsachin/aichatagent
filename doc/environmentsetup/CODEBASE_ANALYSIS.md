@@ -105,11 +105,17 @@ offers, admin, MCP, health. Notable: `/twilio/voice` (934), `/twilio/whatsapp` (
 2. `GET /twilio/voice/connect` (946) → `<Connect><Stream>` to `/ws/twilio`; host from
    `_resolve_tunnel_host()` (273-289)
 3. `WS /ws/twilio` (453-628):
-   - `start` → `generate_ulaw_greeting()` (516 → `voice_handler.py:124-144`) — Kokoro TTS +
-     scipy resample **inline in the async handler, not `to_thread`**; first call also pays
-     ONNX engine cold load
-   - `media` → AEC gate: if `MUTE_STT_DURING_TTS` (default on) and `tts_playing`, the chunk
-     is **dropped** and `reset_utterance()` called (547-550) → **no barge-in**
+   - `start` → `generate_ulaw_greeting()` — Kokoro TTS + scipy resample. Runs in
+     `asyncio.to_thread` since `US-017` C4; before that it ran **inline in the async handler**
+     and a cold ONNX load froze the whole event loop (the worst case being the first call of a
+     fresh process). Superseded claim, kept visible because the analysis said otherwise
+   - `media` → one inbound-frame decision, `VoiceCallSession.admit_inbound_frame` (`US-014`):
+     while the agent speaks it returns **muted** (only when `BARGE_IN_ENABLED=0`, the revert —
+     the caller's chunk is discarded and `reset_utterance()` called), **echo** (rejected against
+     the playback reference), **interruption** (admitted; the turn stops itself and sends Twilio
+     `clear`), or **listening** (an ordinary caller frame). The gate this replaced was
+     **unreachable** — its `tts_playing` flag was true only while the receive loop was not reading
+     the socket — so the pre-`US-014` behaviour was defer-and-replay, not discard
    - VAD: RMS energy threshold `<80` on 20ms chunks; fires at 30 trailing silent frames
      (~600ms) or 300 frames (~6s max) (`voice_handler.py:282-283`)
    - `process_utterance` (`voice_handler.py:374-510`), strictly serial:

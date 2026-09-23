@@ -31,6 +31,7 @@ import io as _io
 import logging
 import re
 import os
+import time as _time
 from pathlib import Path
 
 import numpy as np
@@ -243,6 +244,39 @@ def pcm_to_ulaw(pcm_bytes: bytes) -> bytes:
     return audioop.lin2ulaw(pcm_bytes, audio_format.SAMPLE_WIDTH)
 
 
+def frame_rms(ulaw_chunk: bytes) -> float:
+    """RMS amplitude of one µ-law frame, on the VAD's own scale.
+
+    Extracted so `is_silent` and the US-014 echo gate measure energy the SAME
+    way. Two copies of this would be two definitions of "loud", and the defect
+    would surface as a gate whose `BARGE_IN_ABS_FLOOR` silently did not mean
+    what `is_silent`'s 80 means -- the same reasoning that keeps `_prepare_audio`
+    single-copy for the speculative and real STT passes.
+    """
+    if len(ulaw_chunk) < 2:
+        return 0.0
+    try:
+        samples = np.frombuffer(ulaw_to_pcm(ulaw_chunk), dtype=np.int16)
+        return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
+    except Exception:                                   # noqa: BLE001 — never break a call
+        return 0.0
+
+
+def _reference_rms(playout: list[bytes], cursor: int = 0) -> float:
+    """RMS of the audio being played out at `cursor`, holding TWO frames.
+
+    Two rather than one (~40 ms) because the echo of the frame being played and
+    the echo of the frame before it are both in flight at once, and the carrier
+    jitters by a frame in either direction. Holding one frame would let the
+    reference momentarily read as silence between two loud frames, and a
+    reference of zero is a gate with no ratio at all.
+    """
+    window = playout[cursor:cursor + 2]
+    if not window:
+        return 0.0
+    return max(frame_rms(f) for f in window)
+
+
 # ── Standalone helper for main.py greeting ────────────────────────────
 
 
@@ -367,6 +401,51 @@ MIN_UTTERANCE_FRAMES = settings.MIN_UTTERANCE_FRAMES
 # survive. Lowering it is not a free win: it splits callers who pause.
 VAD_SILENCE_MS = settings.VAD_SILENCE_MS
 VAD_SILENCE_FRAMES = max(1, round(VAD_SILENCE_MS / 20))
+
+
+# ── US-014: the turn state and the ONE inbound-frame decision ───────────
+# `doc/sdlc/03-data-state-analysis.md` SM-01 names SPEAKING -> PROCESSING an
+# illegal transition, because `MUTE_STT_DURING_TTS` discarded the audio. The
+# state existed only as the `tts_playing` local in each WebSocket handler, and
+# it was True only while the handler was NOT reading the socket -- so the guard
+# that consumed it could never fire. Stating the state on the session, where the
+# audio buffer lives, is what makes one decision point possible instead of the
+# two copies that existed.
+#
+# READ THIS BEFORE ADDING A SECOND VAD: the gate below decides when an
+# interruption STARTS, never when a turn ENDS. `feed_audio` remains BRD-04's one
+# end-of-speech decision. An admitted interruption is appended to the same
+# buffer and closed by the same 600 ms rule as any other utterance.
+STATE_LISTENING = "LISTENING"
+STATE_PROCESSING = "PROCESSING"
+STATE_SPEAKING = "SPEAKING"
+
+#: The verdicts of `admit_inbound_frame`. Exactly one of these, per frame.
+FRAME_LISTENING = "LISTENING"        # not speaking: an ordinary caller frame
+FRAME_INTERRUPTION = "INTERRUPTION"  # admitted while speaking: stop and listen
+FRAME_ECHO = "ECHO"                  # rejected: our own playback coming back
+FRAME_MUTED = "MUTED"                # BARGE_IN_ENABLED off: the documented discard
+
+BARGE_IN_ENABLED = settings.BARGE_IN_ENABLED
+BARGE_IN_ECHO_GAIN = settings.BARGE_IN_ECHO_GAIN
+BARGE_IN_MARGIN = settings.BARGE_IN_MARGIN
+BARGE_IN_ABS_FLOOR = settings.BARGE_IN_ABS_FLOOR
+BARGE_IN_MIN_FRAMES = settings.BARGE_IN_MIN_FRAMES
+BARGE_IN_REF_DECAY = settings.BARGE_IN_REF_DECAY
+#: The pre-existing AEC workaround, now the gate's OFF-mode behaviour: with
+#: BARGE_IN_ENABLED=0 this key decides between discarding the caller's
+#: overlapping speech (1, the default) and letting the mic bleed through (0).
+#: Read here rather than in the handlers because the decision moved onto the
+#: session -- one decision point, TRD-05.
+MUTE_STT_DURING_TTS = settings.MUTE_STT_DURING_TTS
+#: One frame of carrier audio, and therefore one tick of the playout clock.
+FRAME_MS = 20
+
+#: Appended to a history entry when the caller cut in before the answer had
+#: finished playing. The prompt's "Interruption Handling" section describes this
+#: marking; the two are asserted to agree by `tests/test_us014_barge_in.py`.
+TRUNCATION_MARK = ("[the caller began speaking before I finished - they may not "
+                   "have heard the end of this]")
 
 
 def _vad_silence_frames() -> int:
@@ -578,6 +657,32 @@ class VoiceCallSession:
         self._silence_count = 0
         self._total_frames = 0
 
+        # US-014: the turn state, and the reference signal the echo gate
+        # measures the caller against. `_playout` is the outbound audio the
+        # carrier is playing out on a 20 ms clock; one inbound frame consumes
+        # one outbound frame, which is what keeps the reference ALIGNED with
+        # what the caller is hearing right now rather than with what we sent
+        # minutes ago. Without that alignment the gate would measure a quiet
+        # passage late in a long answer against the loud passage at its start
+        # and admit the agent's own voice as an interruption.
+        self.state = STATE_LISTENING
+        self._playout: list[bytes] = []
+        self._ref_env = 0.0
+        self._ref_at: float | None = None
+        self._barge_run = 0
+        #: Set when a turn began as an admitted interruption, so the min-burst
+        #: noise floor can be applied knowingly (see `process_utterance`).
+        self._turn_began_as_interruption = False
+        #: US-004's cancel signal, produced here rather than left unwired. The
+        #: chain below it (rag.query_rag_stream -> llm_backend.generate_stream)
+        #: has always consumed one; nothing ever made one, so `cancel` was
+        #: permanently None and `GenerationCancelled` was unreachable.
+        self._cancel: asyncio.Event | None = None
+        #: What the gate did during the last playback window, logged once when
+        #: the window closes. Per-frame logging here would be 50 lines/second
+        #: and would say nothing a count does not.
+        self._barge_counts = {"echo": 0, "short": 0, "admitted": 0}
+
         # Conversation context (accumulated across utterances)
         self._conversation_history: list[str] = []
 
@@ -604,6 +709,232 @@ class VoiceCallSession:
         self._spec_started = False
         self._spec_result = None
         self._spec_task = None
+
+    # ── US-014: the turn state and the ONE inbound-frame decision ──────
+
+    def mark_speaking(self, chunks: list[bytes] | None = None) -> None:
+        """Enter SPEAKING, and seed the reference the echo gate compares to.
+
+        `chunks` is the audio being handed to the carrier. It is queued rather
+        than measured here because the carrier plays it out on its own clock:
+        the reference has to follow the PLAYOUT position, not the send position.
+
+        The reference is PRIMED here, not on the first tick. Without that, a
+        session entering SPEAKING has `_ref_env == 0` until an inbound frame
+        arrives, so the ratio test degenerates to the absolute floor alone
+        exactly at playback onset -- the moment the carrier starts returning our
+        voice, and therefore the moment a floor-only gate is most likely to
+        admit our own speech as an interruption.
+        """
+        self.state = STATE_SPEAKING
+        self._barge_run = 0
+        self._ref_at = _time.monotonic()
+        self.note_playback(chunks)
+        if self._playout:
+            self._ref_env = _reference_rms(self._playout, 0)
+
+    def note_playback(self, frames: list[bytes] | None) -> None:
+        """Queue frames the carrier will play out, for the gate's reference.
+
+        Called once per frame actually written to the socket, in send order, so
+        the reference tracks what the caller is hearing rather than what was
+        synthesised. A frame we never sent is a frame nobody hears, and counting
+        it would raise the threshold against the caller for no reason.
+        """
+        if frames:
+            self._playout.extend(frames)
+
+    def mark_listening(self) -> None:
+        """Leave SPEAKING: playback finished, or was cancelled, or the stream died.
+
+        Must be on every exit path from a turn. A session left in SPEAKING would
+        gate the caller's ordinary speech as echo for the rest of the call.
+        """
+        if any(self._barge_counts.values()):
+            # The gate's own account of the window it was watching. `echo` frames
+            # were rejected as our own bleed, `short` runs were speech-shaped but
+            # too brief to believe, `admitted` is what interrupted. This is the
+            # measurement TAC-4 tunes against, and it is the signal the old
+            # `BARGE_IN_DETECTED` claimed to provide per frame and never did once.
+            self.log_event("BARGE_IN_SUMMARY", **self._barge_counts)
+            self._barge_counts = {"echo": 0, "short": 0, "admitted": 0}
+        self.state = STATE_LISTENING
+        self._barge_run = 0
+        self._playout.clear()
+        self._ref_env = 0.0
+        # A new playback window starts its own playout clock; keeping the old
+        # timestamp would make the first frame of the next window look like a
+        # stall of however long the silence lasted.
+        self._ref_at = None
+
+    # ── the per-turn cancel signal (US-004's producer) ─────────────────
+
+    def begin_turn(self) -> None:
+        """Open a turn and mint its cancel signal.
+
+        Fresh per turn, never reused: an Event left set from the previous
+        interruption would cancel the next turn the moment it started.
+
+        Deliberately does NOT clear `_turn_began_as_interruption`: the gate sets
+        that when it admits the interrupting frame, which is BEFORE the utterance
+        closes and this runs -- clearing it here would erase the only record that
+        this turn started as an interruption.
+        """
+        self._cancel = asyncio.Event()
+
+    def request_interruption(self) -> None:
+        """Ask the running turn to stop. Idempotent, and safe before a turn exists."""
+        if self._cancel is not None:
+            self._cancel.set()
+
+    def cancel_requested(self) -> bool:
+        """Has this turn been interrupted? Read by the turn's own send loop."""
+        return self._cancel is not None and self._cancel.is_set()
+
+    def end_turn(self) -> None:
+        """Close the turn. Does NOT clear the caller's audio buffer."""
+        self._cancel = None
+        self._turn_began_as_interruption = False
+        self.mark_listening()
+
+    def note_answer_truncated(self) -> None:
+        """The caller cut in mid-playback: mark the answer they did not finish hearing.
+
+        On the BATCH path (`TTS_STREAM=0`, the shipped configuration) generation
+        has already completed by the time an interruption lands -- the turn is
+        stopped in its send loop -- so `process_utterance` has already written
+        the whole answer into the history. The caller heard only the frames that
+        were actually sent before the `clear`.
+
+        The text cannot be truncated to match, because there is no exact mapping
+        from sent audio back to characters. So the history keeps the answer and
+        gains a marker saying the ending was not heard, which is what the model
+        actually needs: without it, the next turn's model believes it delivered
+        an answer the caller is still waiting for, and will refuse to repeat it.
+
+        Idempotent, and a no-op when the last entry is not an answer.
+        """
+        if not self._conversation_history:
+            return
+        last = self._conversation_history[-1]
+        if not last.startswith("Assistant: ") or last.endswith(TRUNCATION_MARK):
+            return
+        self._conversation_history[-1] = f"{last} {TRUNCATION_MARK}"
+
+    def _advance_reference(self) -> None:
+        """Move the reference along the playout clock.
+
+        Driven by `time.monotonic()`, not by inbound frames. Frames are only the
+        OPPORTUNITY to sample the playout position; if the inbound stream stalls
+        or arrives in a burst, counting frames would let the reference drift
+        behind what the caller is hearing and measure them against a passage
+        that has already ended. Wall clock cannot drift.
+
+        Catch-up is bounded: more than half a second behind means the stream
+        stalled or the process was descheduled, and replaying that much playout
+        in one step would produce a reference that means nothing. The floor is
+        the honest fallback, so the queue is drained instead.
+        """
+        now = _time.monotonic()
+        if self._ref_at is None:
+            self._ref_at = now
+        ticks = int(((now - self._ref_at) * 1000.0) // FRAME_MS)
+        if ticks <= 0:
+            return                      # same frame: the reference holds
+        if ticks > 25:                  # > 500 ms behind: re-sync, do not replay
+            self._ref_at = now
+            self._playout.clear()
+            # Decay across the gap that was missed rather than one step: a
+            # single 0.95 would leave a threshold standing on a passage that
+            # ended over half a second ago, and the floor is the honest fallback
+            # when we no longer know what is playing. Bounded so the result is
+            # deterministic rather than denormal.
+            self._ref_env *= BARGE_IN_REF_DECAY ** min(ticks, 200)
+            return
+        self._ref_at += ticks * FRAME_MS / 1000.0
+        for _ in range(ticks):
+            if not self._playout:
+                break
+            self._playout.pop(0)
+        if self._playout:
+            self._ref_env = _reference_rms(self._playout, 0)
+        else:
+            self._ref_env *= BARGE_IN_REF_DECAY
+
+    def admit_inbound_frame(self, ulaw_chunk: bytes) -> str:
+        """The ONE place a caller frame is admitted or rejected while we speak.
+
+        TRD-05: one decision point. Both Twilio handlers call this and nothing
+        else decides; before US-014 the same four lines were copy-pasted into
+        each handler and neither copy could execute.
+
+        Returns exactly one of `FRAME_LISTENING` / `FRAME_INTERRUPTION` /
+        `FRAME_ECHO` / `FRAME_MUTED`. The verdict says what the frame IS; the
+        caller decides what to do about it. An admitted frame is handed to
+        `feed_audio` by the handler so that the buffer, the VAD and BRD-04's one
+        end-of-speech decision stay in a single place.
+        """
+        if self.state != STATE_SPEAKING:
+            return FRAME_LISTENING
+
+        if not BARGE_IN_ENABLED:
+            if not MUTE_STT_DURING_TTS:
+                # The pre-existing escape hatch, kept and still read: a
+                # deployment that would rather take the mic bleed than lose the
+                # caller's overlap sets this to 0 and gets the frames through.
+                # With the gate ON this key is superseded -- the gate does the
+                # job it was approximating by doing nothing.
+                return FRAME_LISTENING
+            # The BRD-15 revert. This is the discard the documents always
+            # claimed and the code never did: before the reader split the guard
+            # was unreachable, so the real behaviour was to buffer the caller's
+            # overlapping speech and feed it back as a fresh turn after playback.
+            self.reset_utterance()
+            self._advance_reference()
+            return FRAME_MUTED
+
+        rms = frame_rms(ulaw_chunk)
+        threshold = max(BARGE_IN_ABS_FLOOR,
+                        self._ref_env * BARGE_IN_ECHO_GAIN * BARGE_IN_MARGIN)
+        self._advance_reference()
+
+        if rms < threshold:
+            self._barge_counts["echo"] += 1
+            if self._barge_run:
+                # A run was counting and ran out: speech-shaped but too brief to
+                # believe. Counted separately from plain echo, because the two
+                # have different fixes -- `echo` is a gate that is too loose,
+                # `short` is one that is too strict.
+                self._barge_counts["short"] += 1
+            self._barge_run = 0
+            return FRAME_ECHO
+
+        self._barge_run += 1
+        if self._barge_run < BARGE_IN_MIN_FRAMES:
+            # Still counting. A click, a lip smack or a single frame of line
+            # noise clears the ratio and stops here; a spoken word does not.
+            # These frames are deliberately NOT buffered: holding them would
+            # mean replaying audio into the buffer from two places, and the
+            # cost of not holding them is the first ~100 ms of the caller's
+            # first word. If TAC-4's tuning shows that onset costing the
+            # transcript, buffering the run is the contained fix.
+            return FRAME_ECHO
+
+        # Believed: the caller is speaking over the agent. From here the frame
+        # is ordinary caller audio -- state returns to LISTENING so that the
+        # rest of the utterance is not re-litigated frame by frame, and the
+        # turn that follows is closed by BRD-04's one endpointing rule.
+        self.state = STATE_LISTENING
+        self._turn_began_as_interruption = True
+        self._barge_counts["admitted"] += 1
+        # The evidence for TAC-4: what was heard, what it was measured against,
+        # and by how much it cleared it. The threshold is recorded rather than
+        # recomputed later, because the reference it came from decays.
+        self.log_event("BARGE_IN_ADMITTED", frames=BARGE_IN_MIN_FRAMES,
+                       rms=round(rms, 1), ref_env=round(self._ref_env, 1),
+                       threshold=round(threshold, 1))
+        self.request_interruption()
+        return FRAME_INTERRUPTION
 
     def _maybe_start_speculative_stt(self) -> None:
         """Transcribe the audio-so-far while the pause is still being measured.
@@ -693,13 +1024,7 @@ class VoiceCallSession:
         """
         if len(ulaw_chunk) < 2:
             return True
-        try:
-            pcm = ulaw_to_pcm(ulaw_chunk)
-            samples = np.frombuffer(pcm, dtype=np.int16)
-            rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
-            return rms < 80  # threshold for 8 kHz µ-law
-        except Exception:
-            return True
+        return frame_rms(ulaw_chunk) < 80  # threshold for 8 kHz µ-law
 
     def feed_audio(self, ulaw_chunk: bytes) -> bool:
         """
@@ -775,13 +1100,25 @@ class VoiceCallSession:
             return [], "", False
 
         self._turn += 1
-        self.log_event("UTTERANCE_PROCESSING", frames=self._total_frames)
+        self.begin_turn()
+        self.log_event("UTTERANCE_PROCESSING", frames=self._total_frames,
+                       barge_in=self._turn_began_as_interruption)
 
         # ── Min-burst filter: drop sub-300ms noise bursts before STT ──
-        if self._total_frames < MIN_UTTERANCE_FRAMES:
+        # US-014: an admitted interruption is held to a lower floor. The 300 ms
+        # rule exists to keep a cough or a door slam out of the LLM, and the gate
+        # has already applied that test to this audio by a different means -- it
+        # cleared the echo ratio for BARGE_IN_MIN_FRAMES and was believed as
+        # speech. Re-applying 300 ms would discard the very utterance the caller
+        # interrupted to make ("stop", "wait", "no -- "), which is the failure
+        # this story exists to fix. This is NOT a second end-of-turn decision:
+        # BRD-04 still closes the turn, at 600 ms, exactly once (TAC-5).
+        floor = (BARGE_IN_MIN_FRAMES if self._turn_began_as_interruption
+                 else MIN_UTTERANCE_FRAMES)
+        if self._total_frames < floor:
             logger.info(
                 f"VoiceCall: dropped {self._total_frames}-frame burst "
-                f"(<{MIN_UTTERANCE_FRAMES * 20} ms) as noise"
+                f"(<{floor * 20} ms) as noise"
             )
             self.reset_utterance()
             return [], "", False
@@ -877,11 +1214,40 @@ class VoiceCallSession:
             # US-004: clauses are spoken as the model decodes (the overlap
             # happens only when TTS_STREAM is on too -- without it the clauses
             # accumulate and the batch synthesis below is unchanged).
+            # US-014: the cancel signal goes with it, so an interruption stops
+            # the decode rather than only muting its output.
             answer, streamed_chunks = await self._query_llm_streamed(
-                transcript, chunk_sink if TTS_STREAM else None)
+                transcript, chunk_sink if TTS_STREAM else None, cancel=self._cancel)
         else:
             answer = await self._query_llm(transcript)
         self.log_event("LLM_COMPLETED", chars=len(answer or ""))
+        if self.cancel_requested():
+            # The caller interrupted while we were generating. There is nothing
+            # to say and nothing to apologise for: the utterance AFTER this one
+            # is already being collected in the buffer, and answering the
+            # interruption with the degraded asset ("I'm sorry, I didn't catch
+            # that") would respond to a successful interruption with a
+            # non-sequitur -- and count the turn `degraded` when it was in fact
+            # `served` by being stopped. An empty audio return is correct here.
+            #
+            # The history entry is what the prompt's contract is written against
+            # ("your response appears with [interrupted here]"). On the streamed
+            # path `parts` holds only the clauses actually SPOKEN, so the marker
+            # lands at the point the caller really cut in; on the batch path
+            # nothing was spoken, and saying so is more useful to the model than
+            # an empty answer it might try to finish.
+            heard = " ".join(answer.split()) if answer else ""
+            self._conversation_history.append(
+                "Assistant: " + (
+                    f"{heard} [interrupted here]"
+                    if heard else
+                    "[interrupted here - the caller began speaking before I answered]"
+                )
+            )
+            self.log_event("TURN_INTERRUPTED", stage="generation",
+                           spoken_chars=len(heard))
+            dialogue = f"Caller: {transcript}\nAssistant: (interrupted)"
+            return [], dialogue, False
         if not answer:
             # US-016 AC-5: the engine returned nothing. This used to return []
             # -- silence on a live line. The caller now hears the fixed
@@ -1085,7 +1451,7 @@ class VoiceCallSession:
         the trace carries a real TTFT for streamed turns.
         """
         try:
-            from app.llm_backend import ClauseCutter, GenerationFailed
+            from app.llm_backend import ClauseCutter, GenerationCancelled, GenerationFailed
             from app.rag import query_rag_stream
 
             prompt = self._build_llm_prompt(question)
@@ -1111,6 +1477,7 @@ class VoiceCallSession:
                     chunks.extend(frames)
                     any_audio = True
 
+            cancelled = False
             try:
                 # C3/N1: same retrieval-query decoupling as the batch path.
                 async for item in query_rag_stream(
@@ -1126,13 +1493,32 @@ class VoiceCallSession:
                             await _speak_clause(clause.text)
                     else:
                         counters = item
+            except GenerationCancelled:
+                # NOT a failure (AC-3). The caller interrupted and the decode
+                # stopped: the trailing clause is deliberately NOT flushed,
+                # because finishing the sentence is the exact behaviour US-014
+                # exists to remove. Before this handler existed the broad
+                # `except Exception` below caught it, logged a traceback and
+                # returned ("", []) -- which `process_utterance` reads as an
+                # empty engine answer and answers with the degraded "I didn't
+                # catch that" asset, i.e. an apology for the caller's own
+                # successful interruption.
+                cancelled = True
+                self.log_event("LLM_CANCELLED")
+                logger.info("VoiceCall: generation cancelled by caller interruption")
             except GenerationFailed:
                 logger.warning("VoiceCall: streamed generation failed")
-            # A complete trailing clause is spoken; a half-sentence never is.
-            tail = cutter.flush()
-            if tail is not None:
-                await _speak_clause(tail.text)
+            if not cancelled:
+                # A complete trailing clause is spoken; a half-sentence never is.
+                tail = cutter.flush()
+                if tail is not None:
+                    await _speak_clause(tail.text)
 
+            # `parts` holds only what was actually SPOKEN, so on a cancel this is
+            # the heard prefix -- which is what belongs in the conversation
+            # history. Recording the full answer would tell the model it had
+            # said things the caller never heard, and it would then refuse to
+            # repeat them.
             answer = " ".join(parts)
             if self._trace is not None:
                 self._trace.mark("llm_done")

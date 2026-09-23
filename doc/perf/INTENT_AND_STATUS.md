@@ -72,7 +72,7 @@ Rev 1 quoted **"N=2 warm p50 1,999 ms best run"** — the luckiest small-n draw 
 | **US-008** de-serialize retrieval | IMPLEMENTED — **no acceptance test** | ERC legs off the event loop; retrieval 7,164 → ~2,227 ms · DoD 1/7 |
 | **US-002** load harness | IN PROGRESS | Drives live `/ws/twilio`; two gaps (§4) |
 | **US-003** golden set | AWAITING SIGN-OFF | 161 cases, 28/28 intents; **137 PENDING** |
-| **US-014** interruption decision | AWAITING SIGN-OFF | Package written; Class C, decision is yours |
+| **US-014** interruption decision | DONE (Option 2) · ON BY DEFAULT | Class C signed off 2026-09-19 (Phase 4a ruling 5); the PO ruling is that the voice yields by default. Thresholds measured (`doc/perf/us014-echo-guard-tuning.md`); `BARGE_IN_ENABLED=0` is the one-line revert |
 | **US-015** model benchmark | PARTIAL | Latency leg measured; quality leg blocked |
 
 **`US-008` is the outlier.** It is the only implemented story with no suite over its ACs or TACs — the evidence is a measurement, not a passing test. Treat it as weaker than the four beside it.

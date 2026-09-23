@@ -213,7 +213,20 @@ playback and calls `reset_utterance()`, throwing away partially accumulated spee
 (`main.py:547-550`). It is an acoustic-echo-cancellation workaround. Real barge-in requires
 proper AEC and streaming TTS, and is a significant chunk of work.
 
-**Answer:**
+**Answer:** **Yes — decided 2026-09-19 (Phase 4a PO ruling 5), recorded 2026-09-22.** `US-014`
+Option 2: enable with a bounded guard. Implemented behind `BARGE_IN_ENABLED=0` (the shipped
+default, and the `BRD-15` revert), with the guard's thresholds **provisional** pending the sweep
+in `doc/perf/us014-echo-guard-tuning.md`. Adoption is gated on `DG-03`.
+
+Two corrections to the paragraph above, from the RCA of 2026-09-22. **The citation was stale**
+(the guard is at `main.py:858–861` / `:1166–1169`). More importantly, **the guard could not
+execute at all**: its `tts_playing` flag was True only while the WebSocket receive loop — which
+contains the turn — was not reading the socket, so `BARGE_IN_DETECTED` appears 0 times in 13.7 MB
+of live call logs. The real behaviour was neither discard nor barge-in but **defer and replay**:
+the caller's overlapping speech was buffered by the ASGI layer and answered as a fresh question
+after playback finished. That is worse than the paragraph states, and it is what a caller
+experiences as "the agent will not let me interrupt". See
+`doc/perf/decisions/US-014-caller-interruption.md` §1 for the trace.
 
 ---
 

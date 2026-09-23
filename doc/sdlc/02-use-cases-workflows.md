@@ -42,7 +42,7 @@
   6. Post-call: transcript processed for lead extraction and persisted.
 - **Alternate flows:**
   - **A1.** Caller stays silent at the IVR → carrier times out and proceeds to the stream without a digit.
-  - **A2.** Caller speaks before the greeting finishes → audio is discarded by the echo guard (`BRD-19`), and the caller must repeat.
+  - **A2.** Caller speaks before the greeting finishes → since `US-014` the caller is heard: the greeting is agent speech, so the gate is armed for it and an interruption takes the floor. (Before, and with `BARGE_IN_ENABLED=0`, the audio is discarded by the echo guard and the caller must repeat — `BRD-19`.)
 - **Exception flows:**
   - **E1.** Model not resident → first turn pays a cold load; `BRD-03` is breached and traced.
   - **E2.** Retrieval service unavailable → fallback to local store; answer still produced (`BRD-13`).
@@ -105,7 +105,7 @@
 | Dependency failure | ✓ E2; embedding hop failure degrades to keyword-only |
 | Retry | ✓ clarification capped at one; on repeat the model must answer |
 | Concurrent operation | ✓ retrieval is shared and single-threaded (`BRD-07`) |
-| Cancellation | — mid-generation cancellation is impossible; the call is non-streaming |
+| Cancellation | ✓ since `US-014`: an interruption stops the send loop, flushes the carrier's buffer with `clear`, and records the answer as not fully heard. Generation itself still runs to completion on the batch path (`TTS_STREAM=0`), so the cancel is abandon-and-suppress there and true only under `LLM_STREAM=1` |
 | Recovery | ✓ next turn proceeds independently; history preserved |
 | Partial completion | ✓ empty model response leaves history appended but unanswered — recorded as a gap |
 
@@ -338,7 +338,7 @@
 - **Actor(s):** Product Owner (decider); Caller (affected)
 - **Trigger:** Stage 5 identified that the prompt instructs the agent to yield on interruption while the architecture discards the audio. A decision is required.
 - **Preconditions:** Latency baseline exists; the echo-cancellation constraint is understood.
-- **Postconditions — success:** A recorded decision — either barge-in is implemented, or it is explicitly not supported and the prompt is corrected to stop describing it.
+- **Postconditions — success:** A recorded decision — either barge-in is implemented, or it is explicitly not supported and the prompt is corrected to stop describing it. **SATISFIED 2026-09-22:** Option 2 (enable with a bounded guard) is recorded in `doc/perf/decisions/US-014-caller-interruption.md` with its decision object, the guard is built behind `BARGE_IN_ENABLED`, and the prompt is assembled from the mechanism in force — so both halves hold with the flag off *and* on. The PO ruling is that the voice yields, so the ON configuration ships by default.
 - **Postconditions — failure:** The contradiction persists and is carried as an accepted gap with an owner.
 - **Main flow:**
   1. The current behaviour is restated: caller audio is discarded while the agent speaks.
@@ -415,7 +415,7 @@
 - **Trigger → Outcome:** Caller finishes a sentence → caller hears the first syllable of the reply.
 - **Steps:**
   1. Carrier streams 20 ms µ-law frames to the app.
-  2. Echo guard discards frames while the agent speaks (`BRD-19`).
+  2. The one inbound-frame decision (`VoiceCallSession.admit_inbound_frame`) returns one of four verdicts. While the agent speaks: **muted** — the caller's frame is discarded (gate off, `BRD-19`); **echo** — rejected as our own playback returning; **interruption** — admitted, the turn stops itself and flushes the carrier's buffer with `clear`; **listening** — an ordinary caller frame. The guard decides only when an interruption *starts*.
   3. End-of-speech decision fires after sustained trailing silence (`BRD-04`).
   4. Audio decoded and transcribed (UC-02 step 1).
   5. Noise gate decides whether the model is invoked at all (UC-02 A1).

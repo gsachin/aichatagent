@@ -159,9 +159,9 @@ kb/
 1. **Created by:** UC-01, actor Caller (via carrier stream open).
 2. **States:** OPENING → GREETING → LISTENING ⇄ PROCESSING → SPEAKING → LISTENING … → CLOSING → ENDED.
 3. **Who transitions:** Carrier opens/closes; the app drives GREETING→LISTENING→PROCESSING→SPEAKING; the caller drives LISTENING (by speaking) and CLOSING (by sign-off).
-4. **Legal:** as drawn. **Illegal:** PROCESSING → GREETING (no re-greeting); ENDED → any state; SPEAKING → PROCESSING (a turn cannot begin while the agent speaks — `MUTE_STT_DURING_TTS` discards the audio, `BRD-19`).
+4. **Legal:** as drawn. **Illegal:** PROCESSING → GREETING (no re-greeting); ENDED → any state. **SPEAKING → PROCESSING is now LEGAL** (2026-09-22, `US-014`): with `BARGE_IN_ENABLED=0` the caller's audio is discarded while the agent speaks, and with it on the gate admits speech above the echo and the turn transitions SPEAKING → LISTENING with a non-empty buffer. The state is held on the session (`VoiceCallSession.state`) rather than in each handler's `tts_playing` local — that local was True only while the handler was *not* reading the socket, which is why the guard it fed never once executed.
 5. **Repeatable:** LISTENING→PROCESSING→SPEAKING is repeatable per turn. GREETING is not.
-6. **Concurrent:** Caller speaks during SPEAKING → audio discarded (today); with barge-in enabled this becomes a real race and needs its own decision (`BRD-19`).
+6. **Concurrent:** Caller speaks during SPEAKING → discarded when the gate is off; admitted by the gate when on. This is a real race and it now has its decision (`US-014`): the gate decides only when an interruption *starts*, while `feed_audio` remains BRD-04's single end-of-turn decision, so the interrupted utterance closes on the same 600 ms rule as any other (`TAC-5`).
 7. **Halfway stop:** process crash while PROCESSING → session is lost; the carrier stream closes; no resume.
 8. **Resume:** none — a dropped call ends. Caller redials (new session, new SM-01 instance).
 9. **Cancel:** caller hangs up from any state → ENDED; post-call handling (UC-05) still runs if a transcript exists.

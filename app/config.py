@@ -196,6 +196,93 @@ class Settings:
         default_factory=lambda: _env_int("VAD_SPECULATIVE_ADVANCE_MS", 220)
     )
 
+    # ── Caller interruption (US-014, Option 2) ──────────────────────
+    # Whether the caller may be heard while the agent is speaking.
+    #
+    # **ON by default.** The PO ruling is that the voice yields: a caller who
+    # speaks over the agent takes the floor, always. This flag exists because
+    # the revert must be a configuration change (`BRD-15`), not because the
+    # behaviour is optional.
+    #
+    # Setting it to 0 is the revert, and it is NOT a no-op — it is a behaviour
+    # change with a measured history. Until the receive loop read the socket
+    # during a turn, the `MUTE_STT_DURING_TTS` guard at main.py:858/1166 was
+    # unreachable, so the real behaviour was neither "yield" nor "discard" but
+    # "defer and replay": the caller's overlapping speech was buffered by the
+    # ASGI layer and fed back as a fresh turn once playback had already
+    # finished. With the reader split (`US-014` T-1) the guard became reachable,
+    # so 0 now means the discard the documents always claimed — the caller is
+    # not heard and does not know it.
+    #
+    # The gate below is what makes yielding possible on a carrier with no echo
+    # cancellation: it admits the caller and rejects our own voice. Its
+    # operating point is measured — `doc/perf/tools/measure_us014_guard.py`,
+    # recorded in `doc/perf/us014-echo-guard-tuning.md`. At the values here, 0
+    # false-admits on our own voice across echo gains −6…−24 dB, and a caller at
+    # the agent's own level is heard 35/35 cells at 8–9 frames (~160 ms). The
+    # known limit: a caller much quieter than the passage they are talking over
+    # (12 dB down) is heard about half the time.
+    BARGE_IN_ENABLED: bool = field(
+        default_factory=lambda: _env("BARGE_IN_ENABLED", "1").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+    # The echo gate: `max(ABS_FLOOR, ref_env * ECHO_GAIN * MARGIN)`.
+    #
+    # TWO factors, not one ratio, and the split is the point. A single ratio
+    # hides two different quantities inside one number:
+    #   * ECHO_GAIN -- how much of our own signal comes back to us. That is a
+    #     property of the carrier's acoustic path, which US-002 TAC-9 excludes
+    #     from local measurement. It cannot be tuned here; it can only be
+    #     DECLARED as an assumption and swept in the tuning record.
+    #   * MARGIN -- how far above the echo the caller must be. That is ours to
+    #     choose and ours to tune.
+    # Folding them together is how a guard ends up unable to fire: measured on
+    # this box's own rendered speech (doc/perf/tools/fixtures/*/turn*.ulaw,
+    # 20 ms frames), the agent's speech sits at p50 ~2,000 and p90 ~4,200 RMS,
+    # and a caller's own speech sits at the same p50/p90. A threshold of
+    # `ref * 2.0` therefore demands the caller beat the agent's p50 passage by
+    # more than their own p90 -- so the gate would open only during the agent's
+    # quiet passages and the story would ship "enabled" while behaving exactly
+    # as it does today. That is the failure TAC-4 names.
+    #
+    # Declared assumption (NOT a measurement): -6 dB, i.e. half the amplitude
+    # returns. Replace with the measured path when one exists; the tuning
+    # record must carry this number and where it came from.
+    #
+    # Both values are PROVISIONAL until doc/perf/us014-echo-guard-tuning.md
+    # exists. TAC-4 requires them tuned on real speech with the evidence
+    # recorded, and this comment is not that record.
+    BARGE_IN_ECHO_GAIN: float = field(
+        default_factory=lambda: _env_float("BARGE_IN_ECHO_GAIN", 0.5)
+    )
+    BARGE_IN_MARGIN: float = field(
+        default_factory=lambda: _env_float("BARGE_IN_MARGIN", 2.0)
+    )
+    # Above `is_silent`'s own 80 (voice_handler.py:700), or the gate would admit
+    # frames the VAD then discards as silence — a detection that cannot become a
+    # turn. Below the quietest speech decile measured on the fixtures (~157), or
+    # a softly-spoken interruption would be gated out. The band is narrow on
+    # purpose: it is the one place the two thresholds must not overlap.
+    BARGE_IN_ABS_FLOOR: float = field(
+        default_factory=lambda: _env_float("BARGE_IN_ABS_FLOOR", 150.0)
+    )
+    # Consecutive admitting frames before the interruption is believed (6 x
+    # 20 ms = 120 ms). A click or a lip smack clears the ratio for a frame or
+    # two; a spoken word does not. Deliberately below MIN_UTTERANCE_FRAMES: an
+    # interruption is detected early and then spoken, and the 300 ms noise floor
+    # is applied to the turn, not to the moment of detection.
+    BARGE_IN_MIN_FRAMES: int = field(
+        default_factory=lambda: _env_int("BARGE_IN_MIN_FRAMES", 6)
+    )
+    # Per-frame decay of the playback envelope (0.95 per 20 ms frame holds
+    # ~270 ms of memory). It exists because the echo of what we sent arrives
+    # tens to hundreds of ms later through the carrier: the envelope has to
+    # outlive the send, and must not outlive it by so long that the caller's
+    # own speech is measured against a passage that has already ended.
+    BARGE_IN_REF_DECAY: float = field(
+        default_factory=lambda: _env_float("BARGE_IN_REF_DECAY", 0.95)
+    )
+
     # ── LLM backend: Ollama ─────────────────────────────────────────
     # The literal IPv4 default is deliberate, not a shortcut: on this platform
     # "localhost" resolves to ::1 first and Ollama binds IPv4 only, so the

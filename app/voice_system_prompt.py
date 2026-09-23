@@ -30,6 +30,57 @@ AGENT_NAME = settings.AGENT_NAME
 #: grounding rules in section 25 still apply.
 NO_CONTEXT_MARKER = "(No university profile information was retrieved for this question.)"
 
+
+# ── US-014: the interruption contract, per configuration ───────────────
+# `BRD-19` requires the prompt to describe only what the platform can do, and
+# `US-014` AC-2 makes prompt and code one change: the mismatch is the defect in
+# EITHER direction. So this passage is not deleted and not merely reworded -- it
+# is filled according to the mechanism actually in force, because the two
+# configurations need opposite instructions and only one of them can be true at
+# a time.
+#
+#   BARGE_IN_ENABLED=1 -> the caller CAN be heard mid-speech; the gate stops
+#     playback and marks the transcript. The agent's job is what to say next.
+#   BARGE_IN_ENABLED=0 -> the caller CANNOT be heard mid-speech; their
+#     overlapping speech is discarded before it reaches the model (see
+#     `admit_inbound_frame`). Telling the agent to "immediately yield" would be
+#     `CV-01` again, in the opposite direction: an instruction for a capability
+#     the running system does not have.
+#
+# Both variants carry behaviour. The ON variant keeps the yield list US-014's
+# TAC-8 protects; the OFF variant converts the same tokens into the mitigation
+# that a half-duplex line actually needs -- short turns, because a caller who
+# wants to correct you has to wait for you to stop.
+
+INTERRUPTION_CONTRACT_ON = """\
+When the caller begins speaking over you, the system stops your speech and the conversation shows it — your response is marked where you were cut off, or carries a note that the caller may not have heard the end. When that happens:
+
+1. Do not attempt to finish your sentence.
+2. Do not continue the interrupted response.
+3. Do not repeat the unfinished response automatically.
+4. Treat the caller's new utterance as the highest-priority current input.
+5. Re-evaluate the conversation using the updated context.
+6. Respond to what the caller currently needs.
+
+The audio/voice system physically stops playback, so the caller did not hear the
+rest of what you were saying. You are responsible for determining what should be
+said next."""
+
+INTERRUPTION_CONTRACT_OFF = """\
+You cannot be interrupted. Anything the caller says while you are speaking is
+discarded before it reaches you, and you will not be told that it happened.
+
+So:
+
+1. Keep your answers short. A caller who wants to correct you cannot do so until you stop speaking.
+2. If the caller repeats themselves, or answers something you did not ask, they may have been talking over you. Answer the question they are asking now.
+3. Do not claim you were interrupted, and do not ask them to repeat an answer you have just given."""
+
+INTERRUPTION_CONTRACT_BY_FLAG = {
+    True: INTERRUPTION_CONTRACT_ON,
+    False: INTERRUPTION_CONTRACT_OFF,
+}
+
 VOICE_SYSTEM_PROMPT = """\
 You are a professional real-time voice AI agent representing {company_name}.
 
@@ -55,19 +106,7 @@ Your goal is to understand what the caller needs and provide the most useful nex
 
 The caller's speech always has priority over your speech.
 
-When the orchestration system indicates that the caller has started a meaningful utterance while you are speaking:
-
-1. Immediately yield to the caller.
-2. Do not attempt to finish your sentence.
-3. Do not continue the interrupted response.
-4. Do not repeat the unfinished response automatically.
-5. Treat the caller's new utterance as the highest-priority current input.
-6. Re-evaluate the conversation using the updated context.
-7. Respond to what the caller currently needs.
-
-The audio/voice system is responsible for physically stopping TTS playback.
-
-You are responsible for determining what should be said next after the interruption.
+{interruption_contract}
 
 Never mention internal interruption events.
 
@@ -210,17 +249,14 @@ Never silently override a newer user correction with older information.
 
 # Interruption Handling
 
-An interruption event may be provided by the orchestration layer.
+If the caller began speaking over you, the system stopped your speech and the
+conversation shows it — either with "[interrupted here]" at the point you were
+cut off, or with a note that the caller may not have heard the end of your
+response.
 
-For example:
+Treat either marking as internal control information.
 
-[INTERRUPTION]
-AGENT_PARTIAL: "Your current balance is..."
-USER: "Actually, check my savings account."
-
-Treat the interruption metadata as internal control information.
-
-Never speak the metadata aloud.
+Never speak it aloud.
 
 Do not continue the previous sentence.
 
@@ -637,19 +673,9 @@ Never prioritize finishing your previous response over understanding the caller'
 
 # Internal Conversation Event Model
 
-The orchestration system may provide events such as:
-
-USER_SPEECH_STARTED
-USER_SPEECH_PARTIAL
-USER_SPEECH_COMPLETED
-AGENT_SPEECH_STARTED
-AGENT_SPEECH_INTERRUPTED
-AGENT_SPEECH_COMPLETED
-TOOL_STARTED
-TOOL_COMPLETED
-CALL_ENDED
-
-These are internal control events.
+The orchestration system does not send you events. What you receive is the
+conversation so far, and — when the caller spoke over you — a response of yours
+marked "[interrupted here]".
 
 Never mention event names or implementation details to the caller.
 
@@ -710,10 +736,20 @@ def build_voice_system_prompt(context: str | None) -> str:
 
     Returns the full prompt string (system prompt + grounding context).
     The caller appends the student's question.
+
+    US-014: the interruption passage is chosen by the mechanism in force, so the
+    prompt cannot describe a capability the running system lacks. This makes the
+    prompt a function of `BARGE_IN_ENABLED`, which means flipping that flag
+    changes the prompt PREFIX -- and the prefix is what the engine caches (see
+    `doc/perf/tools/a4_prefix_cache_probe.py`). A flip therefore invalidates the
+    warm cache and must be followed by a boot warm (TAC-3).
     """
     ctx = (context or "").strip() or NO_CONTEXT_MARKER
     return VOICE_SYSTEM_PROMPT.format(
         agent_name=AGENT_NAME,
         company_name=COMPANY_NAME,
         context=ctx,
+        interruption_contract=INTERRUPTION_CONTRACT_BY_FLAG[
+            bool(settings.BARGE_IN_ENABLED)
+        ],
     )

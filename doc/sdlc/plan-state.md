@@ -80,12 +80,14 @@ US-018 0/10.
    `US-006`'s TAC-1/TAC-2/TAC-5, `US-008`'s three consecutive N=2 runs. None has
    been run as specified. Note the ≥100-sample baseline now exists but every
    N=2 figure carries the `harness_fault` caveat (`doc/perf/runs/`).
-3. **`BRD-15` rollback** — demonstrated for **seven** stories by
-   `test_brd15_rollback.py` (42/42): US-006, US-011, US-012, US-013, US-016,
-   US-017 and **US-001**, added 2026-09-19. US-001 was missed because it was in
+3. **`BRD-15` rollback** — demonstrated for **eight** stories by
+   `test_brd15_rollback.py` (50/50): US-006, US-011, US-012, US-013, US-014,
+   US-016, US-017 and **US-001**, added 2026-09-19. US-001 was missed because it was in
    neither the covered list nor the two recorded exclusions — its own DoD
-   carried no `BRD-15` box, so nothing pointed at it. Two remain uncovered and
-   both carry a stated reason: US-007's revert is a commit-level change rather
+   carried no `BRD-15` box, so nothing pointed at it. **US-014 joined on
+   2026-09-22** (its flag is read at import, like the two streaming flags, so
+   the revert takes effect at the next start — recorded in the tool). Two remain
+   uncovered and both carry a stated reason: US-007's revert is a commit-level change rather
    than a setting, and US-008's spans two repositories.
 4. **Module-doc reconciliation** — `MOD-01`, `MOD-03`, `MOD-06`, `MOD-07` and
    the `US-015` benchmark reconciled 2026-09-19. **`MOD-04` closed too** (US-012
@@ -130,7 +132,7 @@ is to set the pre-fix value, which is what the demonstration does.
 | IMPLEMENTED (ACs verified) | 8 | US-001, US-006, US-007, US-011, US-012, US-013, US-016, US-017 |
 | IMPLEMENTED (no test) | 1 | US-008 |
 | IN PROGRESS | 1 | US-002 |
-| AWAITING SIGN-OFF | 2 | US-003, US-014 |
+| AWAITING SIGN-OFF | 1 | US-003 |
 | PARTIAL | 1 | US-015 |
 | BLOCKED (`DG-03`) | 5 | US-004, US-005, US-009, US-010, US-018 |
 | NOT STARTED | 0 | — *(this table was the pre-Task-3.1 count and contradicted the summary above it; corrected 2026-09-19)* |
@@ -167,7 +169,7 @@ The stage table above tracks **artifact production**. It says `done` for every s
 | Config truth (`US-011`) | **DONE** | `test_us011_config_truth.py` 17/17; found 3 inert keys the plan did not know about (`KOKORO_SPEED`, `LOG_FILE`, `LOG_LEVEL`) |
 | Model residency (`US-006`) | **DONE** | `test_us006_residency.py` 11/11; `ollama ps` reports `Forever` |
 | Baseline measurement (`BRD-02`) | **ESTABLISHED — CAP NOT MET** | 2026-09-19, N=2 warm: **p50 3,609 ms · p95 6,044 ms · n=108**, 0 timeouts, 0 drops. **96 of 108 turns exceed the 3,000 ms cap.** The run is still `DISCARDED` by the harness's own turn-cap gate — the number is reportable, the run is not a pass |
-| Interruption decision (`US-014`) | **BLOCKED** | Class C — PO sign-off required |
+| Interruption decision (`US-014`) | **DONE — ON BY DEFAULT** | Option 2 (enable with a bounded guard), Class C, per the 2026-09-19 Phase 4a ruling; the PO ruling is that the voice yields by default, so `BARGE_IN_ENABLED=1` ships and `0` is the one-line `BRD-15` revert. Guard thresholds measured (`doc/perf/us014-echo-guard-tuning.md`). Remaining: in-situ loopback, a live call, N=2 isolation |
 | Production validation | **NOT STARTED** | Requires implementation |
 | Production acceptance | **NOT STARTED** | — |
 
@@ -182,4 +184,4 @@ Found 2026-09-19 while confirming story creation. **`MOD-05` (Lead & CRM) owns `
 The gap had been invisible because that table counts `BRD-xx` ownership only: `BRD-13`/`BRD-18` are cited by `US-014`/`US-016` (voice-path stories), so the requirement-level count read as covered while the owning module had no work item.
 
 ## Next action
-`US-007` (boot warm state) is the unblocked first move — the harness currently reports `readiness: assumed`, so no run can certify the stack was warm. Then re-test `OLLAMA_NUM_PARALLEL=2`, whose earlier rejection predates three fixes. Everything quality-gated waits on `DG-03`: six critical-intent ground truths, PO-approved. `US-014` additionally needs PO sign-off as a Class C change.
+`US-007` (boot warm state) is the unblocked first move — the harness currently reports `readiness: assumed`, so no run can certify the stack was warm. Then re-test `OLLAMA_NUM_PARALLEL=2`, whose earlier rejection predates three fixes. Everything quality-gated waits on `DG-03`: six critical-intent ground truths, PO-approved. `US-014`'s Class C sign-off is now recorded (Option 2) and the code is built behind `BARGE_IN_ENABLED=0`; what it waits on is the `TAC-4` threshold sweep (`doc/perf/us014-echo-guard-tuning.md` is provisional) and then `DG-03` for adoption.
