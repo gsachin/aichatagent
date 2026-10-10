@@ -127,6 +127,26 @@ def render():
                 st.write(f"**Status:** {lead.get('status', 'N/A')}")
                 st.write(f"**Program:** {lead.get('program_interest', 'Not specified')}")
                 st.write(f"**Source:** {lead.get('source', 'N/A')}")
+
+                # Sentiment rides on the lead dict (app/leads/models.py:list_leads),
+                # so showing the per-lead score costs no extra request here.
+                s_cat = (lead.get("current_category") or "").strip()
+                if s_cat:
+                    cat_emoji = {
+                        "Hot": "🔥", "Warm": "🟠", "Nurture": "🟢",
+                        "At-Risk": "⚠️", "Disqualified": "🚫",
+                    }.get(s_cat, "⚪")
+                    s_score = lead.get("overall_sentiment_score") or 0.0
+                    s_traj = lead.get("sentiment_trajectory") or "N/A"
+                    p_conv = lead.get("conversion_probability")
+                    p_conv_str = f"{p_conv:.0%}" if p_conv is not None else "N/A"
+                    st.write(
+                        f"**Sentiment:** {cat_emoji} {s_cat} · "
+                        f"S_lead {s_score:.2f} · {s_traj} · P(convert) {p_conv_str}"
+                    )
+                else:
+                    st.write("**Sentiment:** not scored yet")
+
                 if lead.get("notes"):
                     st.write(f"**Notes:** {lead['notes']}")
     else:

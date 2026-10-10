@@ -30,8 +30,13 @@ caller meets.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
+import math
+import re
+import struct
 
 import pytest
 
@@ -40,6 +45,20 @@ from app import main
 from app.voice_handler import VoiceCallSession
 
 CHUNK = b"\x7f" * 160          # one 20 ms µ-law frame
+
+
+def _loud_frame(peak: int = 12000) -> bytes:
+    """One 20 ms frame of a loud tone — a caller talking at the microphone."""
+    import audioop
+
+    pcm = b"".join(
+        struct.pack("<h", int(peak * math.sin(2 * math.pi * 400 * i / 8000)))
+        for i in range(160)
+    )
+    return audioop.lin2ulaw(pcm, 2)
+
+
+LOUD_FRAME = _loud_frame()
 
 
 class FakeWS:
@@ -158,6 +177,182 @@ async def test_the_stop_event_says_which_stop_it_was(monkeypatch, caplog):
         _session2, _ws2, turn2 = make_turn(monkeypatch)
         await main._run_voice_turn(turn2)
     assert "AGENT_SPEECH_STOPPED reason=complete" in caplog.text
+
+
+async def _until(predicate, *, seconds: float = 2.0) -> None:
+    """Wait for a condition the turn reaches on its own clock, or fail loudly."""
+    deadline = asyncio.get_running_loop().time() + seconds
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("condition never became true")
+
+
+def _writes(ws: FakeWS) -> int:
+    return len([m for m in ws.sent if m.get("event") == "media"])
+
+
+# ── the playout window: written is not heard ────────────────────────────────
+
+@pytest.mark.anyio
+async def test_an_interruption_after_the_last_frame_still_takes_the_floor(monkeypatch):
+    """The interruption every other test here cannot reach, and the one a real
+    call produces.
+
+    All ten frames are written in about a millisecond; the caller then hears
+    them for 200 ms (12.66 s on the 2026-09-29 inbound call, whose answer was
+    633 chunks). The caller who talks over that tail is interrupting audio that
+    is already in the carrier's buffer, so the turn has to still be open, the
+    buffer has to be flushed, and the answer has to be marked as not fully
+    heard. Before the playout wait the turn had already ended here: no `clear`,
+    no marker, and `played_chunks` claiming the whole answer.
+    """
+    session, ws, turn = make_turn(monkeypatch, chunks=[CHUNK] * 10)
+    session._conversation_history.append("Assistant: the full answer")
+    task = asyncio.create_task(main._run_voice_turn(turn))
+    await _until(lambda: _writes(ws) >= 10)
+
+    session.request_interruption()          # what `admit_inbound_frame` does
+    await task
+
+    k = kinds(ws)
+    assert "clear" in k, "audio already queued at the carrier must be flushed"
+    assert k.index("clear") > max(i for i, e in enumerate(k) if e == "media")
+    assert vh.TRUNCATION_MARK in session._conversation_history[-1], (
+        "an answer interrupted mid-playout was not fully heard"
+    )
+    assert session.state == "LISTENING"
+
+
+@pytest.mark.anyio
+async def test_the_agent_is_speaking_while_the_caller_still_hears_it(monkeypatch):
+    """SPEAKING has to cover the playback, not the writing.
+
+    `mark_speaking` armed the gate before the pipeline and `end_turn` disarmed
+    it as soon as the last frame was written -- so the gate watched the silence
+    before playback and nothing during it. Every live `BARGE_IN_ADMITTED` in
+    16 MB of call logs carries `ref_env=0.0`, which is that same fact: the gate
+    had never once been measured against playing audio.
+    """
+    session, ws, turn = make_turn(monkeypatch, chunks=[CHUNK] * 10)
+    task = asyncio.create_task(main._run_voice_turn(turn))
+    await _until(lambda: _writes(ws) >= 10)
+
+    assert session.state == "SPEAKING", "the gate is off for the playback window"
+    assert session.playout_remaining() > 0, "test premise: the carrier is playing"
+
+    await task
+    assert session.state == "LISTENING", "the session must not be left SPEAKING"
+
+
+@pytest.mark.anyio
+async def test_the_caller_who_interrupts_mid_playback_hears_only_the_prefix(monkeypatch, caplog):
+    """`played_chunks` may no longer count frames the caller never heard.
+
+    It was the write count, so an interruption reported the whole answer as
+    played on every call -- a telemetry statement false in the same direction as
+    the defect, which is why four days of logs read as a working feature. Here
+    every frame is written and almost none of them are played.
+    """
+    session, ws, turn = make_turn(monkeypatch, chunks=[CHUNK] * 10)
+    task = asyncio.create_task(main._run_voice_turn(turn))
+    await _until(lambda: _writes(ws) >= 10)
+    session.request_interruption()
+    with caplog.at_level(logging.INFO, logger="voice_events"):
+        await task
+
+    match = re.search(r"AGENT_SPEECH_STOPPED reason=interrupted played_chunks=(\d+)",
+                      caplog.text)
+    assert match, caplog.text
+    assert int(match.group(1)) < 10, (
+        "the caller talked over an answer that had not been played yet, and the "
+        "log still claims they heard all of it"
+    )
+
+
+# ── the greeting: agent speech that can be talked over ──────────────────────
+
+@pytest.mark.anyio
+async def test_the_greeting_yields_to_the_caller(monkeypatch):
+    """The greeting is 7.8 s of agent speech and the caller could not stop it.
+
+    It was written inline from the receive loop -- 389 chunks in 3 ms, with
+    `mark_listening()` immediately after -- so it was armed for its writing and
+    not its playout, nothing could interrupt it, and the reader was blocked for
+    its synthesis. It is a task now, under the same rules as a turn.
+    """
+    session = VoiceCallSession()
+    monkeypatch.setattr(vh, "generate_ulaw_greeting", lambda text: [CHUNK] * 10)
+    ws = FakeWS(session=session)
+    turn = main._VoiceTurn(websocket=ws, session=session, label="test",
+                           stream_sid="MZ1", call_sid="CA1")
+
+    task = asyncio.create_task(main._run_greeting(turn, "hello"))
+    await _until(lambda: _writes(ws) >= 10)
+    assert session.state == "SPEAKING"
+    assert session.playout_remaining() > 0, "test premise: the carrier is playing"
+
+    session.request_interruption()
+    await task
+
+    assert "clear" in kinds(ws), "the caller must stop hearing the greeting too"
+    assert session.state == "LISTENING", "the first caller turn must not be gated"
+
+
+def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
+    """The handler wiring, asserted through the real endpoint.
+
+    `mark_speaking`/`mark_listening` around the greeting is not enough on its
+    own: the greeting used to be written INSIDE the receive loop, so for the
+    length of its synthesis and its 389 writes the loop read nothing -- no
+    barge-in, and no answer to the carrier's keepalive. The greeting has to be
+    a task, and the caller's frames have to reach the gate while it plays.
+    """
+    from fastapi.testclient import TestClient
+
+    import app.crm.session as crm_session
+
+    class _FakeSession:
+        conversation_id = "conv-wiring"
+        phone_number = "+911234567890"
+        channel = "inbound_call"
+        crm_user_id = ""
+
+    monkeypatch.setattr(crm_session, "start", lambda *a, **k: _FakeSession())
+    monkeypatch.setattr(crm_session, "end", lambda *a, **k: _FakeSession())
+    monkeypatch.setattr(vh, "generate_ulaw_greeting", lambda text: [CHUNK] * 8)
+
+    async def _no_hangup(*a, **k):
+        return None
+
+    async def _no_disconnect(*a, **k):
+        return None
+
+    monkeypatch.setattr(main, "_hangup_twilio_call", _no_hangup)
+    monkeypatch.setattr(main, "_handle_disconnect", _no_disconnect)
+
+    with TestClient(main.app).websocket_connect("/ws/twilio") as ws:
+        ws.send_text(json.dumps({"event": "connected"}))
+        ws.send_text(json.dumps({
+            "event": "start", "streamSid": "MZ-test", "callSid": "CA-test",
+            "start": {"streamSid": "MZ-test", "callSid": "CA-test",
+                      "customParameters": {"phone": "+911234567890"}},
+        }))
+        first = json.loads(ws.receive_text())
+        assert first.get("event") == "media", "the greeting must reach the carrier"
+
+        # The caller talks over it. All-loud frames: an utterance never closes,
+        # so no pipeline runs and this stays a test of the greeting's window.
+        for _ in range(40):
+            ws.send_text(json.dumps({
+                "event": "media", "streamSid": "MZ-test",
+                "media": {"payload": base64.b64encode(LOUD_FRAME).decode("ascii")},
+            }))
+            if json.loads(ws.receive_text()).get("event") == "clear":
+                break
+        else:
+            pytest.fail("the caller talked over the greeting and it did not yield")
 
 
 # ── the streaming configuration (TTS_STREAM=1) ──────────────────────────────

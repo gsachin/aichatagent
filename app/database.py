@@ -156,6 +156,47 @@ async def save_lead_call(
         return False
 
 
+def _as_one_string(value, key: str = "") -> str:
+    """Whittle an extracted value down to the string the schema promised.
+
+    The prompt asks for name/email/program as strings or null, and the model
+    does not always comply -- above all when the transcript it is reading
+    already contains structured output from an earlier step, which it mirrors
+    back. On the 2026-09-29 inbound call it answered `program` with
+    `[{'name': None, 'email': None, 'program': 'Business'}, ...]`, that list went
+    into `program_interest`, and psycopg2 refused it (`can't adapt type 'dict'`).
+    The refusal was not contained: the whole upsert failed, so the caller's
+    conversation was never written -- the warning the operator saw was
+    "conversation not logged" -- and on that call it was true.
+
+    So a list joins, and an object is read for the value stored under this
+    field's own name, because that is the shape a model reaches for when it
+    mirrors its input. Nothing here raises: a shape we cannot read becomes "",
+    which loses a field, where guessing would lose the conversation.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return ", ".join(p for p in (_as_one_string(v, key) for v in value) if p)
+    if isinstance(value, dict):
+        if not key:
+            return ""
+        for k in (key, key.lower()):
+            if k in value:
+                return _as_one_string(value[k], key)
+        return ""
+    if value is None or isinstance(value, bool):
+        return ""
+    return str(value)
+
+
+def _normalise_lead(data) -> dict:
+    """The parsed extraction, with every value the string the contract promises."""
+    if not isinstance(data, dict):
+        return {}
+    return {k: _as_one_string(v, k) for k, v in data.items()}
+
+
 async def extract_lead_from_transcript(transcript: str) -> dict | None:
     """
     Use the local LLM to extract structured lead data from a transcript.
@@ -164,7 +205,8 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
     Returns None if extraction fails.
 
     The LLM is called with a JSON-extraction prompt and the response is
-    parsed for structured data.
+    parsed for structured data, then normalised by `_normalise_lead` -- the
+    values are strings on the way out whether or not the model agreed.
     """
     import json as _json
     import re
@@ -194,10 +236,12 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         )
         logger.debug(f"LLM extraction raw: {raw}")
 
-        # Try to parse JSON from the response
+        # Try to parse JSON from the response. Every path returns through
+        # `_normalise_lead`: the model's shape is not the contract, and the
+        # callers write these values into typed columns.
         # 1. Direct parse
         try:
-            return _json.loads(raw)
+            return _normalise_lead(_json.loads(raw))
         except _json.JSONDecodeError:
             pass
 
@@ -205,7 +249,7 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', raw, re.DOTALL)
         if match:
             try:
-                return _json.loads(match.group(1))
+                return _normalise_lead(_json.loads(match.group(1)))
             except _json.JSONDecodeError:
                 pass
 
@@ -213,7 +257,7 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             try:
-                return _json.loads(match.group(0))
+                return _normalise_lead(_json.loads(match.group(0)))
             except _json.JSONDecodeError:
                 pass
 

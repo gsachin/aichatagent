@@ -211,6 +211,19 @@ body {
 .modal .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin-bottom: 1.5rem; }
 .modal .detail-grid div { font-size: 0.9rem; }
 .modal .detail-label { color: var(--text-muted); font-size: 0.75rem; }
+/* Sentiment block — the lead's session-level score, mirroring the Streamlit
+   Leads page so the two dashboards report the same numbers the same way. */
+.modal .detail-sentiment {
+  background: var(--bg-body); border-radius: var(--radius);
+  padding: 0.75rem 1rem; margin-bottom: 1.5rem;
+}
+.modal .sent-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 0.25rem 1rem; margin-top: 0.5rem;
+}
+.modal .sent-k { display: block; color: var(--text-muted); font-size: 0.7rem; }
+.modal .sent-v { font-size: 0.9rem; }
+.modal .sent-extra { color: var(--text-secondary); font-size: 0.75rem; margin-top: 0.5rem; }
 .modal .conv-section { margin-top: 1rem; }
 .modal .conv-section h3 { margin-bottom: 0.5rem; font-size: 0.95rem; }
 
@@ -295,5 +308,6 @@ body {
   .kanban-col { min-width: 100%; }
   .form-row { grid-template-columns: 1fr; }
   .modal .detail-grid { grid-template-columns: 1fr; }
+  .modal .sent-grid { grid-template-columns: 1fr 1fr; }
   .topbar { flex-direction: column; gap: 0.5rem; }
 }

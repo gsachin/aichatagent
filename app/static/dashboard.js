@@ -215,6 +215,9 @@ const sentCatColor = (cat) => ({
 const sentCatEmoji = (cat) => ({
   'Hot': '🔥', 'Warm': '🟠', 'Nurture': '🟢', 'At-Risk': '⚠', 'Disqualified': '🚫'
 }[cat] || '');
+// S_lead runs -1..1, so it needs its own scale — scoreColor() above is for the
+// 1..10 lead-quality score and would paint every sentiment red.
+const sentScoreColor = (s) => s >= 0.35 ? 'var(--green)' : s >= -0.2 ? 'var(--yellow)' : 'var(--red)';
 
 async function loadLeadScores(leadIds) {
   // Fetch scores in batches (don't hammer the API)
@@ -228,15 +231,15 @@ async function loadLeadScores(leadIds) {
   }
 }
 
-async function loadLeadSentiments(leadIds) {
-  const toFetch = leadIds.filter(id => !leadSentiments[id]);
-  if (toFetch.length === 0) return;
-  for (const id of toFetch.slice(0, 20)) {
-    try {
-      const data = await fetchJSON(`/api/leads/${id}/sentiment`);
-      if (data && !data.error) leadSentiments[id] = data;
-    } catch(e) {}
-  }
+// Loaded on demand — the lead modal is the only caller. The headline numbers
+// already ride on the lead object, so this fetch only buys the per-exchange
+// detail (emotion, objections). The endpoint recomputes the session aggregate
+// with an LLM call, which is why it is not worth doing for every pipeline card.
+async function loadLeadSentiment(leadId) {
+  if (!leadId || leadSentiments[leadId]) return leadSentiments[leadId] || null;
+  const data = await fetchJSON(`/api/leads/${leadId}/sentiment`);
+  if (data && !data.error) leadSentiments[leadId] = data;
+  return leadSentiments[leadId] || null;
 }
 
 function renderSentimentStats(stats) {
@@ -256,10 +259,12 @@ function renderPipeline() {
     else groups.pending.push(l);
   });
 
-  // Trigger score + sentiment loading for visible leads
+  // Lead-quality scores still come from their own endpoint. Sentiment does not:
+  // it rides on the lead object now (/api/leads selects the sentiment columns),
+  // so fetching it per card was 20 LLM-backed round trips per render — every
+  // 30 s — for data that was already in hand.
   const allIds = leads.map(l => l.id).filter(Boolean);
   loadLeadScores(allIds);
-  loadLeadSentiments(allIds);
 
   Object.entries(groups).forEach(([status, items]) => {
     const countEl = document.getElementById(`count-${status}`);
@@ -271,17 +276,24 @@ function renderPipeline() {
       const sc = leadScores[l.id] || {};
       const score = sc.score;
       const temp = sc.temperature;
+      // Sentiment travels on the lead itself; the cached detail, when the modal
+      // has loaded it, is the richer source and wins.
       const sent = leadSentiments[l.id] || {};
-      const sentCat = sent.current_category || '';
-      const sentScore = sent.overall_sentiment_score;
+      const sentCat = sent.current_category || l.current_category || '';
+      const sentScore = sent.overall_sentiment_score != null
+        ? sent.overall_sentiment_score
+        : l.overall_sentiment_score;
+      // Gated on having a category: unscored leads carry a 0.0 score, and
+      // "S:0.00" on every untouched lead would read as real data.
+      const hasSent = !!sentCat;
       return `<div class="lead-card" onclick="openLeadDetail('${l.id}')" style="border-left-color: ${statusColor(status)}">
         <div class="lead-name">${escapeHtml(l.name || 'Unknown')}</div>
         <div class="lead-program">${escapeHtml(l.program_interest || '—')}</div>
         <div class="lead-meta">
           ${temp ? `<span class="badge ${tempClass[temp]||''}">${tempMap[temp]||temp}</span>` : ''}
           ${score ? `<span class="badge" style="color:${scoreColor(score)}">⭐${score}</span>` : ''}
-          ${sentCat ? `<span class="badge" style="color:${sentCatColor(sentCat)};font-weight:600">${sentCatEmoji(sentCat)} ${sentCat}</span>` : ''}
-          ${sentScore != null ? `<span class="badge" style="color:${sentScore >= 0.35 ? 'var(--green)' : sentScore >= -0.2 ? 'var(--yellow)' : 'var(--red)'}">S:${sentScore.toFixed(2)}</span>` : ''}
+          ${hasSent ? `<span class="badge" style="color:${sentCatColor(sentCat)};font-weight:600">${sentCatEmoji(sentCat)} ${sentCat}</span>` : ''}
+          ${hasSent && sentScore != null ? `<span class="badge" style="color:${sentScoreColor(Number(sentScore))}">S:${Number(sentScore).toFixed(2)}</span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -359,6 +371,46 @@ async function openLeadDetail(leadId) {
   // Get conversations for this lead
   const convs = state.conversations.filter(c => c.lead_id === leadId);
 
+  // Pull the richer per-exchange detail if it is not cached yet. Failure is
+  // fine: the lead object already carries the headline numbers.
+  await loadLeadSentiment(leadId);
+
+  // ── Sentiment ────────────────────────────────────────────────────
+  // The session-level aggregate — the same numbers the Streamlit Leads page
+  // shows. The modal never rendered any of it, so opening a lead (the obvious
+  // place to look for it) showed nothing even when the card had a badge.
+  const sent = leadSentiments[leadId] || {};
+  const sCat = sent.current_category || lead.current_category || '';
+  const sScore = sent.overall_sentiment_score != null
+    ? sent.overall_sentiment_score : lead.overall_sentiment_score;
+  const sTraj = sent.sentiment_trajectory || lead.sentiment_trajectory || '';
+  const pConv = sent.conversion_probability != null
+    ? sent.conversion_probability : lead.conversion_probability;
+  const sEmotion = sent.primary_emotion || '';
+  const sObjections = Array.isArray(sent.objections) ? sent.objections : [];
+
+  const sentBits = [];
+  if (sEmotion) sentBits.push(`Emotion: ${escapeHtml(sEmotion)}`);
+  if (sObjections.length) sentBits.push(`Objections: ${escapeHtml(sObjections.join(', '))}`);
+  if (sent.exchanges) sentBits.push(`${sent.exchanges} exchanges`);
+  const sentExtra = sentBits.join(' · ');
+
+  const sentimentBlock = !sCat
+    ? `<div class="detail-sentiment">
+         <div class="detail-label">🔬 Sentiment</div>
+         <div class="sent-extra">Not scored yet — it appears once this lead's first conversation has been analysed.</div>
+       </div>`
+    : `<div class="detail-sentiment">
+         <div class="detail-label">🔬 Sentiment</div>
+         <div class="sent-grid">
+           <div><span class="sent-k">Category</span><span class="sent-v">${sentCatEmoji(sCat)} ${escapeHtml(sCat)}</span></div>
+           <div><span class="sent-k">S_lead Score</span><span class="sent-v" style="color:${sentScoreColor(Number(sScore || 0))};font-weight:600">${Number(sScore || 0).toFixed(2)}</span></div>
+           <div><span class="sent-k">Trajectory</span><span class="sent-v">${escapeHtml(sTraj || 'N/A')}</span></div>
+           <div><span class="sent-k">P(convert)</span><span class="sent-v">${pConv != null ? Math.round(Number(pConv) * 100) + '%' : 'N/A'}</span></div>
+         </div>
+         ${sentExtra ? `<div class="sent-extra">${sentExtra}</div>` : ''}
+       </div>`;
+
   // Create modal
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay open';
@@ -376,6 +428,7 @@ async function openLeadDetail(leadId) {
         <div><div class="detail-label">Created</div>${timeAgo(lead.created_at)}</div>
         <div><div class="detail-label">Last Called</div>${lead.last_called_at ? timeAgo(lead.last_called_at) : 'Never'}</div>
       </div>
+      ${sentimentBlock}
       ${lead.notes ? `<div style="margin-bottom:1rem"><div class="detail-label">Notes</div>${escapeHtml(lead.notes)}</div>` : ''}
       <div style="display:flex;gap:0.5rem;margin-bottom:1.5rem">
         <button class="btn btn-primary btn-sm" onclick="callLead('${lead.id}')">📞 Call Now</button>

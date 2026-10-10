@@ -109,21 +109,32 @@ def render():
                 if lead.get("notes"):
                     st.write(f"**Notes:** {lead['notes']}")
 
-            # ── Sentiment Score (if available) ────────────────────
-            sentiment = api_call("GET", f"/api/leads/{lead_id}/sentiment")
-            if sentiment and "error" not in sentiment:
-                s_category = sentiment.get("current_category", "N/A")
-                s_score = sentiment.get("overall_sentiment_score", 0)
-                s_traj = sentiment.get("sentiment_trajectory", "")
-                p_conv = sentiment.get("conversion_probability")
-                primary_emotion = sentiment.get("primary_emotion", "")
+            # ── Sentiment Score ───────────────────────────────────
+            # The four headline numbers ride on the lead dict now (see
+            # app/leads/models.py:list_leads), so an unscored lead costs no
+            # request at all and says so in words.  This block used to call
+            # /api/leads/{id}/sentiment unconditionally, and that endpoint
+            # answers 404 for a lead with no history — which the user saw as a
+            # red "HTTP Error 404" where the score should have been.
+            s_category = (lead.get("current_category") or "").strip()
+
+            st.divider()
+
+            if not s_category:
+                st.caption(
+                    "Sentiment: not scored yet — it appears once this lead's "
+                    "first conversation has been analysed."
+                )
+            else:
+                s_score = lead.get("overall_sentiment_score") or 0.0
+                s_traj = lead.get("sentiment_trajectory") or ""
+                p_conv = lead.get("conversion_probability")
 
                 cat_color = {
                     "Hot": "🔥", "Warm": "🟠", "Nurture": "🟢",
                     "At-Risk": "⚠️", "Disqualified": "🚫",
                 }.get(s_category, "⚪")
 
-                st.divider()
                 sc1, sc2, sc3, sc4 = st.columns(4)
                 with sc1:
                     st.metric("Sentiment Category", f"{cat_color} {s_category}")
@@ -133,8 +144,19 @@ def render():
                     st.metric("Trajectory", s_traj or "N/A")
                 with sc4:
                     st.metric("P(convert)", f"{p_conv:.0%}" if p_conv is not None else "N/A")
-                if primary_emotion:
-                    st.caption(f"Emotion: {primary_emotion} | Objections: {sentiment.get('objections', [])}")
+
+                # Emotion and objections are per-exchange and are not columns on
+                # the lead row, so this one still needs the detail endpoint —
+                # but only for leads that have a score, and only for a caption.
+                detail = api_call("GET", f"/api/leads/{lead_id}/sentiment",
+                                  allow_404=True)
+                if detail:
+                    primary_emotion = detail.get("primary_emotion", "")
+                    if primary_emotion:
+                        st.caption(
+                            f"Emotion: {primary_emotion} | "
+                            f"Objections: {detail.get('objections', [])}"
+                        )
 
             # Action buttons
             col_a, col_b, col_c, col_d = st.columns(4)

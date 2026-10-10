@@ -96,6 +96,51 @@ class TestPhase6DatabaseSchema:
 
 # ── Phase 6.2: Lead Extraction (LLM JSON Parsing) ────────────────────
 
+class TestExtractedLeadNormalisation:
+    """The shape the model answers in is not the shape the callers write.
+
+    On the 2026-09-29 inbound call `program` came back as a list of objects --
+    the transcript it was reading already contained structured output, and it
+    mirrored it. That list reached `program_interest` and psycopg2 rejected the
+    whole upsert (`can't adapt type 'dict'`), so the conversation was never
+    recorded: the database holds no `inbound_call` conversation, and the log's
+    only sign was "conversation not logged".
+    """
+
+    def test_the_observed_failure_becomes_a_string(self):
+        from app.database import _normalise_lead
+
+        raw = {
+            "name": None,
+            "email": None,
+            "program": [
+                {"name": None, "email": None, "program": "Business"},
+                {"name": None, "email": None, "program": "Engineering"},
+            ],
+        }
+        out = _normalise_lead(raw)
+
+        assert out["program"] == "Business, Engineering"
+        assert all(isinstance(v, str) for v in out.values()), (
+            "a value a psycopg2 typed column cannot adapt must not survive this"
+        )
+
+    def test_a_plain_answer_is_untouched(self):
+        from app.database import _normalise_lead
+
+        assert _normalise_lead({"name": " John ", "email": None,
+                                "program": "MBA"}) == {
+            "name": "John", "email": "", "program": "MBA",
+        }
+
+    def test_a_non_dict_answer_is_not_returned_as_one(self):
+        """A top-level JSON array used to reach `(lead or {}).get('name')`."""
+        from app.database import _normalise_lead
+
+        assert _normalise_lead(["Business", "Engineering"]) == {}
+        assert _normalise_lead(None) == {}
+
+
 class TestPhase6LeadExtraction:
     """Verify the LLM can extract structured lead data from transcripts."""
 

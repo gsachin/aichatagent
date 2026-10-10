@@ -771,6 +771,73 @@ async def _clear_carrier_playback(websocket, stream_sid: str) -> bool:
     }))
 
 
+async def _write_frames(t: _VoiceTurn, frames: list[bytes], sent: dict,
+                        marked: dict | None = None) -> None:
+    """Write frames to the carrier, stopping the moment the caller speaks.
+
+    `sent["n"]` counts writes and `marked` carries the US-001 first-audio mark
+    for a caller turn; the greeting has no trace to mark and passes None.
+    Shared by a turn's playback and the greeting, because "what we sent, in send
+    order" is what the echo gate's reference is built from in both.
+    """
+    session = t.session
+    for chunk in frames:
+        if session.cancel_requested():
+            # The caller is talking. Stop feeding the carrier -- the caller
+            # of this function sends `clear` so they stop HEARING us too.
+            return
+        out_payload = base64.b64encode(chunk).decode("ascii")
+        response = json.dumps({
+            "event": "media",
+            "streamSid": t.stream_sid or "",
+            "media": {"payload": out_payload},
+        })
+        if not await _ws_send(t.websocket, response):
+            raise WebSocketDisconnect(code=1000)
+        # The echo gate's reference is what was SENT, in send order: one
+        # inbound frame consumes one of these, which is what keeps the gate
+        # aligned with what the caller is hearing right now.
+        session.note_playback([chunk])
+        sent["n"] += 1
+        # US-001: first_audio_sent is taken at the socket write, not at the
+        # end of synthesis — this is the end of BRD-02's measured segment.
+        if marked is not None and not marked["first"]:
+            marked["first"] = True
+            _t = getattr(session, "_trace", None)
+            if _t is not None:
+                _t.mark("first_audio_sent")
+                _t.emit()
+
+
+async def _await_playout(session) -> int:
+    """Hold the turn open until the caller has HEARD what was written.
+
+    `_write_frames` hands the carrier a whole answer in milliseconds -- 633
+    chunks in 7 ms on the 2026-09-29 inbound call, 1004 in ~10 ms on the
+    2026-10-06 outbound one -- and Twilio plays it out afterwards on its own
+    20 ms clock. This closes that gap. It is deliberately NOT a pacing loop: the
+    frames are already buffered, so a stalled event loop cannot starve the
+    caller's audio, and the session's playout queue models the buffer, drained
+    on the wall clock by `VoiceCallSession._advance_reference`.
+
+    Without the wait, SPEAKING -- and with it the echo gate and the cancel
+    signal -- covers the silence BEFORE playback and none of the playback
+    itself: over 16 MB of live call logs every `BARGE_IN_ADMITTED` carries
+    `ref_env=0.0`, which is a gate that has never once been evaluated against
+    playing audio, i.e. a caller talking over a 20 s answer being ignored for
+    its whole length.
+
+    Returns the frames still unplayed when it stops: the honest count of what
+    the caller did not hear.
+    """
+    from app.voice_handler import FRAME_MS
+
+    tick = FRAME_MS / 1000.0
+    while not session.cancel_requested() and session.playout_remaining():
+        await _asyncio.sleep(tick)
+    return session.playout_remaining()
+
+
 async def _run_voice_turn(t: _VoiceTurn) -> None:
     """One caller turn: pipeline, playback, transcript, hangup. Never raises."""
     session = t.session
@@ -778,33 +845,8 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
     marked = {"first": False}
 
     async def _send_chunks(frames: list[bytes]) -> None:
-        """Write frames to the carrier, stopping the moment the caller speaks."""
-        for chunk in frames:
-            if session.cancel_requested():
-                # The caller is talking. Stop feeding the carrier -- the caller
-                # of this function sends `clear` so they stop HEARING us too.
-                return
-            out_payload = base64.b64encode(chunk).decode("ascii")
-            response = json.dumps({
-                "event": "media",
-                "streamSid": t.stream_sid or "",
-                "media": {"payload": out_payload},
-            })
-            if not await _ws_send(t.websocket, response):
-                raise WebSocketDisconnect(code=1000)
-            # The echo gate's reference is what was SENT, in send order: one
-            # inbound frame consumes one of these, which is what keeps the gate
-            # aligned with what the caller is hearing right now.
-            session.note_playback([chunk])
-            sent["n"] += 1
-            # US-001: first_audio_sent is taken at the socket write, not at the
-            # end of synthesis — this is the end of BRD-02's measured segment.
-            if not marked["first"]:
-                marked["first"] = True
-                _t = getattr(session, "_trace", None)
-                if _t is not None:
-                    _t.mark("first_audio_sent")
-                    _t.emit()
+        """The TTS-stream sink and the batch send loop — see `_write_frames`."""
+        await _write_frames(t, frames, sent, marked)
 
     # Armed BEFORE any send, because under TTS_STREAM the synthesiser sends
     # mid-pipeline through this same sink.
@@ -851,18 +893,30 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
         session.log_event("AGENT_SPEECH_STARTED", chunks=len(remaining))
         if remaining and not session.cancel_requested():
             await _send_chunks(remaining)
+
+        # Written is not heard. The turn -- and with it SPEAKING, the echo gate
+        # and the cancel signal -- lives until the carrier has played the last
+        # frame, not until the socket accepted it. This is also what makes the
+        # greeting's window real: see `_await_playout`.
+        unplayed = await _await_playout(session)
+
         if session.cancel_requested():
             await _clear_carrier_playback(t.websocket, t.stream_sid)
-            if sent["n"] < len(tts_chunks):
-                # Frames were written but not all of them, so the caller heard a
-                # prefix. On the batch path generation has already finished and
-                # the whole answer is in the history -- see the method's note.
+            if unplayed or sent["n"] < len(tts_chunks):
+                # The caller heard a prefix: either frames are still queued in
+                # the carrier (`unplayed`) or some were never written at all.
+                # On the batch path generation has already finished and the
+                # whole answer is in the history -- see the method's note.
                 session.note_answer_truncated()
             # `reason` is the point: `AGENT_SPEECH_STOPPED` used to mean "handed
             # to the socket", which is not the same event as "the caller stopped
             # hearing us", and the difference is exactly what this story is.
+            # `played_chunks` is that same difference as a number: writes minus
+            # what was still queued when the caller cut in. Before the playout
+            # wait it was always the full count, on every call, including the
+            # ones the caller had talked over from the first word.
             session.log_event("AGENT_SPEECH_STOPPED", reason="interrupted",
-                              played_chunks=sent["n"])
+                              played_chunks=max(0, sent["n"] - unplayed))
         else:
             session.log_event("AGENT_SPEECH_STOPPED", reason="complete",
                               played_chunks=sent["n"])
@@ -880,6 +934,57 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
             await t.websocket.close()
         except Exception:
             pass
+
+
+async def _run_greeting(t: _VoiceTurn, text: str) -> None:
+    """Speak the opening greeting as agent speech, and yield if the caller talks.
+
+    The greeting used to be written inline by the receive loop -- 389 chunks in
+    3 ms on the 2026-09-29 inbound call -- with `mark_listening()` running the
+    moment the last byte left. So the echo gate covered the writing and not the
+    7.8 s the caller was hearing, nothing could stop the greeting once it had
+    started, and the reader was blocked for its whole synthesis. As a task it is
+    agent speech like any turn: SPEAKING for its playout window, the cancel
+    signal live so a caller who talks over it takes the floor, and the reader
+    free the entire time.
+
+    Never called for a turn: a caller turn is `_run_voice_turn`. This one has no
+    pipeline and no history -- it is a script, spoken under the same rules.
+    """
+    session = t.session
+    sent = {"n": 0}
+    try:
+        from app.voice_handler import generate_ulaw_greeting
+
+        # US-017 C4 / Class A: `generate_ulaw_greeting` is SYNCHRONOUS and runs
+        # Kokoro on the calling thread -- and it LOADS the model when cold.
+        # Called directly from an async handler it froze the whole event loop
+        # for a model load on the FIRST turn of the FIRST call, which is the
+        # worst possible moment and the one a caller is most likely to notice.
+        # `to_thread` gives it a worker thread instead.
+        chunks = await _asyncio.to_thread(generate_ulaw_greeting, text)
+        logger.info(f"AI greeting: {len(chunks)} chunks")
+        # US-014: the greeting is agent speech, so the echo gate is armed for it
+        # exactly as for a turn, and -- as for a turn -- it stays armed until the
+        # caller has heard the last frame rather than until the last write.
+        session.begin_turn()
+        session.mark_speaking()
+        await _write_frames(t, chunks, sent)
+        await _await_playout(session)
+        if session.cancel_requested():
+            # The caller spoke over the greeting. Stop the carrier's buffer too,
+            # or they keep hearing a script they have already talked across.
+            await _clear_carrier_playback(t.websocket, t.stream_sid)
+        logger.info("AI greeting sent via TTS")
+    except WebSocketDisconnect:
+        logger.info(f"{t.label}: stream ended during the greeting")
+    except Exception:
+        # Non-fatal, as before: a call with no greeting still runs.
+        logger.exception("Failed to send AI greeting (non-fatal)")
+    finally:
+        # Every exit path, or the gate would keep rejecting the caller's
+        # ordinary speech -- including the first thing the caller says.
+        session.end_turn()
 
 
 # ── WebSocket: Twilio Media Streams ──────────────────────────────────
@@ -1000,48 +1105,16 @@ async def websocket_twilio(websocket: WebSocket):
                     "conversation_id": conversation_id,
                 })
 
-                # Send an initial AI greeting via TTS
-                try:
-                    from app.voice_handler import generate_ulaw_greeting
-
-                    greeting = (
-                        "Hi, I'm the admissions assistant. "
-                        "Ask me anything about Meridian University programs, "
-                        "tuition fees, or how to apply."
-                    )
-                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
-                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
-                    # LOADS the model when cold. Called directly from an async
-                    # handler it froze the whole event loop for a model load on the
-                    # FIRST turn of the FIRST call, which is the worst possible
-                    # moment and the one a caller is most likely to notice. Every
-                    # other live call, every media stream and every keepalive waits
-                    # behind it. `to_thread` gives it a worker thread instead.
-                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
-                    logger.info(f"AI greeting: {len(chunks)} chunks")
-                    # US-014: the greeting is agent speech, so the echo gate is
-                    # armed for it exactly as for a turn. Otherwise the greeting
-                    # window is the one window where the caller is measured
-                    # against nothing while our own voice is in their ear.
-                    session.mark_speaking()
-                    try:
-                        for chunk in chunks:
-                            out_payload = base64.b64encode(chunk).decode("ascii")
-                            response = json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid or "",
-                                "media": {"payload": out_payload},
-                            })
-                            if not await _ws_send(websocket, response):
-                                raise WebSocketDisconnect(code=1000)
-                            session.note_playback([chunk])
-                    finally:
-                        session.mark_listening()
-                    logger.info("AI greeting sent via TTS")
-                except WebSocketDisconnect:
-                    raise  # stream is dead — exit the handler cleanly
-                except Exception:
-                    logger.exception("Failed to send AI greeting (non-fatal)")
+                # Send an initial AI greeting via TTS. It runs as a task, like a
+                # turn, so the reader keeps the socket: see `_run_greeting`.
+                greeting = (
+                    "Hi, I'm the admissions assistant. "
+                    "Ask me anything about Meridian University programs, "
+                    "tuition fees, or how to apply."
+                )
+                call.stream_sid = stream_sid or ""
+                call.call_sid = call_sid or ""
+                turn["task"] = _asyncio.create_task(_run_greeting(call, greeting))
 
             elif event == "media":
                 payload = msg.get("media", {}).get("payload", "")
@@ -1281,51 +1354,18 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     )
 
                 # Send an initial AI greeting via TTS — identify caller + reason
-                # per the voice system prompt's outbound section.
-                try:
-                    from app.voice_handler import generate_ulaw_greeting
-                    from app.voice_system_prompt import AGENT_NAME, COMPANY_NAME
+                # per the voice system prompt's outbound section. A task, for the
+                # same reasons as inbound: see `_run_greeting`.
+                from app.voice_system_prompt import AGENT_NAME, COMPANY_NAME
 
-                    greeting = (
-                        f"Hi, this is {AGENT_NAME} calling from {COMPANY_NAME} "
-                        f"Admissions. Do you have a moment to talk about our "
-                        f"programs, tuition fees, or how to apply?"
-                    )
-                    # US-017 C4 / Class A: `generate_ulaw_greeting` is
-                    # SYNCHRONOUS and runs Kokoro on the calling thread -- and it
-                    # LOADS the model when cold. Called directly from an async
-                    # handler it froze the whole event loop for a model load on the
-                    # FIRST turn of the FIRST call, which is the worst possible
-                    # moment and the one a caller is most likely to notice. Every
-                    # other live call, every media stream and every keepalive waits
-                    # behind it. `to_thread` gives it a worker thread instead.
-                    chunks = await _asyncio.to_thread(generate_ulaw_greeting, greeting)
-                    logger.info(
-                        f"AI greeting: {len(chunks)} chunks"
-                    )
-                    # US-014: agent speech, so the echo gate is armed for it
-                    # exactly as for a turn (see the inbound handler).
-                    session.mark_speaking()
-                    try:
-                        for chunk in chunks:
-                            out_payload = base64.b64encode(chunk).decode("ascii")
-                            response = json.dumps(
-                                {
-                                    "event": "media",
-                                    "streamSid": stream_sid or "",
-                                    "media": {"payload": out_payload},
-                                }
-                            )
-                            if not await _ws_send(websocket, response):
-                                raise WebSocketDisconnect(code=1000)
-                            session.note_playback([chunk])
-                    finally:
-                        session.mark_listening()
-                    logger.info("AI greeting sent via TTS")
-                except WebSocketDisconnect:
-                    raise  # stream is dead — exit the handler cleanly
-                except Exception:
-                    logger.exception("Failed to send AI greeting (non-fatal)")
+                greeting = (
+                    f"Hi, this is {AGENT_NAME} calling from {COMPANY_NAME} "
+                    f"Admissions. Do you have a moment to talk about our "
+                    f"programs, tuition fees, or how to apply?"
+                )
+                call.stream_sid = stream_sid or ""
+                call.call_sid = call_sid or ""
+                turn["task"] = _asyncio.create_task(_run_greeting(call, greeting))
 
             elif event == "media":
                 payload = msg.get("media", {}).get("payload", "")

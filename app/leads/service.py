@@ -276,7 +276,11 @@ async def _auto_schedule_follow_up(lead_id: str, reason: str):
             ],
             preferred=default_model(["qwen2.5:7b"]),
             num_ctx=small_task_num_ctx(),
-        ).strip()
+        )
+        # Post-process on its own line: `await asyncio.to_thread(..).strip()`
+        # parses as `await (to_thread(..).strip())` — `.strip()` runs on the
+        # COROUTINE, raising AttributeError before the thread ever starts.
+        raw = raw.strip()
         # Extract ISO-ish string
         match = re.search(
             r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?", raw
@@ -468,7 +472,10 @@ async def _detect_follow_up_intent(transcript: str) -> tuple[bool, str]:
                     ],
                     preferred=default_model(["qwen2.5:7b"]),
                     num_ctx=small_task_num_ctx(),
-                ).strip().lower()
+                )
+                # See _auto_schedule_follow_up: chaining onto the closing
+                # paren ran .strip() on the coroutine, never the result.
+                raw = raw.strip().lower()
                 if raw.startswith("yes"):
                     return True, kw
             except Exception:
@@ -533,7 +540,13 @@ async def _detect_admission_intent(transcript: str) -> tuple[bool, str]:
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
             num_ctx=small_task_num_ctx(),
-        ).strip().lower()
+        )
+        # US: this check had NEVER run. The chained `.strip()` above raised
+        # AttributeError on the coroutine in ~30 ms (no HTTP request is ever
+        # logged for it), and the `except Exception` below swallowed it into
+        # "Admission intent LLM check failed". Admission intent therefore
+        # regressed silently to the keyword-only fast path.
+        raw = raw.strip().lower()
         if raw.startswith("yes"):
             return True, "llm_detected"
     except Exception:

@@ -267,10 +267,21 @@ async def list_leads(
         if conn is None:
             return []
         try:
+            # The four sentiment columns are selected — not for their own sake,
+            # but because leaving them out is what made both dashboards look
+            # broken.  ``_row_to_lead_dict`` has always been willing to read
+            # them as positions 13-16, so with the shorter SELECT the sentiment
+            # keys never appeared on a lead dict, and every caller that wanted
+            # a score had to make a second call to /api/leads/{id}/sentiment —
+            # which 404s for any lead that has never been scored (199 of 229 at
+            # the time of writing).  Selecting them here is the whole fix: the
+            # score now travels with the list.
             query = (
                 "SELECT id, phone_number, name, email, program_interest, "
                 "status, source, notes, call_attempts, last_called_at, "
-                "next_follow_up, created_at, updated_at FROM leads"
+                "next_follow_up, created_at, updated_at, "
+                "current_category, overall_sentiment_score, "
+                "sentiment_trajectory, conversion_probability FROM leads"
             )
             conditions = []
             params: list = []

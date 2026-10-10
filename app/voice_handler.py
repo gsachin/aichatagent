@@ -744,6 +744,24 @@ class VoiceCallSession:
         if frames:
             self._playout.extend(frames)
 
+    def playout_remaining(self) -> int:
+        """Frames the carrier has been handed but the caller has not heard yet.
+
+        This is the difference the whole story turns on: our send loop finishes
+        in milliseconds (633 chunks in 7 ms on the 2026-09-29 inbound call), and
+        the carrier then plays those frames out on its own 20 ms clock. "Written"
+        and "heard" are therefore seconds apart, and only the second one is a
+        reason to stop being SPEAKING.
+
+        The queue is the carrier's buffer (see `note_playback`), drained on the
+        wall clock by `_advance_reference` -- advancing it here is what makes
+        this a measurement of what is still in the caller's ear rather than a
+        count of what is still in our send loop. `_run_voice_turn` holds a turn
+        open until this reaches zero.
+        """
+        self._advance_reference()
+        return len(self._playout)
+
     def mark_listening(self) -> None:
         """Leave SPEAKING: playback finished, or was cancelled, or the stream died.
 

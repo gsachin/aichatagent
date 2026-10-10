@@ -46,12 +46,21 @@ def show_sidebar():
     }[page]
 
 
-def api_call(method: str, path: str, body: dict | None = None) -> dict | list | None:
+def api_call(method: str, path: str, body: dict | None = None,
+             allow_404: bool = False) -> dict | list | None:
     """
     Make a REST call to the FastAPI backend.
 
     Returns parsed JSON or None on failure.
+
+    *allow_404* treats "this resource has nothing yet" as an answer rather than
+    a failure.  Several endpoints report an empty optional resource that way —
+    ``/api/leads/{id}/sentiment`` 404s for a lead that has never been scored —
+    and without this flag each one painted a red ``st.error`` banner.  That is
+    what made the Leads page look like sentiment was broken: a user expanded a
+    lead to read its score and got an HTTP error instead of the score.
     """
+    import urllib.error
     import urllib.request
     import json as _json
 
@@ -69,6 +78,13 @@ def api_call(method: str, path: str, body: dict | None = None) -> dict | list | 
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return _json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # Caught ahead of the broad handler below: HTTPError is an OSError, so
+        # the generic clause would otherwise report a missing resource as a
+        # failure. Only 404 is quiet — 500s and the rest must stay loud.
+        if not (allow_404 and e.code == 404):
+            st.error(f"API error ({method} {path}): {e}")
+        return None
     except Exception as e:
         st.error(f"API error ({method} {path}): {e}")
         return None
