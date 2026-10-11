@@ -94,6 +94,7 @@ def test_d2_intake_questions_classified_as_clarifications():
 
 def test_d2_loop_breaker_rebuilds_prompt(monkeypatch):
     import app.pipeline as pl
+    import app.rag as rag
 
     s = vh.VoiceCallSession()
     s._conversation_history = _intake_history()
@@ -106,7 +107,24 @@ def test_d2_loop_breaker_rebuilds_prompt(monkeypatch):
         captured["retrieval_query"] = retrieval_query
         return "MBA: 2-year, $18,500/yr."
 
+    async def fake_stream(prompt, *, mode="voice", cancel=None,
+                          retrieval_query=None):
+        """The streamed leg (LLM_STREAM=1).
+
+        This test is about the loop-breaker PROMPT, not about which generation
+        path is configured, so both are stubbed with the same capture. Without
+        this the test silently follows the flag: with LLM_STREAM=1 it leaves
+        the stubs behind, reaches the live engine, and hangs on a real call.
+        """
+        captured["q"] = prompt
+        captured["retrieval_query"] = retrieval_query
+        yield "The MBA is a two year program."
+        yield " Tuition is $18,500 a year."
+
     monkeypatch.setattr(pl, "run_rag_query_sync", fake_sync)
+    # Patched on the module, not on voice_handler: the streamed path binds it
+    # with a function-local `from app.rag import query_rag_stream`.
+    monkeypatch.setattr(rag, "query_rag_stream", fake_stream)
 
     async def fake_transcribe(a):
         return "MBA program", False
@@ -114,8 +132,13 @@ def test_d2_loop_breaker_rebuilds_prompt(monkeypatch):
     async def fake_synth(text):
         return np.zeros(16000, dtype=np.int16)
 
+    async def fake_synth_streamed(text, sink):
+        """TTS for the streamed leg — no engine, no model, no audio."""
+        return [b"\x00" * 160]
+
     s._transcribe = fake_transcribe
     s._synthesise = fake_synth
+    s._synthesise_streamed = fake_synth_streamed
     s._total_frames = 60
     s._audio_buffer = [b"\x00" * 160]
 

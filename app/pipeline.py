@@ -87,6 +87,24 @@ def _vram_info() -> str:
 #   from app.rag import retrieve_context
 
 
+def build_rag_prompt_parts(transcript: str) -> tuple[str, str]:
+    """The same prompt as `build_rag_prompt`, split into (system, user).
+
+    The split is the fix for a measured defect, not tidiness: with the
+    instructions glued onto the front of the user turn, the model answered the
+    instructions instead of the caller ("I'd be happy to help you with this
+    role-play scenario", "You are now the inbound voice AI agent for…"). Over
+    38 replayed caller turns, moving them to a system turn took scaffold,
+    self-grading and prompt-recital defects from 3 to 0.
+    """
+    from app.rag import retrieve_context
+    from app.voice_system_prompt import build_voice_system_prompt
+
+    context = retrieve_context(transcript)
+    return (build_voice_system_prompt(context),
+            f"Student's question: {transcript}")
+
+
 def build_rag_prompt(transcript: str) -> str:
     """
     Enrich the transcribed user query with ChromaDB context and wrap it
@@ -96,15 +114,14 @@ def build_rag_prompt(transcript: str) -> str:
     voice prompt so chat interfaces keep their Markdown-oriented prompt.
 
     This function is called between STT output and LLM input.
+
+    Kept returning a single string because three callers want one
+    (`test_pipeline_with_text`, the US-015 screening tool, and any text
+    surface). Anything that actually sends to the model should use
+    `build_rag_prompt_parts` so the roles are right.
     """
-    from app.rag import retrieve_context
-    from app.voice_system_prompt import build_voice_system_prompt
-
-    context = retrieve_context(transcript)
-
-    prompt = build_voice_system_prompt(context)
-    prompt += f"\n\nStudent's question: {transcript}"
-    return prompt
+    system, user = build_rag_prompt_parts(transcript)
+    return f"{system}\n\n{user}"
 
 
 # ── Pipeline factory ─────────────────────────────────────────────────
@@ -373,8 +390,8 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
     from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
     async def _run() -> str | None:
-        prompt = build_rag_prompt(user_text)
-        from app.llm_backend import chat as backend_chat
+        system, prompt = build_rag_prompt_parts(user_text)
+        from app.llm_backend import _messages, chat as backend_chat
 
         # `to_thread`, because `backend_chat` is SYNCHRONOUS and performs an
         # HTTP call to the engine. Calling it directly from an `async def`
@@ -385,7 +402,7 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
         # dying at 68-70; this is the rest of it.
         answer = await asyncio.to_thread(
             backend_chat,
-            messages=[{"role": "user", "content": prompt}],
+            messages=_messages(system, prompt),
             preferred=[DEFAULT_LLM_MODEL],
             num_ctx=NUM_CTX,
         )

@@ -31,6 +31,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # service in tests (test_rag_dispatcher.py sets the mode per test).
 os.environ.setdefault("USE_MCP_RAG", "off")
 
+# ...and keep it out of the LIVE CALL LOG. `app.main` calls `_configure_logging()`
+# at import (main.py:110), which attaches a FileHandler to whatever LOG_FILE
+# names -- so simply importing the app in a test made the suite append to the
+# log a live call is being forensically read from. A test's deliberate
+# `TURN_TIMEOUT` then appears in that record as a real production stall, which
+# is exactly the wrong thing to find while preparing a demo. Forced rather than
+# defaulted: a test run must never write there, whatever the shell has set.
+os.environ["LOG_FILE"] = ""
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 def _find_free_port() -> int:

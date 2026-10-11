@@ -201,6 +201,12 @@ TTS_CACHE_SCOPE = settings.TTS_CACHE_SCOPE
 #: retained unchanged as the BRD-15 revert (flip the flag, no code change).
 TTS_STREAM = settings.TTS_STREAM
 
+#: BUG-07 boundary (`app/voice_grounding.py`): a spoken number or named thing
+#: must be traceable to what retrieval returned, or to something the caller
+#: said. ON by default; `GROUNDING_ENABLED=0` is the one-line revert, matching
+#: the convention the other voice flags use.
+GROUNDING_ENABLED = settings.GROUNDING_ENABLED
+
 
 def _cache_key_sha(cache_key: tuple) -> str:
     """Short, stable digest of a cache key, safe to write to a trace.
@@ -448,6 +454,98 @@ TRUNCATION_MARK = ("[the caller began speaking before I finished - they may not 
                    "have heard the end of this]")
 
 
+#: Read per session, like the VAD knobs, so a deployment can move the bound and
+#: a test can vary it without reloading the module.
+def _turn_timeout_s() -> float:
+    raw = os.environ.get("TURN_TIMEOUT_S", "").strip()
+    if not raw:
+        return float(settings.TURN_TIMEOUT_S)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("TURN_TIMEOUT_S=%r is not a number; using %s",
+                       raw, settings.TURN_TIMEOUT_S)
+        return float(settings.TURN_TIMEOUT_S)
+    return value if value > 0 else float(settings.TURN_TIMEOUT_S)
+
+
+# ── Facts the caller has already given (the demo's slot memory) ────────
+# The prompt's own "Context Is Mandatory" section promises the model an
+# "Important Facts" list and a conversation summary. Nothing produced either:
+# the model received the last 6 history lines and nothing else, so a fact given
+# on turn 2 was gone by turn 8 and the agent asked for it again. This is the
+# cheapest honest fix -- regex over the caller's own words, on the same turn,
+# with no extra round trip.
+#
+# Deliberately NOT an LLM extraction pass. The path this feeds is already over
+# its latency budget, and a second model call per turn would spend the whole
+# gain of streaming to recover one name.
+_FACT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("email", re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]{2,}")),
+    ("phone", re.compile(r"(?:\+\d[\d\s().-]{7,}\d|\b\d{10}\b)")),
+    ("name", re.compile(
+        r"\b(?:my name is|this is|i am|i'?m)\s+([A-Z][a-z]{2,20})\b"
+        # The correction form. Matching a bare "it's <Capitalised>" would fire
+        # on "it's Computer Science" and "it's Monday"; requiring the contrast
+        # ("it's Sam NOT Sean") costs the ability to catch a bare restatement
+        # and buys precision on the one case the story names.
+        r"|\bit'?s\s+([A-Z][a-z]{2,20})\s+not\b"
+        r"|\bnot\s+[A-Z][a-z]{2,20},?\s+it'?s\s+([A-Z][a-z]{2,20})\b")),
+    ("program", re.compile(
+        # Named programs only. Bare "bachelor"/"master" were here and had to go:
+        # "I completed my bachelor degree" is the caller's PRIOR QUALIFICATION,
+        # not a program they want, and it was recorded as `program: bachelor`
+        # and injected under "do not ask for these again" -- telling the model
+        # the caller was interested in a bachelor's programme when they had
+        # already finished one. Heard on the 2026-10-10 call. A caller who
+        # genuinely wants "a bachelor's in Computer Science" still lands, via
+        # the subject name.
+        r"\b(B\.?\s?Tech|M\.?\s?Tech|MBA|BBA|BCA|MCA|M\.?Sc|B\.?Sc|"
+        r"PhD|Computer Science|Information Technology|"
+        r"Data Science|Business Administration)\b", re.IGNORECASE)),
+    ("intake", re.compile(
+        r"\b(fall|spring|summer|autumn|winter)\s*(?:20\d\d|intake|semester|term)?\b",
+        re.IGNORECASE)),
+)
+
+#: Slots where a later mention replaces the earlier one (there is one name, one
+#: email). `program` is deliberately absent: a caller who names two programs is
+#: interested in two programs, and collapsing them loses the one they mentioned
+#: second. A correction ("no, it's Sam not Sean") is a new mention of `name`,
+#: so last-write-wins already implements the correction.
+_FACT_SCALAR_SLOTS = frozenset({"email", "phone", "name", "intake"})
+
+INTRO_GUARD = (
+    "The greeting has already been delivered on this call. Never greet, "
+    "welcome or introduce yourself again in any wording, and never open a "
+    "reply with \"Hello\", \"Hi\" or your own name.\n"
+)
+
+#: How many history LINES (caller + agent, so half as many exchanges) are sent
+#: as raw transcript. Was a bare `[-6:]` -- three exchanges -- which is why a
+#: fact given on turn 2 had fallen out of the prompt by turn 8. 12 lines is six
+#: exchanges, and the known-facts block above carries the durable slots for
+#: everything older than that. Bounded rather than unbounded because every line
+#: is prefill: at p50 4,410 prompt tokens a doubling of the transcript is not
+#: free, and this path is measured against a latency budget.
+HISTORY_WINDOW_LINES = 12
+
+#: Style rules sent with the caller's question. Tighter than the system
+#: prompt's own two-sentence rule because that one is 700 lines away from the
+#: question and a 3B model weights the near text most: live answers measured
+#: p50 218 chars (~40 words) against a 25-word target.
+_VOICE_STYLE_RULES = (
+    "Answer naturally as a university admissions advisor, in at most two short "
+    "sentences and about 25 words. One question at a time, and only if you need "
+    "the answer. Do not repeat back what the caller just told you. Do not "
+    "re-ask anything already in the known facts. Never ask the same or similar "
+    "clarifying question twice in a row. If the caller repeats a similar "
+    "answer, STOP asking — state your best interpretation and answer with "
+    "concrete information from the university profile, then invite the caller "
+    "to correct you."
+)
+
+
 def _vad_silence_frames() -> int:
     """Read the live end-of-speech delay at SESSION construction.
 
@@ -531,15 +629,57 @@ _META_MARKERS = (
     "without asking",
     "given that",
     "they are interested",
+    # Observed live 2026-10-06/07 (46 occurrences in logs/voice_assistant.log):
+    # the model announced the reply it was about to give instead of giving it.
+    # "Here's a possible response:" / "Here's a response as a university
+    # admissions advisor:" were spoken to the caller verbatim -- the marker set
+    # above did not contain either phrase, so `scrub_meta_leak` returned the
+    # text UNTOUCHED at its fast path and nothing downstream could catch it.
+    "possible response",
+    "as a university admissions advisor",
 )
 
 
 #: Meta lead-in glued directly to real content ("Here's the relevant
 #: information from the university profile: The MBA is…") — strip the
 #: prefix so the real content survives.
+#:
+#: The second alternative covers the scaffold family, where the real answer
+#: follows the colon and was otherwise discarded along with the lead-in. Both
+#: quotes are left to `_unwrap_quoted` rather than consumed here -- eating only
+#: the opening one leaves an orphan `"` at the end of the spoken sentence.
+#:
+#: The verb is matched as `'?s| is| are` deliberately. Three separate wordings
+#: have now been heard on live calls -- "Here's a possible response:",
+#: "Here's a response as a university admissions advisor:", "Here is a response
+#: to the student's question:" -- and enumerating exact phrases is why the third
+#: reached a caller after the first two were fixed. The noun and the optional
+#: qualifiers are likewise open, because the model varies those too.
+#:
+#: This is still pattern-matching a symptom. The same test that removes the
+#: 700-line system prompt removes these scaffolds entirely (6/6 clean answers,
+#: no lead-in of any kind), so the durable fix is the prompt, not this regex.
 _PREFIX_STRIP = re.compile(
-    r"^here'?s the relevant information\b[^:\n]*[:：]\s*", re.IGNORECASE
+    r"^here'?s the relevant information\b[^:\n]*[:：]\s*"
+    r"|^here(?:'?s| is| are)\s+"
+    # Zero or more qualifiers, each a single determiner or adjective. Repeated
+    # rather than a fixed slot because the model stacks them ("some possible
+    # responses", "a short sample reply") and a one-slot pattern missed the
+    # stacked forms -- which then fell through to the marker check and had the
+    # whole sentence DROPPED, losing the real answer with it.
+    r"(?:(?:a|an|the|some|my|our|your|possible|potential|sample|suggested|"
+    r"natural|appropriate|suitable|short|brief)\s+)*"
+    r"(?:responses?|replies?|answers?)\b[^:\n]*[:：]\s*",
+    re.IGNORECASE,
 )
+
+#: A quote opened by the scaffold above and never closed by the model.
+_UNWRAP_QUOTED = re.compile(r"^[\"'“”](.*?)[\"'“”]?$", re.DOTALL)
+
+
+def _unwrap_quoted(text: str) -> str:
+    """Drop the quotes a scaffolded reply was wrapped in, if it was."""
+    return _UNWRAP_QUOTED.sub(r"\1", text).strip()
 
 
 def scrub_meta_leak(text: str) -> str | None:
@@ -549,13 +689,24 @@ def scrub_meta_leak(text: str) -> str | None:
     remains after scrubbing. Clean text passes through untouched.
     """
     low = text.lower()
-    if not any(m in low for m in _META_MARKERS):
+    # The fast path must consult BOTH lists. It used to check only
+    # `_META_MARKERS`, so a scaffold that `_PREFIX_STRIP` already knew how to
+    # remove was returned untouched before the strip could run -- the marker
+    # list and the strip list had to be kept in sync by hand, and a phrase in
+    # one but not the other was silently spoken. Heard live on the 2026-10-10
+    # call: "Here's a response to the student's question:" went to TTS because
+    # no marker contained it, while the pattern above matched it exactly.
+    if not any(m in low for m in _META_MARKERS) and not _PREFIX_STRIP.match(text):
         return text  # clean reply — byte-identical pass-through
 
     sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
     kept = []
     for s in sentences:
-        s2 = _PREFIX_STRIP.sub("", s)
+        s2, stripped = _PREFIX_STRIP.subn("", s)
+        if stripped:
+            # Only unwrap where a scaffold was actually removed: a caller-facing
+            # quote the model wrote on purpose is not ours to edit.
+            s2 = _unwrap_quoted(s2)
         if s2.strip() and not any(m in s2.lower() for m in _META_MARKERS):
             kept.append(s2)
     out = re.sub(r"\s{2,}", " ", " ".join(kept)).strip(" .\n")
@@ -686,8 +837,147 @@ class VoiceCallSession:
         # Conversation context (accumulated across utterances)
         self._conversation_history: list[str] = []
 
+        #: Whether the scripted greeting has been delivered on this call. Set by
+        #: the WebSocket handler through `note_greeting_spoken`, and read by
+        #: `_build_llm_prompt` so the model is told not to introduce itself
+        #: again. The greeting is spoken by `_run_greeting` in main.py, which
+        #: ran OUTSIDE this class and wrote nothing here -- so the model's
+        #: context began at the caller's first utterance, with no record that it
+        #: had already said hello. 39 live answers reopened with "Hello, I'm
+        #: Alex from Meridian University Admissions".
+        self.intro_done = False
+
+        #: Slots the caller has already filled, in their own words, so the model
+        #: is never asked for them twice. `{slot: value}` for the scalar slots
+        #: and `{slot: [values]}` for `program`. Populated by `note_facts`.
+        self._facts: dict[str, object] = {}
+
+        #: Evidence a spoken claim may be grounded in: what retrieval returned
+        #: this call, plus what the CALLER said. Deliberately NOT the agent's own
+        #: output -- measured during validation, letting the agent's turns into
+        #: this list let a fabrication launder itself: turn 6 invented "School of
+        #: International Studies", and every later turn that repeated it then
+        #: passed the check by citing the earlier invention.
+        self._grounding_evidence: list[str] = []
+
         # US-001 turn tracing (app/perf_trace.py). Never raises; may be None.
         self._trace = None
+
+    def note_grounding_evidence(self, text: str) -> None:
+        """Add caller words or retrieved context to what may be grounded on."""
+        clean = (text or "").strip()
+        if clean and clean not in self._grounding_evidence:
+            self._grounding_evidence.append(clean)
+            # Bounded: a long call must not grow this without limit. Oldest
+            # first, so the earliest facts stay -- they are the ones later
+            # turns refer back to.
+            if len(self._grounding_evidence) > 40:
+                del self._grounding_evidence[0]
+
+    def grounded(self, text: str) -> str:
+        """Return `text` with ungrounded claims removed, or a refusal line.
+
+        Pulls in the retrieval for the CURRENT turn first. The retrieval runs
+        inside `query_rag_stream`, so it is available by the time any clause is
+        produced, but this method must not depend on the caller remembering to
+        record it -- that is how a guard silently stops guarding.
+
+        Returns the input unchanged when the boundary is disabled, so the
+        revert is a setting rather than a code change.
+        """
+        if not GROUNDING_ENABLED:
+            return text
+        try:
+            from app.rag import last_retrieved_context
+
+            self.note_grounding_evidence(last_retrieved_context())
+        except Exception:                          # noqa: BLE001
+            pass                                   # never let the guard break a call
+        from app.voice_grounding import enforce_grounding
+
+        return enforce_grounding(
+            text,
+            "\n".join(self._grounding_evidence),
+            log=self.log_event,
+        )
+
+    def note_facts(self, utterance: str) -> dict:
+        """Remember what the caller just told us, and return what changed.
+
+        Runs on the caller's own transcript, before the prompt is built, so the
+        turn that supplies a fact is also the first turn that cannot re-ask for
+        it. Returns only the NEW or CHANGED slots, which is what a test can
+        assert on without reaching into the prompt string.
+        """
+        changed: dict = {}
+        if not utterance:
+            return changed
+        for slot, pattern in _FACT_PATTERNS:
+            m = pattern.search(utterance)
+            if not m:
+                continue
+            # Patterns with several alternatives put the capture in whichever
+            # branch matched, so take the first group that actually fired.
+            value = next((g for g in m.groups() if g), None) or m.group(0)
+            value = value.strip()
+            if not value:
+                continue
+            if slot in _FACT_SCALAR_SLOTS:
+                if self._facts.get(slot) != value:
+                    self._facts[slot] = value
+                    changed[slot] = value
+            else:
+                seen = self._facts.setdefault(slot, [])
+                if isinstance(seen, list) and value.lower() not in [
+                        str(v).lower() for v in seen]:
+                    seen.append(value)
+                    changed[slot] = list(seen)
+        return changed
+
+    def known_facts_block(self) -> str:
+        """The known-facts block for the prompt, or "" when nothing is known."""
+        if not self._facts:
+            return ""
+        lines = []
+        for slot, value in self._facts.items():
+            shown = ", ".join(str(v) for v in value) if isinstance(value, list) else value
+            lines.append(f"- {slot}: {shown}")
+        return (
+            "Known facts from earlier in this call. Do not ask for these again "
+            "and do not read them back to the caller:\n" + "\n".join(lines) + "\n"
+        )
+
+    def timeout_fallback(self) -> list[bytes]:
+        """What the caller hears when a turn has to be abandoned.
+
+        The same pre-rendered asset the synthesiser-failure path uses: it needs
+        no model, no synthesiser and no network, which is the whole point when
+        the reason we are here is that something in that chain did not return.
+        Public because the bound that produces this lives on the WebSocket
+        handler, which owns the timeout -- keeping the asset choice here means
+        the caller hears one consistent sentence however a turn fails.
+        """
+        return self._speak_fixed_response(reason="turn timeout")
+
+    def note_greeting_spoken(self, text: str) -> None:
+        """Record the scripted greeting as something the agent has SAID.
+
+        Idempotent: a duplicated `start` event, or the reconnect path that
+        deliberately does not re-speak the script, still has to leave the
+        greeting in this session's history exactly once. Called before playback
+        rather than after it, because an interrupted greeting is still a
+        greeting the caller heard the beginning of -- and because the history
+        must be correct even if the socket dies mid-script.
+        """
+        self.intro_done = True
+        spoken = " ".join((text or "").split())
+        if not spoken:
+            return
+        entry = f"Assistant: {spoken}"
+        if entry in self._conversation_history:
+            return
+        # First in the transcript, because it is the first thing said.
+        self._conversation_history.insert(0, entry)
 
     def log_event(self, name: str, **fields) -> None:
         """Emit one structured event line for the call timeline."""
@@ -1193,6 +1483,22 @@ class VoiceCallSession:
         # Add to conversation history
         self._conversation_history.append(f"Caller: {transcript}")
 
+        # What the caller said is itself evidence a claim may be grounded on --
+        # if they name a programme and the agent repeats it, that is not a
+        # fabrication. Recorded here, before any generation, so the turn that
+        # supplies the term is also the first turn that may use it.
+        self.note_grounding_evidence(transcript)
+
+        # What the caller just told us, remembered before the prompt is built so
+        # THIS turn is already unable to re-ask for it. Skipped for the
+        # noise-gated turns below, whose "transcript" is an STT artefact rather
+        # than a statement -- extracting a name out of one would poison the
+        # slot for the rest of the call with no way to notice.
+        if not (low_conf or is_noise_fragment(transcript)):
+            changed = self.note_facts(transcript)
+            if changed:
+                self.log_event("FACTS_LEARNED", slots=",".join(sorted(changed)))
+
         # ── Step 2b: Noise gate — short fragments / low-confidence STT
         #    get a fixed one-line check; the LLM never sees them.
         if low_conf or is_noise_fragment(transcript):
@@ -1288,6 +1594,9 @@ class VoiceCallSession:
             logger.warning(f"VoiceCall: answer fully scrubbed as meta-leak: {answer[:100]!r}")
             scrubbed = NOISE_REPLY
         answer = scrubbed
+
+        # BUG-07: the same boundary the streamed path applies per clause.
+        answer = self.grounded(answer)
 
         self._conversation_history.append(f"Assistant: {answer}")
         logger.info(f"VoiceCall: answer ({len(answer)} chars) = \"{answer[:120]}...\"")
@@ -1487,6 +1796,13 @@ class VoiceCallSession:
                 scrubbed = scrub_meta_leak(text)
                 if not scrubbed:
                     return
+                # BUG-07: nothing gets spoken that the caller's call cannot
+                # support. Per clause, because that is the unit that reaches
+                # TTS here -- and because a clause is a sentence, which is the
+                # granularity the boundary reasons at.
+                scrubbed = self.grounded(scrubbed)
+                if not scrubbed:
+                    return
                 parts.append(scrubbed)
                 if chunk_sink is None:
                     return
@@ -1554,21 +1870,28 @@ class VoiceCallSession:
             return "", []
 
     def _build_llm_prompt(self, question: str) -> str:
-        """The prompt the serving path sends (shared by batch and stream)."""
+        """The prompt the serving path sends (shared by batch and stream).
+
+        Assembly order is deliberate: the facts and the intro guard sit ABOVE
+        the transcript because they are instructions about the whole call, and
+        the caller's current utterance sits last because that is the text a
+        small model weights most heavily.
+        """
+        head = [f"This is an {self.direction} call."]
+        if self.intro_done:
+            head.append(INTRO_GUARD)
+        facts = self.known_facts_block()
+        if facts:
+            head.append(facts)
+
         # Include recent conversation for context
         if self._conversation_history:
-            context = "\n".join(self._conversation_history[-6:])
+            context = "\n".join(self._conversation_history[-HISTORY_WINDOW_LINES:])
             prompt = (
-                f"This is an {self.direction} call.\n"
+                "\n".join(head) + "\n"
                 f"Previous conversation:\n{context}\n\n"
                 f"The caller just said: \"{question}\"\n"
-                f"Answer naturally as a university admissions advisor. "
-                f"Keep responses concise for voice (under 3 sentences). "
-                f"NEVER ask the same or similar clarifying question twice "
-                f"in a row. If the caller repeats a similar answer, STOP "
-                f"asking — state your best interpretation and answer with "
-                f"concrete information from the university profile, then "
-                f"invite the caller to correct you."
+                f"{_VOICE_STYLE_RULES}"
             )
             # Deterministic loop-breaker: if the assistant's own last
             # two+ turns were clarification questions, rebuild the
@@ -1589,7 +1912,7 @@ class VoiceCallSession:
                     h for h in self._conversation_history if h.startswith("Caller: ")
                 ]
                 prompt = (
-                    f"This is an {self.direction} call.\n"
+                    "\n".join(head) + "\n"
                     f"Caller's recent replies:\n" + "\n".join(caller_turns[-4:]) +
                     f"\n\nThe caller just said: \"{question}\"\n"
                     f"You have already asked for clarification too many "
@@ -1599,7 +1922,7 @@ class VoiceCallSession:
                     f"the caller correct you."
                 )
         else:
-            prompt = f"This is an {self.direction} call.\n{question}"
+            prompt = "\n".join(head) + f"\n{question}"
         return prompt
 
     #: TTS cache (DG-06 / US-012).

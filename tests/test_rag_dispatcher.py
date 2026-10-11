@@ -46,8 +46,13 @@ def test_off_mode_query_rag_never_touches_mcp(monkeypatch):
 
     answer = rag.query_rag("what are the fees?", mode="chat")
     assert answer == "answer"
+    # The instructions are a SYSTEM turn and the caller's turn is the USER turn
+    # (app/llm_backend.py `_messages`). Sending them as one user message made
+    # the model answer the instructions -- see doc/voice-demo/BUGS.md BUG-01.
+    assert [m["role"] for m in captured["messages"]] == ["system", "user"]
     assert "LOCAL CONTEXT" in captured["messages"][0]["content"]
-    assert captured["messages"][0]["content"].endswith("Student's question: what are the fees?")
+    assert captured["messages"][1]["content"].endswith(
+        "Student's question: what are the fees?")
 
 
 # ── auto mode: MCP first, fallback on failure ──────────────────────────────
@@ -140,7 +145,13 @@ def test_query_rag_chat_prompt_matches_legacy_shape(monkeypatch):
     monkeypatch.setattr(rag_legacy, "_get_available_model", lambda: "qwen")
 
     rag.query_rag("fees?", mode="chat")
-    prompt = captured["messages"][0]["content"]
-    assert prompt.startswith("You are a helpful University Admissions Advisor for Meridian University.")
-    assert "[§ Fees Structure]\nTuition is $18,500." in prompt
-    assert prompt.endswith("Student's question: fees?")
+    # Two turns now, not one. The chat prompt's TEXT is unchanged -- persona,
+    # context and question are all still there, in the same order -- but the
+    # instructions ride in a `system` turn and the question in a `user` turn.
+    # Asserting on roles rather than on one concatenated string is what makes
+    # this test fail if the shape silently reverts.
+    assert [m["role"] for m in captured["messages"]] == ["system", "user"]
+    system, user = captured["messages"][0]["content"], captured["messages"][1]["content"]
+    assert system.startswith("You are a helpful University Admissions Advisor for Meridian University.")
+    assert "[§ Fees Structure]\nTuition is $18,500." in system
+    assert user.endswith("Student's question: fees?")

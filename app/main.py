@@ -853,10 +853,38 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
     session.mark_speaking()
 
     try:
-        from app.voice_handler import TTS_STREAM
+        from app.voice_handler import TTS_STREAM, _turn_timeout_s
 
-        tts_chunks, dialogue, end_call = await session.process_utterance(
-            chunk_sink=_send_chunks if TTS_STREAM else None)
+        bound = _turn_timeout_s()
+        try:
+            tts_chunks, dialogue, end_call = await _asyncio.wait_for(
+                session.process_utterance(
+                    chunk_sink=_send_chunks if TTS_STREAM else None),
+                timeout=bound,
+            )
+        except _asyncio.TimeoutError:
+            # A turn may not hold the line open forever. This is a backstop, not
+            # a latency target: the live p95 for time-to-first-audio is 7.8 s
+            # and the worst of 3,781 traced turns was 27.7 s, so the bound is
+            # set well clear of every turn that is merely slow.
+            #
+            # It was added because "stuck" turned out to be reachable -- see
+            # `TURN_TIMEOUT_S` in app/config.py for the wakeup defect that
+            # stalled every turn on a transport without constant frame traffic.
+            #
+            # Order matters: ask the turn to stop first, so the pump thread
+            # sees the cancel Event and stops decoding, and only then let
+            # `wait_for` cancel the coroutine.
+            session.request_interruption()
+            session.log_event("TURN_TIMEOUT", timeout_s=bound)
+            logger.error(f"{t.label}: turn exceeded {bound:.0f}s and was "
+                         f"abandoned; caller gets the fixed response")
+            # Fresh turn before the fallback is sent: the cancel signal just set
+            # is the same one `_write_frames` checks, so without this the fixed
+            # response would be refused by our own send loop and the caller
+            # would hear the silence this bound exists to prevent.
+            session.begin_turn()
+            tts_chunks, dialogue, end_call = session.timeout_fallback(), "", False
     except WebSocketDisconnect:
         session.end_turn()
         raise                       # stream is dead — let the handler exit
@@ -936,6 +964,55 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
             pass
 
 
+# ── the greeting is delivered once per call ──────────────────────────
+#: Calls whose scripted greeting has already been spoken, keyed by the
+#: carrier's CallSid, with the time it was claimed.
+#:
+#: The greeting is spawned from the `start` branch of the media-stream handler,
+#: so anything that produces a second `start` for the same call produces a
+#: second greeting. That is not hypothetical: the handler overwrites
+#: `turn["task"]` without cancelling the first task, and a WebSocket reconnect
+#: arrives as a brand new session with a new `streamSid` but the SAME CallSid.
+#: Keyed by CallSid for exactly that reason -- a redial is a new CallSid and
+#: SHOULD greet again; a reconnect of the same call must not.
+#:
+#: In-process, like `_active_call_sids` below, and correct for the same reason:
+#: the stack runs one uvicorn worker by design (see `_reconcile_workers`), so
+#: every leg of a call lands in this process. The TTL only bounds the dict; a
+#: call cannot outlive it and still be greeted.
+_GREETED_CALLS: dict[str, float] = {}
+_GREETING_TTL_S = 3600.0
+
+
+def _greeting_timeout_s() -> float:
+    """Bound on synthesising the greeting.
+
+    Shorter than a turn's bound because this is a fixed script through a single
+    engine: there is no retrieval, no decode and no tool work that could
+    legitimately take the time a turn may. A greeting that cannot be synthesised
+    in this long is not going to be, and the caller should not sit in silence
+    while we wait to find out.
+    """
+    from app.voice_handler import _turn_timeout_s
+
+    return min(15.0, _turn_timeout_s())
+
+
+def _claim_greeting(call_key: str) -> bool:
+    """True the first time this call asks to greet; False on every repeat."""
+    if not call_key:
+        # No identity to dedupe on. Suppressing would risk silencing the
+        # greeting on every call; greeting twice is the lesser failure.
+        return True
+    now = _time.time()
+    for stale in [k for k, ts in _GREETED_CALLS.items() if now - ts > _GREETING_TTL_S]:
+        _GREETED_CALLS.pop(stale, None)
+    if call_key in _GREETED_CALLS:
+        return False
+    _GREETED_CALLS[call_key] = now
+    return True
+
+
 async def _run_greeting(t: _VoiceTurn, text: str) -> None:
     """Speak the opening greeting as agent speech, and yield if the caller talks.
 
@@ -950,9 +1027,21 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
 
     Never called for a turn: a caller turn is `_run_voice_turn`. This one has no
     pipeline and no history -- it is a script, spoken under the same rules.
+
+    Spoken at most ONCE per call. On a repeat attempt the script is not
+    re-spoken, but it IS still written into this session's history: a reconnect
+    builds a new session, and the model has to know the caller was already
+    greeted or it opens the next turn by introducing itself again.
     """
     session = t.session
     sent = {"n": 0}
+
+    if not _claim_greeting(t.call_sid or t.stream_sid):
+        logger.info(f"{t.label}: greeting already delivered for "
+                    f"{t.call_sid or t.stream_sid}; not re-speaking it")
+        session.note_greeting_spoken(text)
+        return
+
     try:
         from app.voice_handler import generate_ulaw_greeting
 
@@ -962,8 +1051,16 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         # for a model load on the FIRST turn of the FIRST call, which is the
         # worst possible moment and the one a caller is most likely to notice.
         # `to_thread` gives it a worker thread instead.
-        chunks = await _asyncio.to_thread(generate_ulaw_greeting, text)
+        chunks = await _asyncio.wait_for(
+            _asyncio.to_thread(generate_ulaw_greeting, text),
+            timeout=_greeting_timeout_s(),
+        )
         logger.info(f"AI greeting: {len(chunks)} chunks")
+        # The greeting is agent speech, so the transcript of this call must
+        # contain it. Without this the model's context begins at the caller's
+        # first utterance, and it reintroduces itself on a later turn --
+        # measured 39 times in logs/voice_assistant.log.
+        session.note_greeting_spoken(text)
         # US-014: the greeting is agent speech, so the echo gate is armed for it
         # exactly as for a turn, and -- as for a turn -- it stays armed until the
         # caller has heard the last frame rather than until the last write.

@@ -20,12 +20,17 @@ identical to the legacy pipeline.
 import logging
 import os
 import time
+from contextvars import ContextVar
 from typing import AsyncIterator
 
 from app import rag_legacy
 from app import rag_mcp
 from app.config import settings
 from app.llm_backend import EngineCounters
+
+#: The text returned by the most recent `retrieve_context` in this context.
+#: Read by `last_retrieved_context()` for the grounding boundary.
+_LAST_CONTEXT: ContextVar[str] = ContextVar("last_retrieved_context", default="")
 
 logger = logging.getLogger("rag_module")
 
@@ -120,8 +125,15 @@ def retrieve_context(query: str) -> str:
     RAG+LLM call. It reaches the right turn because asyncio.to_thread copies
     the calling context, so the per-WebSocket ContextVar is visible here; two
     concurrent callers get distinct copies (BRD-06).
+
+    Also records the text as this context's last retrieved context, so the
+    grounding boundary (`app/voice_grounding.py`) can check what the model was
+    actually shown rather than what it was asked. A ContextVar for the same
+    reason the trace uses one: two concurrent callers must not see each other's
+    evidence, and that is the difference between a guard and a cross-talk bug.
     """
     result = _retrieve_context(query)
+    _LAST_CONTEXT.set(result)
     try:
         from app.perf_trace import mark_current
 
@@ -129,6 +141,16 @@ def retrieve_context(query: str) -> str:
     except Exception:
         pass
     return result
+
+
+def last_retrieved_context() -> str:
+    """The context most recently retrieved in THIS call's context. "" if none.
+
+    Used by the grounding boundary. Deliberately per-context rather than a
+    module global: a module global would let caller A's retrieved facts ground
+    caller B's answer, which is a correctness and a privacy defect at once.
+    """
+    return _LAST_CONTEXT.get()
 
 
 def _note_retrieval(rung: str, breaker: str, dead_ms: float) -> None:
@@ -295,46 +317,50 @@ def query_rag(question: str, *, mode: str = "voice",
     # Step 1: Retrieve context
     context = retrieve_context(rq)
 
-    # Step 2: Build prompt (byte-identical to legacy)
+    # Step 2: Build prompt. Instructions go in a SYSTEM turn, everything about
+    # this particular caller in the USER turn. See `llm_backend._messages`:
+    # delivering the instructions as a user message made the model answer them.
     if mode == "chat":
-        prompt = SYSTEM_PROMPT.format(
+        system = SYSTEM_PROMPT.format(
             context=context
             or "(No university profile information was retrieved for this question.)"
         )
     else:
         from app.voice_system_prompt import build_voice_system_prompt
 
-        prompt = build_voice_system_prompt(context)
+        system = build_voice_system_prompt(context)
 
     # Step 2b: the student's own record and the conversation so far. Rule 7 of
     # SYSTEM_PROMPT tells the model the chat system collects profile details
     # itself, so when the record is present it should answer from it rather
-    # than claim it has no student information.
+    # than claim it has no student information. These belong to the turn, not
+    # to the instructions -- they are about this caller, not about the job.
+    turn = ""
     if profile:
         known = [(k, v) for k, v in profile.items() if v]
         if known:
-            prompt += (
+            turn += (
                 "\n\nThis student's record (already on file — answer from it if "
                 "they ask about themselves, and never ask for these again):\n"
                 + "\n".join(f"- {k}: {v}" for k, v in known)
             )
     if history:
-        prompt += (
+        turn += (
             "\n\nRecent conversation for this student, oldest first:\n"
             + "\n".join(history)
         )
 
-    prompt += f"\n\nStudent's question: {question}"
+    prompt = turn + f"\n\nStudent's question: {question}"
 
     # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import _messages, chat as backend_chat
 
         model = rag_legacy._get_available_model()
         logger.info(f"RAG query: model={model}, context_chars={len(context)}")
 
         return backend_chat(
-            messages=[{"role": "user", "content": prompt}],
+            messages=_messages(system, prompt),
             model=model,
             num_ctx=OLLAMA_NUM_CTX,
             temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
@@ -381,17 +407,36 @@ async def query_rag_stream(
     # path gets it.
     context = await asyncio.to_thread(retrieve_context, rq)
 
-    # Step 2: Build prompt (byte-identical to query_rag)
+    # Record the evidence for the grounding boundary HERE, on the loop.
+    #
+    # `retrieve_context` also sets this, but it runs in a WORKER THREAD and
+    # `asyncio.to_thread` copies the calling context IN, not OUT -- a `.set()`
+    # inside the thread is discarded when the thread ends. Measured: the call
+    # returned 1087 chars while `last_retrieved_context()` still read "".
+    #
+    # The consequence was live, on the 2026-10-10 QA call: the boundary checked
+    # an EMPTY evidence list, so every specific claim looked ungrounded and it
+    # refused a correct answer ("We offer ... fields such as Engineering,
+    # Computer Science, Business ...") with "I don't have that detail in front
+    # of me". A guard whose evidence silently fails open-and-empty is worse than
+    # no guard, because it reads as the agent being broken.
+    _LAST_CONTEXT.set(context)
+
+    # Step 2: Build prompt. Instructions in a SYSTEM turn, the caller's turn in
+    # the USER turn -- see `llm_backend._messages`. The voice handler passes its
+    # whole assembled prompt (history + style rules + the utterance) as
+    # `question`, so all of that belongs to the user turn and only the persona
+    # and behavioural rules belong to the system turn.
     if mode == "chat":
-        prompt = SYSTEM_PROMPT.format(
+        system = SYSTEM_PROMPT.format(
             context=context
             or "(No university profile information was retrieved for this question.)"
         )
     else:
         from app.voice_system_prompt import build_voice_system_prompt
 
-        prompt = build_voice_system_prompt(context)
-    prompt += f"\n\nStudent's question: {question}"
+        system = build_voice_system_prompt(context)
+    prompt = f"Student's question: {question}"
 
     # Step 3: streamed generation
     model = rag_legacy._get_available_model()
@@ -399,7 +444,7 @@ async def query_rag_stream(
     async for item in generate_stream(
         prompt, model=model, num_ctx=OLLAMA_NUM_CTX,
         temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,
-        cancel=cancel,
+        cancel=cancel, system=system,
     ):
         yield item
 

@@ -559,25 +559,25 @@ def query_rag(question: str, *, mode: str = "voice") -> str | None:
     # use the Markdown-oriented SYSTEM_PROMPT above so answers match
     # across text channels.
     if mode == "chat":
-        prompt = SYSTEM_PROMPT.format(
+        system = SYSTEM_PROMPT.format(
             context=context
             or "(No university profile information was retrieved for this question.)"
         )
     else:
         from app.voice_system_prompt import build_voice_system_prompt
 
-        prompt = build_voice_system_prompt(context)
-    prompt += f"\n\nStudent's question: {question}"
+        system = build_voice_system_prompt(context)
+    prompt = f"Student's question: {question}"
 
     # Step 3: Query LLM (Ollama on Windows/Linux, MLX on Apple Silicon)
     try:
-        from app.llm_backend import chat as backend_chat
+        from app.llm_backend import _messages, chat as backend_chat
 
         model = _get_available_model()
         logger.info(f"RAG query: model={model}, context_chars={len(context)}")
 
         return backend_chat(
-            messages=[{"role": "user", "content": prompt}],
+            messages=_messages(system, prompt),
             model=model,
             num_ctx=OLLAMA_NUM_CTX,
             temperature=float(OLLAMA_TEMPERATURE) if OLLAMA_TEMPERATURE else None,

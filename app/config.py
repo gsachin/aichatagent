@@ -196,6 +196,43 @@ class Settings:
         default_factory=lambda: _env_int("VAD_SPECULATIVE_ADVANCE_MS", 220)
     )
 
+    # ── Bound on one turn (demo track, 2026-10-10) ──────────────────
+    # A turn may not hold the line open forever. This is NOT a latency target:
+    # the live p95 for time-to-first-audio is 7.8 s and the worst turn in
+    # 3,781 traced turns was 27.7 s, so 30 s is chosen to be well clear of
+    # every turn that is merely slow, and to fire only on one that is stuck.
+    #
+    # It exists because "stuck" turned out to be reachable. `generate_stream`
+    # handed deltas to the event loop with a call that does not wake it
+    # (`asyncio.Queue.put_nowait` from the pump thread -> `loop.call_soon`,
+    # which -- unlike `call_soon_threadsafe` -- never writes the self-pipe).
+    # Live calls masked it because Twilio sends a media frame every 20 ms, but
+    # a transport without that traffic stalled every turn, for as long as the
+    # process lived. That bug is fixed; this bound is what makes the NEXT one a
+    # bad turn instead of a dead call.
+    #
+    # On expiry the caller hears the pre-rendered fixed response and the turn
+    # is logged `TURN_TIMEOUT`, so a stall is legible in the record rather than
+    # showing up as unexplained silence.
+    TURN_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("TURN_TIMEOUT_S", 30.0)
+    )
+
+    # ── Grounding boundary (demo track, 2026-10-11) ─────────────────
+    # BUG-07: the agent told a caller about a "School of International Studies"
+    # that appears in no source, and quoted $14,500 where its context said
+    # $14,200. The prompt already said "never invent numbers, fees, URLs, or
+    # program names" and still did it, so this is an output boundary rather
+    # than another instruction: a spoken number or named thing must be
+    # traceable to what retrieval returned, or to something the caller said.
+    #
+    # ON by default. `GROUNDING_ENABLED=0` reverts to speaking whatever the
+    # model produced, which is the pre-fix behaviour.
+    GROUNDING_ENABLED: bool = field(
+        default_factory=lambda: _env("GROUNDING_ENABLED", "1").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+
     # ── Caller interruption (US-014, Option 2) ──────────────────────
     # Whether the caller may be heard while the agent is speaking.
     #

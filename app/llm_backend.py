@@ -449,6 +449,21 @@ class ClauseCutter:
         return None
 
 
+def _messages(system: str | None, prompt: str) -> list[dict]:
+    """Build the chat messages, putting instructions in a SYSTEM turn.
+
+    One place, because this is a correctness property rather than a formatting
+    choice: with the instructions in the user turn the model answers them. Every
+    voice call before 2026-10-10 went out as a single user message because this
+    construction was inlined at four separate call sites and none of them set a
+    role.
+    """
+    if system and system.strip():
+        return [{"role": "system", "content": system},
+                {"role": "user", "content": prompt}]
+    return [{"role": "user", "content": prompt}]
+
+
 async def generate_stream(
     prompt: str,
     *,
@@ -456,6 +471,7 @@ async def generate_stream(
     num_ctx: int | None = None,
     temperature: float | None = None,
     cancel: "asyncio.Event | None" = None,
+    system: str | None = None,
 ) -> AsyncIterator[str | EngineCounters]:
     """US-004: yield str deltas from a streamed generation, then exactly one
     `EngineCounters` as the final item.
@@ -465,6 +481,14 @@ async def generate_stream(
     on a decode step. Raises `GenerationFailed` when the stream errors or
     produces nothing, and `GenerationCancelled` when `cancel` is set
     mid-stream (the underlying stream is abandoned).
+
+    `system` carries the instructions in a `system` turn instead of gluing
+    them onto the front of `prompt`. Measured on the archived calls: with the
+    whole prompt in ONE user turn the model treats it as a role-play brief and
+    replies to it ("I'd be happy to help you with this role-play scenario",
+    "You are now the inbound voice AI agent for…", "Thank you for the detailed
+    guidelines"). Replayed over 38 real caller turns, moving the instructions
+    to a `system` turn took scaffold/self-grading/recital defects from 3 to 0.
     """
     import asyncio as _asyncio
     import threading as _threading
@@ -478,18 +502,56 @@ async def generate_stream(
         options["temperature"] = float(temperature)
 
     queue: "asyncio.Queue[tuple[str, Any]]" = _asyncio.Queue()
+    loop = _asyncio.get_running_loop()
+
+    def emit(item: tuple[str, Any]) -> None:
+        """Hand one item to the loop FROM the pump thread.
+
+        `queue.put_nowait(...)` cannot be called from a foreign thread here.
+        It wakes the consumer through `Future.set_result` -> `Future.
+        __schedule_callbacks` -> `loop.call_soon`, and `call_soon` is the
+        NON-thread-safe half of the API: it appends to `loop._ready` and does
+        NOT call `loop._write_to_self()`. Only `call_soon_threadsafe` writes
+        that self-pipe byte (CPython `base_events.py:752` vs `:805-813`).
+
+        So a delta put this way lands in the queue and the loop is never told.
+        It sits there until the loop wakes for an unrelated reason -- an inbound
+        media frame, a timer, another connection. Measured on this box with the
+        loop otherwise idle: time-to-first-audio 10,425 ms (streamed) against
+        1,645 ms (batch), where the ~10 s was nothing but the watchdog task's
+        own `asyncio.sleep(10)` finally waking the loop. With no periodic task
+        at all, the turn never completes: two runs hung for 2 h.
+
+        Live calls mask it completely -- Twilio sends a media frame every 20 ms,
+        so the loop is woken ~50x/s and drains the queue promptly. The cost that
+        remains in production is jitter: a delta waits for the next frame
+        instead of arriving when it is produced.
+
+        A CLOSED LOOP IS NOT AN ERROR. A caller who interrupts abandons this
+        stream and the pump thread outlives the loop that started it; the next
+        emit then hits `RuntimeError: Event loop is closed`. That is the normal
+        end of an abandoned generation, not a fault, and raising it from a
+        daemon thread only produces an unraisable-exception warning. Stop
+        quietly instead.
+        """
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:
+            # Loop closed: nobody is listening. The consumer is gone.
+            pass
 
     def _pump() -> None:
         counters: dict[str, Any] = {}
         any_piece = False
         try:
             stream = ollama.chat(
-                model=model, messages=[{"role": "user", "content": prompt}],
+                model=model,
+                messages=_messages(system, prompt),
                 options=options, keep_alive=KEEP_ALIVE, stream=True,
             )
             for chunk in stream:
                 if cancel is not None and cancel.is_set():
-                    queue.put_nowait(("cancelled", None))
+                    emit(("cancelled", None))
                     return
                 piece = str((chunk.get("message") or {}).get("content", ""))
                 for key in ("prompt_eval_count", "eval_count",
@@ -498,23 +560,23 @@ async def generate_stream(
                         counters[key] = chunk.get(key)
                 if piece:
                     any_piece = True
-                    queue.put_nowait(("delta", piece))
+                    emit(("delta", piece))
                 if chunk.get("done"):
                     break
             if not any_piece:
                 # An empty generation must never reach synthesis (TRD-04).
-                queue.put_nowait(("error", "empty generation stream"))
+                emit(("error", "empty generation stream"))
                 return
-            queue.put_nowait(("counters", EngineCounters(
+            emit(("counters", EngineCounters(
                 prompt_eval_count=counters.get("prompt_eval_count"),
                 eval_count=counters.get("eval_count"),
                 prompt_eval_duration_ns=counters.get("prompt_eval_duration"),
                 eval_duration_ns=counters.get("eval_duration"),
             )))
         except Exception as exc:                        # noqa: BLE001 — thread boundary
-            queue.put_nowait(("error", f"{type(exc).__name__}: {exc}"))
+            emit(("error", f"{type(exc).__name__}: {exc}"))
         finally:
-            queue.put_nowait(("eof", None))
+            emit(("eof", None))
 
     _threading.Thread(target=_pump, name="llm-stream", daemon=True).start()
 

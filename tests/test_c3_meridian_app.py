@@ -101,7 +101,8 @@ def test_n1_stream_retrieves_on_retrieval_query(monkeypatch):
     monkeypatch.setattr(rag, "retrieve_context", fake_retrieve)
     monkeypatch.setattr(rag, "RAG_SIMILARITY_THRESHOLD", 0.0)
 
-    async def fake_stream(prompt, model=None, num_ctx=None, temperature=None, cancel=None):
+    async def fake_stream(prompt, model=None, num_ctx=None, temperature=None,
+                          cancel=None, system=None):
         yield "ok"
 
     # generate_stream is imported locally inside query_rag_stream — patch the
