@@ -19,16 +19,35 @@ spoken, rather than asking the model to decide.
 
 What counts as a claim
 ----------------------
-Deliberately narrow. Only two shapes are checked, because those are the ones a
-caller can be misled by and the ones that can be verified mechanically:
+Two shapes, because these are the ones a caller can be misled by and the ones
+that can be verified mechanically:
 
-  * a NUMBER, with an optional unit ("$14,500", "4 years", "24 hours")
-  * a MULTI-WORD PROPER NOUN ("School of International Studies", "B.Tech in
-    Computer Science")
+  * a NUMBER, with an optional unit ("$14,500", "4 years", "3.5")
+  * a NAME PHRASE -- a programme, school or department, matched
+    case-insensitively and anchored on a keyword ("School of X", "X program").
 
-Single capitalised words are NOT checked. "Meridian" and "B.Tech" alone match
-almost any passage and would flag correct answers; the damage in BUG-07 came
-from multi-word names.
+BUG-18, and why the name branch came back
+-----------------------------------------
+A name check ran here once and was removed, because it refused CORRECT
+programme lists in front of callers. That measurement was taken on the same
+calls as the BUG-16 wiring fault, which left the evidence list empty -- so
+everything was being refused and the name branch was indicted on contaminated
+evidence. Replayed over all 81 archived calls, an entity-aware name check flags
+11 names; three are regex noise and seven are real fabrications, including
+BUG-07's own "School of International Studies".
+
+What makes it safe is one rule, in `_name_claims`: a name is a claim only if
+the corpus does not carry ITS OWN content. "Master of Engineering" beside
+"Master of Arts" passes -- a slightly-wrong rename of a real programme is the
+documented BUG-16 trade. "a bachelor's degree in mechanical engineering" fails,
+because `mechanical engineering` is not a thing this university has. Names are
+judged against the corpus index (`app/kb_entities.py`), not against this turn's
+retrieval -- absence from one retrieval is not absence from the university.
+
+The rule is PER SLOT, never per sentence. An earlier version asked whether the
+sentence named anything real and let one answer excuse every other name in it;
+on live call `fbced641` that let `Master s` -- a possessive artifact -- excuse
+`PhD in Mechanical Engineering` beside it, and six fabrications were spoken.
 
 Normalisation is the part that matters
 --------------------------------------
@@ -42,107 +61,208 @@ from __future__ import annotations
 
 import re
 
+from app.kb_entities import (
+    EntityIndex,
+    default_index,
+    name_candidates,
+    name_slots,
+    normalise as _norm,
+)
+
 __all__ = ["ungrounded_claims", "is_grounded", "enforce_grounding", "GROUNDED_REFUSAL"]
 
 #: What the caller hears instead, when a turn has nothing left that is grounded.
 #: A sentence, never silence -- an empty turn is BUG-05, and a guard that
 #: produces one has traded a wrong answer for no answer.
+#:
+#: This is the first of several, and the plurality is the point. A boundary that
+#: substitutes ONE fixed string every time it fires does not just refuse, it
+#: loops, and the caller cannot escape it. Measured on live call `fbced641`:
+#: this sentence was spoken **9 times across 8 of 25 turns**, one turn carrying
+#: it twice, and the caller ended the call over it --
+#:
+#:     "Why are you repeating?"  "this is a defect in your system"
+#:     "then stop repeating the thing"  "You stop the call."
+#:
+#: BUG-08 recorded repetition as a defect the MODEL committed sometimes. A guard
+#: that speaks makes it unconditional, which is worse -- so the guard owns it.
 GROUNDED_REFUSAL = (
     "I don't have that detail in front of me. I can check and come back to you, "
     "or help with something else about the programme."
 )
 
-_WORD_NUM = {
-    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
-    "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
-    "twelve": "12", "eighteen": "18", "twenty": "20", "thirty": "30",
-}
+#: Rotation, used in order for consecutive refusals. Same meaning, different
+#: sentence, so a caller who pushes twice does not hear the same words twice.
+#: Deliberately none of them promises a lookup -- see UNOFFERED_REFUSAL.
+REFUSAL_VARIANTS = (
+    GROUNDED_REFUSAL,
+    "That isn't something I can confirm from the university profile. I can help "
+    "with anything else about programmes, fees or applying.",
+    "I don't want to guess at that one. What I can do is take you through what "
+    "the profile does cover.",
+)
 
-#: "4 years", "$14,500", "24 hours", "3-year".
+#: What the caller hears once refusals start repeating (BUG-17 follow-up).
+#:
+#: A guard must terminate. Twice is a refusal; a third time is a loop, and the
+#: honest move at that point is to hand the caller to a human rather than say
+#: the same thing again in new words. The contact details are the ones the
+#: profile publishes (Contact Information).
+#:
+#: Two lines, alternating, and that is not decoration: measured on `fbced641`,
+#: a single terminal line repeated six times is the same loop one step further
+#: out. "Never the same twice running" has to hold for EVERY refusal, including
+#: the last one -- otherwise the caller hears a stuck record and hangs up, which
+#: is exactly what happened.
+ESCALATION_REFUSALS = (
+    "I've given you everything the university profile has on that. The "
+    "admissions office can take it further -- admissions@meridian.edu, or "
+    "+1 (555) 204-7890, Monday to Friday, 9 to 5.",
+    "That's as far as I can take this one, and I'd rather say so than keep "
+    "going round. Admissions can help on admissions@meridian.edu or "
+    "+1 (555) 204-7890. Is there anything else I can look at for you?",
+)
+
+#: What the caller hears when the turn asserted something the university does
+#: not offer. Two phrasings, alternated.
+#:
+#: BUG-17. `GROUNDED_REFUSAL` is the wrong sentence for this case, and it was
+#: the one spoken on call 944b503f: "I don't have that detail in front of me. I
+#: can check and come back to you" says the information exists somewhere and
+#: that the agent will go and find it. Both are false, both are what the caller
+#: pushed against for six turns, and the second is the promise that made the
+#: capitulation feel like the agent finally doing its job.
+#:
+#: Two of them because the firm negative is the RIGHT answer and should not be
+#: rotated away into vagueness -- but it must not be the same sentence twice
+#: running either. A caller who pushes twice hears the same fact, twice, in
+#: different words; a caller who pushes a third time is handed to a human.
+UNOFFERED_REFUSALS = (
+    "Meridian University does not offer {subject}. I can take you through the "
+    "programmes we do offer, or put you in touch with the admissions office.",
+    "{subject_cap} isn't one of Meridian University's programmes. I'm happy to "
+    "go through what we do offer, or the admissions office can help further.",
+)
+
+#: "4 years", "$14,500", "3.5", "24 hours", "3-year".
+#:
+#: The leading guard is what stops `I-20` being read as the number 20: a digit
+#: that follows a letter, another digit or a hyphen inside a token belongs to
+#: that token, not to a claim of its own. Without it, every `I-20` in a
+#: sentence becomes a spurious `20` looking for a source.
 _NUMBER = re.compile(
+    r"(?<![A-Za-z0-9.\-/])"
     r"\$?\d[\d,]*(?:\.\d+)?\s*(?:-|\s)?\s*"
     r"(?:year|years|month|months|week|weeks|day|days|hour|hours|minute|minutes)?",
     re.IGNORECASE,
 )
 
-#: Two or more capitalised words, allowing lowercase connectives.
-#: "School of International Studies", "B.Tech in Computer Science".
+
+def _is_claimable_number(tok: str) -> bool:
+    """Is this token specific enough to be worth checking?
+
+    A bare `2` matches almost any passage, so it is not a claim. A decimal is:
+    `3.5` was an invented GPA requirement, and the old rule ignored it because
+    it counted digits and `3.5` has only two.
+    """
+    digits = re.sub(r"\D", "", tok)
+    if not digits:
+        return False
+    if "$" in tok:
+        return True
+    if re.search(r"\d\.\d", tok):
+        return True
+    if re.search(r"\d\s*-?\s*(?:year|month|week|day|hour|minute)", tok, re.IGNORECASE):
+        return True
+    return len(digits) >= 3
+
+
+def _number_claims(text: str) -> list[str]:
+    return [m.group(0).strip() for m in _NUMBER.finditer(text or "")
+            if _is_claimable_number(m.group(0).strip())]
+
+
+def _properties_present(text: str, index: EntityIndex) -> list[str]:
+    """Name contents in `text` that the corpus DOES carry.
+
+    Used for attribution -- these are the programmes the sentence is about, so
+    these are the ones whose numbers it may quote -- and by `_is_substantive`,
+    to decide whether a surviving sentence still says something specific.
+    """
+    return [c for c in name_candidates(text) if index.is_known(c)]
+
+
+#: A denied thing is not a claimed thing. "Meridian University does not offer an
+#: MDA program" is a CORRECT answer, and the replay over the archived calls
+#: caught the guard refusing it -- the entity is unknown, so the name branch
+#: read the denial as an invention. It is the mirror of the defect this branch
+#: exists for, and the consequence is the same one BUG-16 taught: a caller
+#: hears the agent refuse to answer a question it answered correctly.
 #:
-#: The inner `(?:\.[A-Z]...)` form exists so an abbreviation like "B.Tech" is
-#: ONE token, while a sentence-ending period is not swallowed. Allowing a bare
-#: `.` in the word class made "November. Can I confirm" match as a single name
-#: -- a sentence boundary read as part of a proper noun.
-_PROPER = re.compile(
-    r"\b[A-Z][A-Za-z&]*(?:\.[A-Z][A-Za-z&]*)*"
-    r"(?:\s+(?:of|the|and|for|in|at|&)\s+[A-Z][A-Za-z&]*(?:\.[A-Z][A-Za-z&]*)*"
-    r"|\s+[A-Z][A-Za-z&]*(?:\.[A-Z][A-Za-z&]*)*)+"
+#: Any negation cue suppresses NAME claims for that sentence. Deliberately
+#: blunt: a sentence that denies something may still be checked for numbers, and
+#: errs toward letting a sentence through rather than refusing a true negative.
+_NEGATION = re.compile(
+    r"\b(?:not|no|never|none|nothing|cannot|without|nor)\b"
+    r"|n't\b",
+    re.IGNORECASE,
 )
 
-#: Words that begin a sentence and so are capitalised for grammar, not for
-#: naming. Stripped before proper-noun extraction.
-_SENTENCE_STARTERS = {
-    "the", "we", "our", "you", "your", "i", "it", "this", "that", "there",
-    "they", "those", "these", "and", "but", "so", "if", "for", "with", "at",
-    "yes", "no", "okay", "sure", "great", "thank", "thanks", "sorry",
-}
 
+def _name_claims(text: str, index: EntityIndex) -> list[str]:
+    """Name slots in `text` whose NAME the corpus does not carry.
 
-def _norm(text: str) -> str:
-    """Fold the forms that mean the same thing before comparing.
+    PER SLOT, and that is the fix. The first version asked "does this sentence
+    name anything real?" and let one answer excuse every other name in the
+    sentence. On live call `fbced641` that is exactly what happened:
 
-    Number words to digits, money punctuation away, case down. Without this the
-    guard flags a correct "four-year" because the context writes "4 years".
+        "...including a Master's in Mechanical Engineering and a PhD in
+         Mechanical Engineering."
+
+    `Master's` split into `Master` + `s`, the phrase `Master s` is in the corpus
+    ("a relevant master's degree"), and the gate then passed the whole sentence
+    -- including the second fabrication sitting beside it. Six fabrications were
+    spoken to that caller.
+
+    What survives of the old rule is the part that was right: a name whose own
+    content the corpus knows is not a claim. "Master of Engineering" beside
+    "Master of Arts" is a slightly-wrong rename and passes, which is the BUG-16
+    trade this register already documented -- but it now earns that on its own
+    name, never on a neighbour's.
+
+    A DENIAL is not a claim either -- see `_NEGATION`.
     """
-    s = (text or "").lower()
-    for word, digit in _WORD_NUM.items():
-        s = re.sub(rf"\b{word}\b", digit, s)
-    s = s.replace(",", "").replace("$", "")
-    s = re.sub(r"[^a-z0-9.\s]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+    if _NEGATION.search(text or ""):
+        return []
+    out: list[str] = []
+    for slot in name_slots(text):
+        if slot.is_established(index):
+            continue
+        if slot.phrase not in out:
+            out.append(slot.phrase)
+    return out
 
 
-def _claims(text: str) -> list[str]:
-    """The checkable claims in one piece of text: NUMBERS, and only numbers.
+def _grounded_in(needle: str, hay: str, hay_core: str) -> bool:
+    """Whole-token presence, with a punctuation-blind fallback.
 
-    Multi-word proper nouns were checked here and were removed after a live
-    call measured the consequence. The distinction that decided it is not a
-    tuning preference, it is a property of the two shapes:
-
-      * A NUMBER is either in the source or it is invented. "$14,500" when the
-        context says "$14,200"; "a 10% discount for international students" when
-        no file mentions a discount; "within the next 24 hours" when nothing can
-        schedule a callback. Every genuine defect this guard has caught in the
-        field was of this shape, and every one was caller-damaging.
-
-      * A NAME LIST is not decidable by matching. "We offer Master of Arts,
-        Master of Business Administration and Master of Engineering" is a
-        CORRECT answer that contains names absent from that single turn's
-        retrieval; "B.Tech in Computer Science" when the source says
-        "Information Technology" is a renaming. Identical input shape, opposite
-        verdicts. On the 2026-10-10 QA calls the name branch produced ZERO true
-        positives and THREE false refusals -- all of them programme lists, each
-        one a visible failure in front of a caller.
-
-    So: numbers are checked, names are not. The cost is stated rather than
-    implied -- an invented name carrying no number ("Master of Mechanical
-    Engineering", "Department of Homeland Security") now passes. That is the
-    deliberate trade: a refusal is worse than the fabrication it prevents,
-    because a caller hearing "I don't have that detail" about the university's
-    own MBA has watched the agent break, whereas a plausible extra name reads
-    as helpfulness until someone checks.
+    The fallback is kept because the corpus writes "4 years" where an answer
+    writes "4-year", and folding those was a hard-won fix. What is NOT kept is
+    unbounded substring matching, which is how the invented `1200` was accepted
+    inside `$11,200`: a run of digits has to be its own run, not a fragment of a
+    longer one.
     """
-    found: list[str] = []
-    for m in _NUMBER.finditer(text or ""):
-        tok = m.group(0).strip()
-        # A bare number is too weak to be a claim ("2" matches anything);
-        # require a unit or a currency mark.
-        if re.search(r"[$]|\d\s*(?:-|\s)\s*(?:year|month|week|day|hour|minute)",
-                     tok, re.IGNORECASE) or "$" in tok or len(re.sub(r"\D", "", tok)) >= 3:
-            found.append(tok)
-    return found
+    if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", hay):
+        return True
+    core = re.sub(r"[^a-z0-9]", "", needle)
+    if not core:
+        return False
+    if core.isdigit():
+        return re.search(rf"(?<!\d){re.escape(core)}(?!\d)", hay_core) is not None
+    return core in hay_core
 
-
-def ungrounded_claims(answer: str, context: str) -> list[str]:
+def ungrounded_claims(answer: str, context: str,
+                      entities: EntityIndex | None = None) -> list[str]:
     """Claims in `answer` that do not appear in `context`. Empty means grounded.
 
     `context` should be everything this call has legitimately seen: the
@@ -160,6 +280,10 @@ def ungrounded_claims(answer: str, context: str) -> list[str]:
     with nothing to check against, the guard has no information, and the
     failure mode of refusing everything reads to a caller as an agent that has
     stopped working. Absence of evidence is not evidence of fabrication.
+
+    `entities` is the corpus index the NAME branch compares against. It
+    defaults to the real one, so the index does not change from turn to turn;
+    it is a parameter only so a test can supply a literal corpus.
     """
     if not answer or not answer.strip():
         return []
@@ -169,23 +293,48 @@ def ungrounded_claims(answer: str, context: str) -> list[str]:
     hay_core = re.sub(r"[^a-z0-9]", "", hay)
     if not hay_core:
         return []
+    index = entities if entities is not None else default_index()
+
     out: list[str] = []
-    for claim in _claims(answer):
+
+    # -- NUMBERS: present in the evidence, and owned by what is described ---
+    #
+    # Two questions, because the first one alone let the worst case through.
+    # `$14,600` is a real number -- it is M.Tech's tuition -- and the model
+    # attached it to a programme that does not exist. "Is it in the evidence"
+    # said yes. "Is it this entity's" is the question that catches it.
+    named = _properties_present(answer, index)
+    owned = index.programme_numbers_for(named)
+    for claim in _number_claims(answer):
         needle = _norm(claim)
         if not needle:
             continue
-        # Compare on the digits/words only: "4 years" vs "4 year" must match.
-        if needle in hay:
+        if not _grounded_in(needle, hay, hay_core):
+            out.append(claim)
             continue
-        core = re.sub(r"[^a-z0-9]", "", needle)
-        if core and core in hay_core:
+        # It is somewhere in the evidence. Is it THIS sentence's entity's?
+        #
+        # Only when a programme was actually identified. "Eligibility is a
+        # bachelor's degree, and tuition is $18,500 per year" names "bachelor",
+        # which owns no numbers -- and treating that as "a programme was named,
+        # and it cannot claim $18,500" refused a correct answer about the MBA.
+        # No programme identified means no attribution, not strict attribution.
+        if not owned:
             continue
-        out.append(claim)
+        digits = re.sub(r"\D", "", needle)
+        if not digits or digits in index.global_numbers:
+            continue
+        if digits in index.all_programme_numbers and digits not in owned:
+            out.append(claim)
+
+    # -- NAMES: is this a thing the corpus actually states? -----------------
+    out.extend(_name_claims(answer, index))
     return out
 
 
-def is_grounded(answer: str, context: str) -> bool:
-    return not ungrounded_claims(answer, context)
+def is_grounded(answer: str, context: str,
+                entities: EntityIndex | None = None) -> bool:
+    return not ungrounded_claims(answer, context, entities)
 
 
 def _sentences(text: str) -> list[str]:
@@ -193,20 +342,23 @@ def _sentences(text: str) -> list[str]:
 
 
 #: A sentence is worth speaking on its own only if it still carries a specific
-#: grounded fact -- a number, or a NAME. Checked as a function rather than one
-#: regex because the sentence's FIRST word is always capitalised, so a pattern
-#: matching any capitalised word counts "Would you like to know more about
-#: that?" as substantive. That is how a dangling question about a deleted
-#: sentence survived the first version of this guard.
-def _is_substantive(sentence: str) -> bool:
+#: grounded fact -- a number, or a NAME the corpus knows. Checked as a function
+#: rather than one regex because the sentence's FIRST word is always
+#: capitalised, so a pattern matching any capitalised word counts "Would you
+#: like to know more about that?" as substantive. That is how a dangling
+#: question about a deleted sentence survived the first version of this guard.
+def _is_substantive(sentence: str, index: EntityIndex) -> bool:
     if re.search(r"\$?\d", sentence):
         return True
-    words = sentence.split()
-    rest = " ".join(words[1:]) if len(words) > 1 else ""
-    return bool(re.search(r"\b[A-Z][A-Za-z&]{2,}", rest))
+    return bool(_properties_present(sentence, index))
 
 
-def enforce_grounding(answer: str, context: str, log=None) -> str:
+def enforce_grounding(answer: str, context: str, *,
+                      entities: EntityIndex | None = None,
+                      unoffered: list[str] | None = None,
+                      refusal_index: int = 0,
+                      subject_denied: int = 0,
+                      log=None) -> str:
     """Speak only what is grounded; never return silence.
 
     Policy, and the reason it is not simply "drop the bad sentence":
@@ -225,12 +377,24 @@ def enforce_grounding(answer: str, context: str, log=None) -> str:
     least one of them still carries a specific grounded fact; otherwise the turn
     is refused. Silence is never returned -- an empty turn is BUG-05, and a
     guard that produces one has traded a wrong answer for no answer at all.
+
+    `unoffered` is what the caller has asked about this call that the university
+    does not have, as recorded by the session from the caller's own words. When
+    a refusal is forced and one of those is what the turn was about, the refusal
+    is the plain negative (`UNOFFERED_REFUSAL`) rather than the generic "I don't
+    have that detail", which promises a lookup that does not exist.
+
+    `refusal_index` is how many turns IN A ROW this session has now refused,
+    owned by the caller -- the guard is pure and cannot count. It selects the
+    wording, and past two it escalates to the human channel instead of saying
+    the same thing a third time. See `REFUSAL_VARIANTS`.
     """
     if not answer or not answer.strip():
         return answer
+    index = entities if entities is not None else default_index()
     kept, dropped = [], []
     for sentence in _sentences(answer):
-        bad = ungrounded_claims(sentence, context)
+        bad = ungrounded_claims(sentence, context, index)
         if bad:
             dropped.append((sentence, bad))
         else:
@@ -242,9 +406,78 @@ def enforce_grounding(answer: str, context: str, log=None) -> str:
             log("GROUNDING_DROPPED", claims="|".join(bad)[:160],
                 sentence=sentence[:120])
     survivors = " ".join(kept).strip()
-    if survivors and any(_is_substantive(s) for s in kept):
+    if survivors and any(_is_substantive(s, index) for s in kept):
         return survivors
     if log is not None and survivors:
         log("GROUNDING_REFUSED", reason="survivors carried no grounded fact",
             survivors=survivors[:120])
-    return GROUNDED_REFUSAL
+
+    subject = _refusal_subject(dropped, unoffered)
+    if subject and subject_denied < len(UNOFFERED_REFUSALS):
+        if log is not None:
+            log("GROUNDING_UNOFFERED", subject=subject[:80])
+        mid = _mid_sentence(subject)
+        return UNOFFERED_REFUSALS[subject_denied].format(
+            subject=mid, subject_cap=mid[:1].upper() + mid[1:])
+    if log is not None:
+        log("GROUNDING_ESCALATED", refusals=refusal_index)
+    return _refusal_for(refusal_index)
+
+
+def _refusal_for(refusal_index: int) -> str:
+    """The line for the Nth consecutive refusal. Never the same twice running."""
+    if refusal_index < len(REFUSAL_VARIANTS):
+        return REFUSAL_VARIANTS[refusal_index]
+    return ESCALATION_REFUSALS[(refusal_index - len(REFUSAL_VARIANTS))
+                               % len(ESCALATION_REFUSALS)]
+
+
+def is_refusal(text: str) -> bool:
+    """Did the BOUNDARY produce this line, rather than the model?
+
+    The session uses this to count consecutive refusals, which is what bounds
+    the loop. It lives here so the set of refusal wordings and the test for
+    them cannot drift apart -- a caller that prefix-matched the strings would
+    silently stop counting the day a variant was reworded.
+    """
+    if not text:
+        return False
+    if "Meridian University does not offer" in text:
+        return True
+    if "isn't one of Meridian University's programmes" in text:
+        return True
+    return any(text == line for line in
+               (*REFUSAL_VARIANTS, *ESCALATION_REFUSALS))
+
+
+#: A subject the extractor read out of the caller's own words keeps the caller's
+#: casing, so "Mechanical engineering program" arrives capitalised and lands
+#: mid-sentence in the refusal. Lowercase it unless it carries an acronym or an
+#: abbreviation, which is the one case where the capitals are the word.
+_ACRONYMISH = re.compile(r"\b[A-Z]{2,}\b|\.")
+
+
+def _mid_sentence(subject: str) -> str:
+    return subject if _ACRONYMISH.search(subject) else subject.lower()
+
+
+def _refusal_subject(dropped: list[tuple[str, list[str]]],
+                     unoffered: list[str] | None) -> str:
+    """Which unoffered thing this refused turn was about, if any.
+
+    The longest one the caller actually named AND the turn actually mentioned,
+    so the sentence the caller hears matches the subject they raised. Length
+    wins because the caller's "mechanical program" yields "mechanical", and
+    "mechanical engineering" is the thing worth naming back to them.
+
+    Only the session's list is used, never a phrase lifted from the model's own
+    output. A fabricated name is exactly the text that must not be echoed back
+    as though it were a real programme the university has a position on.
+    """
+    if not unoffered:
+        return ""
+    text = " ".join(s for s, _ in dropped).lower()
+    candidates = [u for u in unoffered if u.lower() in text]
+    if not candidates:
+        return ""
+    return max(candidates, key=len)

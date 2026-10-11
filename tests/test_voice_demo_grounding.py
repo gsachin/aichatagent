@@ -1,28 +1,44 @@
-"""Client-demo track — BUG-07: a spoken NUMBER must be traceable to a source.
+"""Client-demo track — BUG-07/BUG-18: a spoken claim must be traceable to a source.
 
-Scope, decided on 2026-10-10 after the boundary was run on live calls: this
-checks NUMBERS ONLY. Multi-word names were checked too, and were removed.
+Scope, decided on 2026-10-10 and REOPENED on 2026-10-11 after call `944b503f`:
 
-The evidence that decided it -- four real decisions from the QA calls:
+    NUMBERS are checked, and so are NAMES.
 
-    FALSE POSITIVES (all name lists, all refused a correct answer)
-      "We offer ... fields such as Engineering, Computer Science, Business ..."
-      "a 2-year Master of Arts in Arts and a 3-year Bachelor of Arts in Arts"
-      "Master of Arts, Master of Business Administration, Master of Engineering"
+Names were checked once, removed, and are back. The history matters, because
+the reason they were removed is the reason they can now return.
 
-    TRUE POSITIVES (all numbers)
-      "a 10% discount for international students"   -- no file mentions it
-      "within the next 24 hours"                    -- nothing can schedule that
-      "$14,500 per year"                            -- the context said $14,200
+    REMOVED, because four real decisions from the QA calls:
+      FALSE POSITIVES (all name lists, all refused a correct answer)
+        "We offer ... fields such as Engineering, Computer Science, Business ..."
+        "a 2-year Master of Arts in Arts and a 3-year Bachelor of Arts in Arts"
+        "Master of Arts, Master of Business Administration, Master of Engineering"
+      TRUE POSITIVES (all numbers)
+        "a 10% discount for international students"   -- no file mentions it
+        "within the next 24 hours"                    -- nothing can schedule that
+        "$14,500 per year"                            -- the context said $14,200
 
-A number is either in the source or it is invented. A name list is not
-decidable: "Master of Arts, Master of Business Administration and Master of
-Engineering" is a CORRECT answer containing names absent from that turn's
-retrieval, while "B.Tech in Computer Science" is a renaming of "B.Tech in
-Information Technology". Same shape, opposite verdicts.
+    BROUGHT BACK, because call `944b503f` (doc/voice-demo/REVIEW-2026-10-10-
+    inbound.md) showed what the absence cost: the agent told a caller about a
+    "mechanical engineering program", priced it at $14,600, and gave it a GPA
+    and SAT requirement. None of it exists. The boundary ran on that call and
+    let every one of them through.
 
-The cost is asserted below rather than left implicit: an invented NAME with no
-number attached now passes.
+Three things changed, and each is a test below:
+
+  * Names are checked against the CORPUS (`app/kb_entities.py`), not against
+    this turn's retrieval. Absence from one retrieval is not absence from the
+    university -- judging it that way is what produced the false positives.
+  * Matching is CASE-INSENSITIVE. The old check caught "Master of Mechanical
+    Engineering" and missed "our mechanical engineering program" on the very
+    next turn, because only the first was capitalised.
+  * A name is a defect only when the sentence names NOTHING real. That is the
+    gate that lets the three false positives above pass while catching the
+    fabrication. `test_a_programme_list_is_SPOKEN` is unchanged and must stay
+    passing -- if it breaks, this change is wrong, not the test.
+
+The cost is still asserted rather than left implicit: `test_an_invented_name_
+IS_caught` was `..._is_NOT_caught_this_is_the_known_trade` and its message read
+"if this now FAILS, the name branch is back". It failed; the branch is back.
 """
 
 import sys
@@ -32,6 +48,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.kb_entities import EntityIndex  # noqa: E402
 from app.voice_grounding import (  # noqa: E402
     GROUNDED_REFUSAL, enforce_grounding, is_grounded, ungrounded_claims,
 )
@@ -52,6 +69,31 @@ CTX_ARTS = (
     "3 years, School of Arts. Tuition: $7,900 per year. "
     "[§ Postgraduate Programs] Master of Arts (MA) at Meridian University: "
     "2 years, School of Arts."
+)
+
+#: The M.Sc entry, and the reason `1200` used to pass: `$11,200` contains it.
+CTX_SCIENCE = (
+    "[§ Postgraduate Programs] Master of Science (M.Sc) at Meridian University: "
+    "2 years, School of Science. Eligibility: a bachelor's degree in science. "
+    "Tuition: $11,200 per year."
+)
+
+#: Two real programmes with two real tuitions, for the attribution check.
+CTX_TWO = (
+    "[§ Undergraduate Programs] B.Tech in Computer Science at Meridian "
+    "University: 4 years, School of Computer Science. Tuition: $14,500 per "
+    "year. [§ Postgraduate Programs] M.Tech (various specializations) at "
+    "Meridian University: 2 years, School of Engineering. Tuition: $14,600 "
+    "per year."
+)
+
+#: The MBA, plus a fee that belongs to no programme in particular.
+CTX_FEES = (
+    "[§ Postgraduate Programs] Master of Business Administration (MBA) at "
+    "Meridian University: 2 years, School of Business / Management. Tuition: "
+    "$18,500 per year. [§ Fees Structure] Meridian University application / "
+    "processing fee (one-time, non-refundable): $60 for undergraduate and $75 "
+    "for postgraduate applications."
 )
 
 
@@ -128,7 +170,7 @@ def test_a_sentence_starting_capital_is_not_a_claim():
     assert ungrounded_claims("Thank you for calling today.", CTX) == []
 
 
-# ── the cost of the decision, asserted so it cannot be forgotten ─────
+# ── the fabricated names the boundary now catches ────────────────────
 
 @pytest.mark.parametrize("said", [
     # the original BUG-07 fabrication -- an invented school, no number
@@ -139,19 +181,263 @@ def test_a_sentence_starting_capital_is_not_a_claim():
     # general knowledge the knowledge base does not carry (0 files mention it)
     "You will need to pay the Department of Homeland Security and a SEVIS fee.",
 ])
-def test_an_invented_name_is_NOT_caught_this_is_the_known_trade(said):
-    """Deliberate, documented limitation -- not an oversight.
+def test_an_invented_name_IS_caught(said):
+    """This test used to assert the OPPOSITE, and its message said so.
 
-    Narrowing to numbers gave up invented names. It was accepted because a
-    refusal is worse than the fabrication it prevents: a caller hearing
-    "I don't have that detail in front of me" about the university's own MBA
-    has watched the agent break, whereas a plausible extra name reads as
-    helpfulness until somebody checks.
+    It read `test_an_invented_name_is_NOT_caught_this_is_the_known_trade`, with
+    the assertion message "if this now FAILS, the name branch is back". It was
+    an honest record of a deliberate limitation, and it was the tripwire for
+    exactly this change.
 
-    BUG-07 therefore stays OPEN for this class. If a name check is ever
-    reintroduced it must first solve the programme-list problem above.
+    What it measured was real -- a refusal is worse than the fabrication it
+    prevents -- but the measurements that justified it were taken while the
+    BUG-16 wiring fault had emptied the evidence list, so everything was being
+    refused. Names are judged against the corpus now, and the programme-list
+    cases above stay green.
     """
-    assert is_grounded(said, CTX), "if this now FAILS, the name branch is back"
+    assert not is_grounded(said, CTX)
+    assert enforce_grounding(said, CTX) == GROUNDED_REFUSAL
+
+
+@pytest.mark.parametrize("said", [
+    # the exact sentence that walked past the guard on call 944b503f, turn 17.
+    # Capitalised, the old regex caught it; lowercase, it did not.
+    "Yes, I have found the information on our mechanical engineering program, "
+    "and it's a 4-year degree.",
+    # turn 25 -- the same fabrication, priced with a REAL number ($14,600 is
+    # M.Tech's tuition), which is why presence-alone could not catch it
+    "Our mechanical engineering program is a 4-year degree with a tuition of "
+    "$14,600 per year.",
+    # turn 38 -- an invented admission requirement. "3.5" is a decimal and was
+    # never a claim; "1200" matched inside the M.Sc tuition "$11,200".
+    "We require a minimum GPA of 3.5 and SAT scores of 1200 or higher for "
+    "admission to our mechanical engineering program.",
+    # turn 34 -- fabricated curriculum, which the KB says is not published
+    "We have a mechanical engineering program, which is a highly "
+    "interdisciplinary field that combines principles from physics, "
+    "mathematics, and materials science.",
+])
+def test_the_call_944b503f_fabrications_are_caught(said):
+    """Verbatim from the call that reopened this branch. Each one was SPOKEN."""
+    assert not is_grounded(said, CTX)
+
+
+def test_case_does_not_decide_whether_a_name_is_checked():
+    """BUG-18(a). The escape from the old guard was a shift key.
+
+    Turn 12 of call 944b503f wrote "a Master of Mechanical Engineering program"
+    and was dropped. Turn 17 wrote "our mechanical engineering program" and was
+    spoken. Same fabrication, same call, four turns apart.
+    """
+    for said in ("We have a Master of Mechanical Engineering program.",
+                 "we have a master of mechanical engineering program.",
+                 "We have a mechanical engineering program.",
+                 "WE HAVE A MECHANICAL ENGINEERING PROGRAM."):
+        assert not is_grounded(said, CTX), said
+
+
+def test_a_number_is_not_matched_inside_a_longer_number():
+    """BUG-18(c). `1200` was accepted because it sits inside `$11,200`.
+
+    CTX_SCIENCE carries the M.Sc tuition $11,200, which is what the invented SAT
+    score matched against once punctuation was stripped.
+    """
+    assert not is_grounded(
+        "We require SAT scores of 1200 or higher.", CTX_SCIENCE)
+    # ...while the number that IS the tuition stays grounded.
+    assert is_grounded("The tuition is $11,200 per year.", CTX_SCIENCE)
+
+
+def test_a_decimal_is_a_claim():
+    """BUG-18(c). `3.5` counted as two digits, so an invented GPA was invisible."""
+    assert not is_grounded("We require a minimum GPA of 3.5.", CTX)
+
+
+def test_a_number_must_belong_to_the_programme_it_is_attached_to():
+    """BUG-18(d). Presence is not attribution.
+
+    CTX_TWO carries two real programmes and two real tuitions. Swapping them
+    keeps every number present in the evidence, so only an attribution check can
+    see it -- and this is BUG-07's original defect shape, "$14,500 when the
+    context said $14,200", one level harder.
+    """
+    assert is_grounded("B.Tech in Computer Science costs $14,500 per year.", CTX_TWO)
+    assert not is_grounded(
+        "B.Tech in Computer Science costs $14,600 per year.", CTX_TWO)
+
+
+def test_a_shared_fee_is_not_policed_by_attribution():
+    """The application fee belongs to no programme, so it attaches to any.
+
+    Attribution has to be narrow or it refuses sentence after sentence: every
+    caller who asks "what does the MBA cost, and is there an application fee"
+    would be told the agent does not have the detail.
+    """
+    assert is_grounded("The MBA costs $18,500 per year.", CTX_FEES)
+    assert is_grounded(
+        "The MBA costs $18,500 per year, plus a $60 application fee.", CTX_FEES)
+
+
+# ── the corpus index, which is what names are judged against ─────────
+
+def test_names_are_judged_against_the_corpus_not_this_turn():
+    """The distinction that makes the name branch usable at all.
+
+    A sentence naming a real programme is grounded even when THIS turn's
+    retrieval is about something else entirely -- which is the false positive
+    that removed the branch the first time.
+    """
+    unrelated = "[§ Contact Information] Phone: +1 (555) 204-7890.\nCaller: hello"
+    assert is_grounded("We offer a Master of Business Administration.", unrelated)
+
+
+def test_an_index_can_be_supplied_for_a_literal_corpus():
+    """The index is a parameter so a test need not depend on the shipped KB."""
+    small = EntityIndex(
+        "## Undergraduate Programs\n\n### astro\n\n"
+        "B.Tech in Astrology at Meridian University: 4 years. "
+        "Tuition: $1,000 per year.\n")
+    assert small.is_known("B.Tech in Astrology")
+    assert not small.is_known("B.Tech in Computer Science")
+    assert not is_grounded("We have a Mechanical Engineering program.", CTX,
+                           small)
+    assert is_grounded("We have a B.Tech in Astrology program.", CTX, small)
+
+
+# ── BUG-18, second round: the live call that beat the first fix ──────
+#
+# Every sentence here is verbatim from call `fbced641` (2026-10-11), where SIX
+# fabrications were spoken and three correct answers were refused. The first
+# fix passed its own archive gate 7/7 and still missed all of these, because
+# the archive held the phrasings it had and the model produced ones it did not.
+
+@pytest.mark.parametrize("said", [
+    # turns 2-3. The guard missed it because "bachelor's" split into
+    # `bachelor` + `s`, and the phrase `bachelor s` IS in the corpus
+    # ("a bachelor's degree").
+    "To be eligible for our mechanical engineering program, you'll need to have "
+    "completed a bachelor's degree in mechanical engineering or a related field.",
+    "To be eligible, you'll need to have completed a bachelor's degree in "
+    "mechanical engineering or a related field. Can you tell me what your GPA is?",
+    # turn 8. TWO fabrications in one sentence, and `Master's` did the same
+    # trick: the phrase `Master s` is in the corpus ("a relevant master's
+    # degree"), and the gate then suppressed the whole sentence -- so the
+    # second fabrication rode along on the first one's excuse.
+    "We have a few different program options available, including a Master's in "
+    "Mechanical Engineering and a PhD in Mechanical Engineering.",
+    # turn 9
+    "We have a Master's in Mechanical Engineering with a focus on advanced "
+    "materials and manufacturing, and a PhD in Mechanical Engineering with a "
+    "specialization in robotics and automation.",
+    # turn 11
+    "The tuition for our PhD in Mechanical Engineering is $9,600 per year.",
+])
+def test_the_live_call_fabrications_are_caught(said):
+    assert not is_grounded(said, CTX)
+
+
+def test_a_possessive_is_not_a_known_name():
+    """The artifact that hid six fabrications. `bachelor s` is not an entity."""
+    assert not is_grounded("I have a bachelor's degree in mechanical engineering.", CTX)
+    # ...and the mirror image, so the fix is not a blanket ban on possessives.
+    assert is_grounded("I have a bachelor's degree in computer science.", CTX)
+
+
+def test_each_name_is_judged_on_its_own_content():
+    """PER SLOT. One known name must not excuse another name beside it."""
+    assert not is_grounded(
+        "We offer a Master's in Mechanical Engineering and a PhD in "
+        "Mechanical Engineering.", CTX)
+    # a list of REAL programmes still passes -- the BUG-16 trade, per slot
+    assert is_grounded(
+        "We offer a Bachelor of Arts and a Master of Arts.", CTX)
+
+
+def test_a_keyword_first_name_needs_a_connective():
+    """`program specifically` is not a NAME SLOT; `PhD in X` is.
+
+    The first fix dropped "It seems like you're interested in the PhD program,
+    specifically the robotics and automation specialization." because the walk
+    ran past the keyword into an adverb. Adding "specifically" to a stoplist
+    would have been the sixth wording of the same mistake -- the register has
+    recorded since BUG-03 that enumeration is the wrong mechanism.
+    """
+    assert is_grounded(
+        "It seems like you're interested in the PhD program, specifically the "
+        "robotics and automation specialization.", CTX)
+    # but a connective makes it a slot, and an unknown name there IS a claim
+    assert not is_grounded("We have a PhD in Mechanical Engineering.", CTX)
+
+
+def test_a_single_word_is_not_a_name_after_a_keyword():
+    """`interdisciplinary program` and `providing program details` are English."""
+    assert is_grounded("It's a highly interdisciplinary program that combines "
+                       "theoretical foundations with practical applications.", CTX)
+    assert is_grounded("Can you help us understand what would make our system "
+                       "more accurate in providing program details?", CTX)
+    # two words is a name, and an unknown one is still caught
+    assert not is_grounded("We have a Mac Datonix program.", CTX)
+
+
+def test_a_coordinating_and_does_not_make_a_name():
+    """"your degree and GPA" is a pair of requirement types, not a programme.
+
+    Caught by the archive sweep, not by a test: with "and" admitted as a
+    connective, `degree and GPA` became a name slot and the guard refused a
+    correct eligibility question in front of a caller.
+    """
+    assert is_grounded(
+        "Can I confirm your eligibility requirements, such as your degree and GPA?",
+        CTX)
+
+
+# ── BUG-29: recombination of real names into an invented one ─────────
+#
+# Live call `2e9952a7`, 2026-10-11. The agent said "Master of Science in
+# Computer Science" SIX times -- an invention -- and the guard never fired,
+# because the phrase splits into two genuine Meridian names and each was
+# established on its own. The invention is in the JOIN.
+
+@pytest.mark.parametrize("said", [
+    "Our Master of Science in Computer Science program is designed to help "
+    "you develop advanced skills.",
+    "Our tuition for the Master of Science in Computer Science program is "
+    "$9,600 per year.",
+    "We have a Bachelor of Commerce in Computer Science program.",
+])
+def test_a_degree_from_another_school_is_caught(said):
+    assert not is_grounded(said, CTX)
+
+
+@pytest.mark.parametrize("said,ctx", [
+    # the SAME grammar, and correct: a degree with a trailing field, both from
+    # one school. This is the phrase that makes the rule non-syntactic.
+    # Checked against the ARTS context, because its 2-year and 3-year are
+    # grounded there -- the fixture must be the context the numbers came from.
+    ("We offer a 2-year Master of Arts in Arts and a 3-year Bachelor of Arts "
+     "in Arts.", CTX_ARTS),
+    ("We offer a Master of Science.", CTX),
+    ("We offer a Master of Science in Science.", CTX),
+    ("Our Master of Business Administration program is 2 years.", CTX_FEES),
+])
+def test_a_degree_within_its_own_school_is_spoken(said, ctx):
+    assert is_grounded(said, ctx)
+
+
+def test_the_school_rule_abstains_when_it_cannot_reason():
+    """A guard that invents grounds to flag is BUG-16 again.
+
+    An unrecognised degree has no school to compare against, so the rule falls
+    back to the ordinary content test rather than condemning the phrase.
+    """
+    from app.kb_entities import default_index
+
+    index = default_index()
+    assert index.programme_school_of("Master of Science") == "science"
+    assert index.programme_school_of("Bachelor of Arts") == "arts"
+    assert index.programme_school_of("Master of Nonsense") == ""
+    assert index.school_of_phrase("Computer Science") == "computer science"
+    assert index.school_of_phrase("Zoology") == ""
 
 
 # ── the enforcement policy ───────────────────────────────────────────

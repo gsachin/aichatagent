@@ -233,6 +233,25 @@ class Settings:
         in ("1", "true", "yes", "on")
     )
 
+    # The NAME half of the same boundary (BUG-18): a programme, school or
+    # department absent from the university profile may not be spoken.
+    #
+    # Split from GROUNDING_ENABLED because this branch has been removed once
+    # already. It was dropped after three correct programme lists were refused
+    # in front of callers -- but that measurement was taken while the BUG-16
+    # wiring fault had emptied the evidence list, so everything was being
+    # refused. Replayed over all 81 archived calls, it now flags 9 names, of
+    # which 2 are regex noise; the rest are real fabrications including
+    # BUG-07's "School of International Studies" and the "mechanical
+    # engineering" programme that reopened the defect.
+    #
+    # ON by default, and a separate setting so a live call can turn the name
+    # check off without giving up number checking.
+    GROUNDING_NAMES_ENABLED: bool = field(
+        default_factory=lambda: _env("GROUNDING_NAMES_ENABLED", "1").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+
     # ── Caller interruption (US-014, Option 2) ──────────────────────
     # Whether the caller may be heard while the agent is speaking.
     #

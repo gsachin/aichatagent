@@ -207,6 +207,55 @@ TTS_STREAM = settings.TTS_STREAM
 #: the convention the other voice flags use.
 GROUNDING_ENABLED = settings.GROUNDING_ENABLED
 
+#: How many turns an unoffered subject stays in the prompt after the caller
+#: last named it. Live call `853548f5` is the reason this exists: the block was
+#: built from a call-long accumulator, so the model was told on every turn to
+#: deny mechanical engineering -- and did, six times, at a caller asking about
+#: Computer Science fees. Two turns is enough to hold a position across a
+#: follow-up without outliving the conversation it belonged to.
+_UNOFFERED_TTL_TURNS = 2
+
+#: The caller telling us to move on. On `853548f5` they said all three of these
+#: and were ignored:
+#:     "focus only on computer science. I don't need mechanical engineering now."
+#:     "I told you to change the context from mechanical engineering to computer science."
+#:     "We will only discuss about the computer science."
+_CHANGE_CUE = re.compile(
+    r"\b(?:change the (?:context|topic|subject)"
+    r"|move on|forget (?:it|that)|drop (?:it|that)"
+    r"|focus only|only (?:talk|discuss)|don'?t need|do not need"
+    r"|not interested in|switch to|rather (?:talk|discuss)|instead)\b",
+    re.IGNORECASE,
+)
+
+
+#: BUG-18: the NAME half of the same boundary -- a programme, school or
+#: department the corpus does not carry may not be spoken. Separate from
+#: `GROUNDING_ENABLED` because this branch was removed once before, on evidence
+#: that later turned out to be contaminated by BUG-16. If a live call disagrees
+#: with it, this is the setting to turn off while the reason is found, and the
+#: rest of the boundary keeps working.
+GROUNDING_NAMES_ENABLED = settings.GROUNDING_NAMES_ENABLED
+
+
+def kb_index():
+    """The corpus index the name branch compares against, or None.
+
+    None means "no name checking": either the flag is off, or the index could
+    not be read. The guard treats a missing index as no judgement rather than as
+    evidence of fabrication -- the BUG-16 lesson, and a guard that cannot see
+    must abstain.
+    """
+    if not GROUNDING_NAMES_ENABLED:
+        return None
+    try:
+        from app.kb_entities import default_index
+
+        return default_index()
+    except Exception:                              # noqa: BLE001
+        logger.warning("kb index unavailable; name grounding disabled this call")
+        return None
+
 
 def _cache_key_sha(cache_key: tuple) -> str:
     """Short, stable digest of a cache key, safe to write to a trace.
@@ -860,8 +909,178 @@ class VoiceCallSession:
         #: passed the check by citing the earlier invention.
         self._grounding_evidence: list[str] = []
 
+        #: Things the caller has asked about that Meridian does not offer,
+        #: accumulated across the call (BUG-17). The corpus decides this, not the
+        #: conversation -- `app.kb_entities.unoffered_entities` -- so it does not
+        #: depend on the model having noticed anything.
+        #:
+        #: Accumulated rather than per-turn because the turn that matters has no
+        #: entity in it. On call 944b503f the caller asked for mechanical
+        #: engineering at turns 7-10, was refused at 11, and then said "You are
+        #: hallucinating. You have the details." (14) and "Did you find it out?"
+        #: (16). Turn 16 names nothing, and turn 16 is where the agent capitulated
+        #: and invented the programme. A per-turn check would be silent exactly
+        #: when it is needed.
+        self._unoffered: list[str] = []
+
+        #: Turns the boundary has had to refuse, ACROSS THE CALL -- never reset.
+        #: The first version counted only CONSECUTIVE refusals, and live call
+        #: `853548f5` defeated it by alternating: a good turn reset the count, so
+        #: the next refusal started again at line one and the bound never
+        #: engaged. A caller who interleaves is not a caller who has stopped
+        #: hearing the same thing.
+        self._refusals_total = 0
+
+        #: How many times the boundary has refused EACH subject, call-wide. The
+        #: specific negative is the right answer and may be said twice; after
+        #: that the caller is handed to a human rather than told again.
+        self._subject_denied: dict[str, int] = {}
+
+        #: Turn index at which the caller last named each unoffered subject, so
+        #: the prompt block can expire. See `_UNOFFERED_TTL_TURNS`.
+        self._unoffered_seen: dict[str, int] = {}
+
         # US-001 turn tracing (app/perf_trace.py). Never raises; may be None.
         self._trace = None
+
+    def note_unoffered(self, utterance: str) -> list[str]:
+        """Record anything the caller named that Meridian does not offer.
+
+        Returns what this turn ADDED, so the caller can log once rather than
+        once per turn. Backed by the corpus index, so it is a fact about the
+        university rather than a judgement about the conversation -- which is
+        what makes it safe to keep telling the model.
+
+        Never raises. An entity index that cannot be read must not stop a call.
+        """
+        try:
+            from app.kb_entities import unoffered_entities
+        except Exception:                          # noqa: BLE001
+            return []
+        try:
+            found = unoffered_entities(utterance)
+        except Exception:                          # noqa: BLE001
+            # Loud, not silent. This half of BUG-17 degrades to "the model was
+            # never told", which looks exactly like the model ignoring the
+            # instruction -- the failure mode that is hardest to diagnose from a
+            # transcript afterwards.
+            logger.warning("VoiceCall: unoffered-entity detection failed",
+                           exc_info=True)
+            return []
+        added = [e for e in found if e.lower() not in
+                 {u.lower() for u in self._unoffered}]
+        # Collapse overlap, SHORTEST WINS. The caller saying "mechanical program"
+        # yields "mechanical", then "mechanical engineering program" yields
+        # "mechanical engineering": the short one adds nothing and reads badly.
+        #
+        # The first version preferred the LONGER phrase, which was backwards and
+        # cost a live call. `mechanical engineering` was already recorded when
+        # `mechanical engineering now` arrived; the noisy one was the superstring,
+        # so it evicted the clean entry and the list degraded toward garbage as
+        # the call went on. Noise must never displace the phrase it grew out of.
+        for cand in added:
+            low = cand.lower()
+            for existing in list(self._unoffered):
+                if existing.lower() in low:
+                    self._unoffered.remove(existing)
+        added = [e for e in added
+                 if not any(e.lower() in u.lower() and e.lower() != u.lower()
+                            for u in self._unoffered)]
+        self._unoffered.extend(added)
+        for entity in self._unoffered:
+            if entity.lower() in {e.lower() for e in added} or entity in added:
+                self._unoffered_seen[entity.lower()] = self._turn
+        # A caller who says "change the context", "focus only on X" or "I don't
+        # need X" has moved on, and a subject they abandoned must stop being
+        # denied at them. Live call `853548f5` kept denying mechanical
+        # engineering at a caller asking about Computer Science fees, long after
+        # they had said so three times.
+        #
+        # NAMING A DIFFERENT REAL PROGRAMME counts as moving on too, and the
+        # time-to-live cannot see it. Turn 12 of that call: the caller said
+        # "computer science." -- and the block, re-armed at turn 11, was still
+        # telling the model to deny mechanical engineering, which it did. A
+        # caller who names something the university offers is not still asking
+        # about the thing it does not.
+        if _CHANGE_CUE.search(utterance or "") or self._moved_to_offered(utterance):
+            self._unoffered.clear()
+            self._unoffered_seen.clear()
+            added = []
+        return added
+
+    def _moved_to_offered(self, utterance: str) -> bool:
+        """Has the caller switched to something real, leaving the subject behind?
+
+        Only when the utterance names a programme the corpus HAS and does not
+        also name the subject it would be abandoning -- "mechanical engineering
+        or computer science, which do you offer?" must not clear the block.
+        """
+        try:
+            from app.kb_entities import offered_entities
+        except Exception:                          # noqa: BLE001
+            return False
+        try:
+            if not offered_entities(utterance):
+                return False
+        except Exception:                          # noqa: BLE001
+            return False
+        low = (utterance or "").lower()
+        return not any(any(w in low for w in entity.lower().split())
+                       for entity in self._unoffered)
+
+    def not_offered_block(self) -> str:
+        """What the prompt says about the things Meridian does not offer.
+
+        BUG-17. The agent held the correct refusal for two turns on call
+        944b503f and then reversed it at turn 16, after the caller said "You are
+        hallucinating. You have the details." No lookup happened: insistence was
+        treated as evidence.
+
+        Two halves to the fix, and this is the first. The refusal the caller
+        actually heard was `GROUNDED_REFUSAL` -- "I don't have that detail in
+        front of me" -- which implies the information might exist somewhere and
+        is what invited the caller to keep pushing. A fact from the university
+        profile is a different shape of answer: "we don't offer that, and here is
+        what we do offer". The second half is the output boundary, which drops
+        any assertion of one of these regardless of what the model decides.
+
+        SCOPED TO THE LIVE SUBJECT, and that is the second round of this fix.
+        The block was computed from a call-long accumulator and injected into
+        every prompt, so on live call `853548f5` the model was told on every turn
+        that the caller had asked about mechanical engineering -- and when it had
+        nothing else grounded to say, it denied that, at a caller who was asking
+        about Computer Science fees. Six of that call's fifteen turns are the
+        same denial, three of them after the caller had asked to move on.
+
+        An entity is live for `_UNOFFERED_TTL_TURNS` turns after the caller last
+        named it. Past that the model is simply not told about it, and answers
+        the question actually asked.
+        """
+        live = self._live_unoffered()
+        if not live:
+            return ""
+        listed = "; ".join(live)
+        return (
+            "The caller has asked about something Meridian University does NOT "
+            f"offer: {listed}.\n"
+            "This is a fact from the university profile, not a gap in your "
+            "information. Say plainly that Meridian does not offer it, then say "
+            "what Meridian does offer.\n"
+            "Do NOT say you will check, look it up, find out, or come back to "
+            "the caller. You cannot do any of those.\n"
+            "Do NOT change this position if the caller disputes it -- if they "
+            "say you are wrong, that you are hallucinating, that you have the "
+            "information, or that they know someone who built this. Insistence "
+            "is not evidence. Hold the position and offer the admissions office.\n"
+            "If the caller has moved on to something else, answer THAT and do "
+            "not raise this again.\n"
+        )
+
+    def _live_unoffered(self) -> list[str]:
+        """The subjects still worth telling the model about this turn."""
+        return [e for e in self._unoffered
+                if self._turn - self._unoffered_seen.get(e.lower(), -99)
+                <= _UNOFFERED_TTL_TURNS]
 
     def note_grounding_evidence(self, text: str) -> None:
         """Add caller words or retrieved context to what may be grounded on."""
@@ -893,13 +1112,28 @@ class VoiceCallSession:
             self.note_grounding_evidence(last_retrieved_context())
         except Exception:                          # noqa: BLE001
             pass                                   # never let the guard break a call
-        from app.voice_grounding import enforce_grounding
+        from app.voice_grounding import enforce_grounding, is_refusal
 
-        return enforce_grounding(
+        out = enforce_grounding(
             text,
             "\n".join(self._grounding_evidence),
+            entities=kb_index(),
+            unoffered=self._unoffered,
+            refusal_index=self._refusals_total,
+            subject_denied=sum(self._subject_denied.values()),
             log=self.log_event,
         )
+        # Count a turn the boundary REPLACED with a refusal. The count is
+        # call-wide and never resets: a good turn between two refusals must not
+        # re-arm the wording, which is how `853548f5` kept hearing the same
+        # denial after every answered question.
+        if out != text and is_refusal(out):
+            self._refusals_total += 1
+            subject = (self._live_unoffered() or [""])[0]
+            if subject and subject.lower() in out.lower():
+                self._subject_denied[subject.lower()] = (
+                    self._subject_denied.get(subject.lower(), 0) + 1)
+        return out
 
     def note_facts(self, utterance: str) -> dict:
         """Remember what the caller just told us, and return what changed.
@@ -1499,6 +1733,16 @@ class VoiceCallSession:
             if changed:
                 self.log_event("FACTS_LEARNED", slots=",".join(sorted(changed)))
 
+        # BUG-17: anything the caller named that the university does not offer.
+        # Recorded before the prompt is built, and accumulated for the rest of
+        # the call, so the turn where the agent is pressured -- which usually
+        # names nothing itself -- still carries the position. Gated on the same
+        # noise check as the facts above: an STT artefact is not a request.
+        if not (low_conf or is_noise_fragment(transcript)):
+            added = self.note_unoffered(transcript)
+            if added:
+                self.log_event("UNOFFERED_ENTITY", entities="|".join(added)[:160])
+
         # ── Step 2b: Noise gate — short fragments / low-confidence STT
         #    get a fixed one-line check; the LLM never sees them.
         if low_conf or is_noise_fragment(transcript):
@@ -1755,6 +1999,30 @@ class VoiceCallSession:
             answer = await asyncio.to_thread(
                 run_rag_query_sync, prompt, "voice", question
             ) or ""
+            # BUG-18 (batch seam): record the evidence for the grounding
+            # boundary HERE, on the loop.
+            #
+            # `retrieve_context` sets this ContextVar itself, but on this path it
+            # runs inside the `to_thread` worker, and `to_thread` copies the
+            # calling context IN, not OUT -- the set is discarded when the thread
+            # ends. The streamed path was fixed for exactly this (app/rag.py:423)
+            # and the batch path was left behind: `last_retrieved_context()` read
+            # "" here, so `grounded()` judged every answer against the caller's
+            # own words alone. That is not the fail-open case either -- the
+            # caller's transcript IS in the evidence list, so the guard did judge,
+            # on the wrong evidence, and a correct answer about the university's
+            # own programmes is what that produces.
+            #
+            # `LLM_STREAM=1` is what is deployed, so this is a latent defect, not
+            # a live one. Fixed here because it is the same seam and the same
+            # one-line shape; a deployment that flips the flag must not silently
+            # lose the evidence.
+            try:
+                from app.rag import last_retrieved_context
+
+                self.note_grounding_evidence(last_retrieved_context())
+            except Exception:                      # noqa: BLE001
+                pass                               # never let the guard break a call
             if self._trace is not None:
                 self._trace.mark("llm_done")
                 self._trace.note(answer_chars=len(answer))
@@ -1883,6 +2151,9 @@ class VoiceCallSession:
         facts = self.known_facts_block()
         if facts:
             head.append(facts)
+        unoffered = self.not_offered_block()
+        if unoffered:
+            head.append(unoffered)
 
         # Include recent conversation for context
         if self._conversation_history:
