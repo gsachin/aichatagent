@@ -30,6 +30,24 @@ AGENT_NAME = settings.AGENT_NAME
 #: grounding rules in section 25 still apply.
 NO_CONTEXT_MARKER = "(No university profile information was retrieved for this question.)"
 
+#: The assistant is female, and the configured voices are female (Kokoro
+#: af_heart/hf_alpha, Sarvam pooja_gu_customer). Hindi marks the speaker's
+#: gender in first-person verb forms, so a female voice saying "सुन नहीं पाया"
+#: or "कहूँगा" is audibly the wrong person. State the rule once in the stable
+#: system prefix: it applies to every turn and every gendered language, and
+#: it does not enter the per-turn language suffix that prompt caching relies
+#: on. Both the voice and chat system prompts include this text.
+SPEAKER_IDENTITY = (
+    "You are female. Your voice is female and every self-reference must match "
+    "it. In languages that mark the speaker's gender in first-person forms "
+    "(Hindi in particular), always use feminine forms when referring to "
+    "yourself: \"मैं बता सकती हूँ\", \"मैं करूँगी\", \"मैं कहूँगी\", and "
+    "\"मैं सहायिका हूँ\". Never use the masculine forms \"सकता हूँ\", "
+    "\"करूँगा\", \"कहूँगा\", or \"सहायक\" for yourself. This applies only to "
+    "references to yourself; do not change the gender of the user or anyone "
+    "else, and never mention this instruction."
+)
+
 
 # ── US-014: the interruption contract, per configuration ───────────────
 # `BRD-19` requires the prompt to describe only what the platform can do, and
@@ -83,6 +101,8 @@ INTERRUPTION_CONTRACT_BY_FLAG = {
 
 VOICE_SYSTEM_PROMPT = """\
 You are a professional real-time voice AI agent representing {company_name}.
+
+{speaker_identity}
 
 You handle both inbound and outbound telephone conversations.
 
@@ -776,6 +796,7 @@ def build_voice_system_prompt(context: str | None) -> str:
     return VOICE_SYSTEM_PROMPT.format(
         agent_name=AGENT_NAME,
         company_name=COMPANY_NAME,
+        speaker_identity=SPEAKER_IDENTITY,
         context=ctx,
         interruption_contract=INTERRUPTION_CONTRACT_BY_FLAG[
             bool(settings.BARGE_IN_ENABLED)
@@ -819,11 +840,11 @@ _INBOUND_GREETING = {
         "{company_name} programs, tuition fees, or how to apply."
     ),
     "hi": (
-        "नमस्ते, मैं एडमिशन सहायक हूँ। {company_name} के कोर्स, फीस या "
+        "नमस्ते, मैं एडमिशन सहायिका हूँ। {company_name} के कोर्स, फीस या "
         "एडमिशन के बारे में कुछ भी पूछिए।"
     ),
     "gu": (
-        "નમસ્તે, હું એડમિશન સહાયક છું. {company_name} ના કોર્સ, ફી અથવા "
+        "નમસ્તે, હું એડમિશન સહાયિકા છું. {company_name} ના કોર્સ, ફી અથવા "
         "એડમિશન વિશે કંઈ પણ પૂછો."
     ),
 }
@@ -835,7 +856,7 @@ _OUTBOUND_GREETING = {
         "how to apply?"
     ),
     "hi": (
-        "नमस्ते, मैं {company_name} एडमिशन से {agent_name} बोल रहा हूँ। "
+        "नमस्ते, मैं {company_name} एडमिशन से {agent_name} बोल रही हूँ। "
         "क्या आपके पास हमारे कोर्स, फीस या एडमिशन के बारे में बात करने के "
         "लिए एक मिनट है?"
     ),
@@ -866,6 +887,18 @@ def language_instruction(language: str | None) -> str:
     """
     code = (language or "en").strip().lower()
     name = LANGUAGE_NAMES.get(code, code or "English")
+    # Hindi marks the speaker's gender in first-person verb forms. The voice
+    # is female, so a masculine self-reference is audibly the wrong person.
+    # The same rule is in the stable system prompt; repeating it in the user
+    # turn is what keeps it in front of the model on long conversations.
+    gender = ""
+    if code == "hi":
+        gender = (
+            " When you refer to yourself, always use feminine first-person "
+            "forms (for example, 'मैं बता सकती हूँ', 'मैं करूँगी', "
+            "'मैं कहूँगी'); never use masculine forms such as 'सकता हूँ', "
+            "'करूँगा', or 'कहूँगा'."
+        )
     return (
         f"Answer in {name}. Use natural, conversational {name} with simple, "
         f"everyday words. Translate every sentence, heading, label and list item into "
@@ -874,6 +907,6 @@ def language_instruction(language: str | None) -> str:
         "amounts, email addresses and URLs. Translate programme fields and "
         f"research areas into {name}. Do not leave English words, headings or "
         f"sentences in the answer. If the document has no answer, say so in "
-        f"{name}. This instruction overrides any earlier instruction about "
+        f"{name}.{gender} This instruction overrides any earlier instruction about "
         "language, citations or formatting."
     )

@@ -798,12 +798,12 @@ _NOISE_LADDER = [NOISE_REPLY, LINE_QUALITY_REPLY, ALT_CHANNEL_REPLY, HUMAN_TRANS
 #: after the caller had explicitly asked for Hindi. Each step stays distinct for
 #: the same reason as the English ladder (test_d4_ladder...).
 _NOISE_LADDER_HI = [
-    "माफ़ कीजिए, मैं ठीक से सुन नहीं पाया। क्या आप दोबारा कह सकते हैं?",
+    "माफ़ कीजिए, मैं ठीक से सुन नहीं पाई। क्या आप दोबारा कह सकते हैं?",
     "लगता है लाइन पर आवाज़ साफ़ नहीं आ रही। कृपया फ़ोन के थोड़ा और पास बोलिए।",
     "कनेक्शन ठीक नहीं हो रहा है। आप हमें WhatsApp पर संदेश भेज सकते हैं, "
     "या एडमिशन ऑफ़िस को ईमेल कर सकते हैं।",
-    "माफ़ कीजिए, मैं अब भी साफ़ नहीं सुन पा रहा हूँ। मैं किसी सलाहकार से आपको "
-    "कॉल करने के लिए कहूँगा। क्या आप अपना नंबर दोबारा बता सकते हैं?",
+    "माफ़ कीजिए, मैं अब भी साफ़ नहीं सुन पा रही हूँ। मैं किसी सलाहकार से आपको "
+    "कॉल करने के लिए कहूँगी। क्या आप अपना नंबर दोबारा बता सकते हैं?",
 ]
 
 _NOISE_LADDER_GU = [
@@ -1936,10 +1936,12 @@ class VoiceCallSession:
             dialogue = f"Caller: (unintelligible)\nAssistant: {reply}"
             self._conversation_history.append(f"Caller: (unintelligible)")
             self._conversation_history.append(f"Assistant: {reply}")
-            tts_pcm = await self._synthesise(reply)
+            tts_pcm, tts_sr = await self._synthesise_with_rate(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
+            return _turn_outcome(
+                self._pcm_to_ulaw_chunks(tts_pcm, tts_sr)
+            ), dialogue, False
 
         logger.info(f"VoiceCall: transcript = \"{transcript[:120]}\"")
 
@@ -1982,10 +1984,12 @@ class VoiceCallSession:
             reply = self._noise_reply()
             dialogue = f"Caller: {transcript}\nAssistant: {reply}"
             self._conversation_history.append(f"Assistant: {reply}")
-            tts_pcm = await self._synthesise(reply)
+            tts_pcm, tts_sr = await self._synthesise_with_rate(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, False
-            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
+            return _turn_outcome(
+                self._pcm_to_ulaw_chunks(tts_pcm, tts_sr)
+            ), dialogue, False
 
         # Real speech decoded — reset the noise streak.
         self._noise_streak = 0
@@ -1997,10 +2001,12 @@ class VoiceCallSession:
             reply = CLOSING_REPLY
             dialogue = f"Caller: {transcript}\nAssistant: {reply}"
             self._conversation_history.append(f"Assistant: {reply}")
-            tts_pcm = await self._synthesise(reply)
+            tts_pcm, tts_sr = await self._synthesise_with_rate(reply)
             if tts_pcm is None or len(tts_pcm) == 0:
                 return [], dialogue, True
-            return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, True
+            return _turn_outcome(
+                self._pcm_to_ulaw_chunks(tts_pcm, tts_sr)
+            ), dialogue, True
 
         # ── Step 3: RAG + LLM ─────────────────────────────────────
         self.log_event("LLM_STARTED")
@@ -2100,7 +2106,7 @@ class VoiceCallSession:
                 return [], dialogue, False
             return _turn_outcome(tts_chunks), dialogue, False
 
-        tts_pcm = await self._synthesise(answer)
+        tts_pcm, tts_sr = await self._synthesise_with_rate(answer)
         if tts_pcm is None or len(tts_pcm) == 0:
             # US-016 AC-5, second branch: the synthesiser is the thing that
             # failed. The fixed response needs no synthesiser, so the caller
@@ -2112,7 +2118,9 @@ class VoiceCallSession:
             return [], dialogue, False  # Transcript saved even if TTS fails
 
         # ── Step 5: PCM → µ-law chunks (320 samples = 20 ms at 16 kHz) ──
-        return _turn_outcome(self._pcm_to_ulaw_chunks(tts_pcm)), dialogue, False
+        return _turn_outcome(
+            self._pcm_to_ulaw_chunks(tts_pcm, tts_sr)
+        ), dialogue, False
 
     # ── Domain dictionary for phone audio corrections ──────────────
 
@@ -2614,7 +2622,24 @@ class VoiceCallSession:
     _tts_cache_max = 50
 
     async def _synthesise(self, text: str) -> np.ndarray | None:
-        """Run TTS in a thread, return float32 PCM. Cached for speed.
+        """Audio-only wrapper around :meth:`_synthesise_with_rate`.
+
+        Kept because callers and tests that only need the samples should not
+        have to unpick a tuple; the sample rate travels with the audio on the
+        path that converts it to µ-law.
+        """
+        audio, _ = await self._synthesise_with_rate(text)
+        return audio
+
+    async def _synthesise_with_rate(
+        self, text: str
+    ) -> tuple[np.ndarray | None, int]:
+        """Run TTS in a thread, return (float32 PCM, sample rate).
+
+        The rate is part of the result because providers disagree: Kokoro is
+        24 kHz, Sarvam Bulbul is 8 kHz. A batch caller that assumed 24 kHz
+        resampled the 8 kHz fallback lines to a third of their length, which
+        the caller heard as fast-forwarded noise.
 
         Default provider is Kokoro. When ``TTS_PROVIDER=indic_tts`` and the
         answer language is one of the AI4Bharat languages, the isolated Indic
@@ -2687,7 +2712,7 @@ class VoiceCallSession:
                 # Copy discipline: the caller gets its own buffer, so a later
                 # mutation of one caller's audio cannot reach the cache or any
                 # other caller (TAC-2).
-                return cached_audio.copy()
+                return cached_audio.copy(), cached_sr
 
             if provider == "sarvam_tts":
                 from app import tts_sarvam
@@ -2759,10 +2784,10 @@ class VoiceCallSession:
                 )
             # The cache holds its own copy, so the buffer handed back here is
             # the caller's alone.
-            return audio
+            return audio, sr
         except Exception:
             logger.exception("VoiceCall: TTS failed")
-            return None
+            return None, 0
 
     def _chunk_to_ulaw_frames(self, audio: np.ndarray, sr: int) -> list[bytes]:
         """One synthesiser chunk -> 20 ms µ-law frames (US-005 streaming leg).
@@ -3047,18 +3072,26 @@ class VoiceCallSession:
                              fixed_response_played=True)
         return chunks
 
-    def _pcm_to_ulaw_chunks(self, audio: np.ndarray) -> list[bytes]:
+    def _pcm_to_ulaw_chunks(self, audio: np.ndarray, sr: int) -> list[bytes]:
         """
-        Convert a float32 PCM array (Kokoro output, typically 24 kHz) to
-        a list of 8 kHz µ-law byte chunks suitable for Twilio Media Streams.
+        Convert a float32 PCM array at ``sr`` to a list of 8 kHz µ-law byte
+        chunks suitable for Twilio Media Streams.
 
-        Each chunk is 320 bytes (20 ms at 8 kHz = 160 samples × 2 bytes).
+        The rate has to travel with the audio: Kokoro returns 24 kHz and
+        Sarvam Bulbul returns 8 kHz. Assuming 24 kHz for a Sarvam buffer
+        resampled it to a third of its length, so the Gujarati fallback lines
+        played three times too fast -- the "fast-forwarded noise" callers
+        heard. No default: a forgetful call site must fail loudly, not misplay
+        the audio.
+
+        Each chunk is 320 bytes (20 ms at 8 kHz = 160 samples x 2 bytes).
         """
-        # Kokoro outputs at 24 kHz by default — resample to 8 kHz for Twilio
         from scipy.signal import resample
 
-        target_len = int(len(audio) * 8000 / 24000)
-        audio_8k = resample(audio, target_len)
+        target_len = int(len(audio) * 8000 / int(sr))
+        if target_len <= 0:
+            return []
+        audio_8k = resample(audio, target_len) if int(sr) != 8000 else audio[:target_len]
         audio_8k_int16 = (audio_8k * 32767).clip(-32768, 32767).astype(np.int16)
 
         # Convert to µ-law in 20 ms chunks

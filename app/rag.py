@@ -20,6 +20,7 @@ from typing import AsyncIterator
 
 from app.config import settings
 from app.llm_backend import EngineCounters
+from app.voice_system_prompt import SPEAKER_IDENTITY
 
 logger = logging.getLogger("rag_module")
 
@@ -31,7 +32,8 @@ _LAST_CONTEXT: ContextVar[str] = ContextVar("last_retrieved_context", default=""
 #: ``app.voice_system_prompt.build_voice_system_prompt`` instead.
 SYSTEM_PROMPT = (
     "You are a helpful University Admissions Advisor for Meridian University. "
-    "Answer questions using the provided university profile context.\n\n"
+    + SPEAKER_IDENTITY
+    + "\n\nAnswer questions using the provided university profile context.\n\n"
     "RULES:\n"
     "1. Use facts from the context. When the context has relevant data, "
     "present it clearly — use Markdown for tables and figures.\n"

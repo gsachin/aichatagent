@@ -32,6 +32,53 @@ def test_language_rule_forbids_mixed_english():
     assert "currency amounts" in rule
 
 
+def test_hindi_self_reference_is_feminine():
+    """The voice is female; Hindi first-person forms must agree.
+
+    Before this, a female Kokoro voice said "सुन नहीं पाया" / "कहूँगा" and the
+    outbound greeting said "बोल रहा हूँ" -- audibly a different person.
+    """
+    from app.voice_handler import _NOISE_LADDER_HI
+    from app.voice_system_prompt import _INBOUND_GREETING, _OUTBOUND_GREETING
+
+    text = (
+        " ".join(_NOISE_LADDER_HI)
+        + _INBOUND_GREETING["hi"]
+        + _OUTBOUND_GREETING["hi"]
+    )
+    for masculine in (
+        "सुन नहीं पाया", "सुन पा रहा हूँ", "कहूँगा",
+        "सहायक हूँ", "बोल रहा हूँ",
+    ):
+        assert masculine not in text
+    for feminine in (
+        "सुन नहीं पाई", "सुन पा रही हूँ", "कहूँगी",
+        "सहायिका", "बोल रही हूँ",
+    ):
+        assert feminine in text
+
+
+def test_female_identity_is_in_both_prompts():
+    """Voice and text chat must both know the assistant is female.
+
+    The voice providers are already female (Kokoro af_heart/hf_alpha, Sarvam
+    pooja_gu_customer); the prompt is what keeps Hindi verb forms and text-chat
+    self-references consistent with them.
+    """
+    from app.rag import SYSTEM_PROMPT
+    from app.voice_system_prompt import (
+        build_voice_system_prompt,
+        language_instruction,
+    )
+
+    voice = build_voice_system_prompt("CTX")
+    assert "female" in voice.lower()
+    assert "feminine" in voice.lower()
+    assert "female" in SYSTEM_PROMPT.lower()
+    assert "feminine" in SYSTEM_PROMPT.lower()
+    assert "सकती हूँ" in language_instruction("hi")
+
+
 def test_call_greeting_uses_the_call_language():
     from app.voice_system_prompt import call_greeting
 

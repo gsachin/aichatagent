@@ -105,6 +105,35 @@ def test_sarvam_tts_dispatch(monkeypatch, override_settings):
     assert captured["pace"] == 1.1
 
 
+def test_batch_converter_keeps_sarvam_8k_duration(monkeypatch):
+    """A Sarvam 8 kHz buffer must not be resampled as if it were 24 kHz.
+
+    The noise-gated and no-speech fallback lines take the batch path. With the
+    old hard-coded 24000 assumption, a 3.4 s Gujarati fallback was resampled
+    to 1.13 s and played three times too fast -- the "fast-forwarded noise"
+    callers heard on short/unintelligible turns.
+    """
+    import app.tts_sarvam as tts
+    import app.voice_handler as vh
+
+    monkeypatch.setattr(
+        tts, "synthesise",
+        lambda text, language, **kwargs: (
+            np.zeros(8000, dtype=np.float32), 8000
+        ),
+    )
+    monkeypatch.setattr(vh, "TTS_PROVIDER", "sarvam")
+    monkeypatch.setattr(vh, "_SARVAM_TTS_LANGUAGES", frozenset({"gu"}))
+    session = vh.VoiceCallSession(language="gu")
+
+    audio, sr = asyncio.run(
+        session._synthesise_with_rate("unique fallback rate regression text")
+    )
+    assert sr == 8000
+    chunks = session._pcm_to_ulaw_chunks(audio, sr)
+    assert len(chunks) == 50          # 1.0 s / 20 ms -- not 1/3 of it
+
+
 def test_sarvam_tts_stream_dispatch(monkeypatch, override_settings):
     import app.tts_sarvam as tts
     import app.voice_handler as vh
