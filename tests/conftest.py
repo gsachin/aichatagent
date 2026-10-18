@@ -31,6 +31,29 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # service in tests (test_rag_dispatcher.py sets the mode per test).
 os.environ.setdefault("USE_MCP_RAG", "off")
 
+# The demo .env sets CONTEXT_MODE=doc (full-document prompting). The existing
+# retrieval/dispatcher tests were written against the retrieval path, so the
+# suite pins the code default. A test that exercises doc mode overrides this
+# with the `override_settings` fixture or monkeypatch.
+os.environ.setdefault("CONTEXT_MODE", "rag")
+
+# The demo .env also sets LLM_PROVIDER=openai. Tests must stay hermetic and
+# must not require LLM_API_KEY; the OpenAI adapter tests inject a fake client
+# and set the provider explicitly. Pre-setting auto here wins over .env because
+# load_dotenv does not override an existing process variable.
+os.environ.setdefault("LLM_PROVIDER", "auto")
+
+# The demo .env sets STT_PROVIDER=sarvam. Tests must never call a paid API or
+# load the 600M ONNX fallback; provider-specific tests patch the adapter. This
+# must win over .env, and load_dotenv does not override an existing variable.
+os.environ.setdefault("STT_PROVIDER", "whisper")
+os.environ.setdefault("STT_FALLBACK_PROVIDERS", "")
+
+# The demo .env routes Gujarati TTS to Sarvam. Tests must not call the paid
+# TTS API; keep the suite on Kokoro and let Sarvam-specific tests override.
+os.environ.setdefault("TTS_PROVIDER", "kokoro")
+os.environ.setdefault("SARVAM_TTS_LANGUAGES", "")
+
 # ...and keep it out of the LIVE CALL LOG. `app.main` calls `_configure_logging()`
 # at import (main.py:110), which attaches a FileHandler to whatever LOG_FILE
 # names -- so simply importing the app in a test made the suite append to the

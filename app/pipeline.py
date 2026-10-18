@@ -33,10 +33,6 @@ logger = logging.getLogger("voice_pipeline")
 
 # ── Configuration ────────────────────────────────────────────────────
 
-CHROMA_DB_PATH = Path(settings.CHROMA_DB_PATH)
-DEFAULT_LLM_MODEL = settings.OLLAMA_MODEL
-#: Literal IPv4, not "localhost" -- see app/llm_backend.OLLAMA_BASE_URL.
-OLLAMA_BASE_URL = settings.OLLAMA_URL
 STT_MODEL = settings.WHISPER_MODEL
 #: This one omits the `.strip() or "af_heart"` guard the other readers of
 #: KOKORO_VOICE apply (app/voice_handler.py, app/admission.py). Settings carries
@@ -44,9 +40,8 @@ STT_MODEL = settings.WHISPER_MODEL
 #: an empty string to KokoroTTSService. KOKORO_VOICE itself stays on the
 #: dynamic allowlist for admission.asset_drift()'s per-call read.
 TTS_VOICE = settings.KOKORO_VOICE
-# Single source of truth: app.llm_backend.DEFAULT_NUM_CTX (env: OLLAMA_NUM_CTX).
-# Voice calls run the full production voice system prompt (~3.5k tokens)
-# plus RAG context; scripts/predeploy.py sizes it per machine.
+# Single source of truth: app.llm_backend.DEFAULT_NUM_CTX.
+# Voice calls run the full production voice system prompt plus the document.
 from app.llm_backend import DEFAULT_NUM_CTX as NUM_CTX  # noqa: E402
 
 # ── Platform Detection (Multi-GPU Support) ──────────────────────────
@@ -87,7 +82,7 @@ def _vram_info() -> str:
 #   from app.rag import retrieve_context
 
 
-def build_rag_prompt_parts(transcript: str) -> tuple[str, str]:
+def build_rag_prompt_parts(transcript: str, language: str | None = None) -> tuple[str, str]:
     """The same prompt as `build_rag_prompt`, split into (system, user).
 
     The split is the fix for a measured defect, not tidiness: with the
@@ -96,16 +91,22 @@ def build_rag_prompt_parts(transcript: str) -> tuple[str, str]:
     role-play scenario", "You are now the inbound voice AI agent for…"). Over
     38 replayed caller turns, moving them to a system turn took scaffold,
     self-grading and prompt-recital defects from 3 to 0.
+
+    `language` adds the answer-language rule to the USER turn, after the stable
+    system + document prefix, so the cacheable prefix does not change with the
+    language.
     """
-    from app.rag import retrieve_context
-    from app.voice_system_prompt import build_voice_system_prompt
+    from app.rag import context_for_query
+    from app.voice_system_prompt import build_voice_system_prompt, language_instruction
 
-    context = retrieve_context(transcript)
-    return (build_voice_system_prompt(context),
-            f"Student's question: {transcript}")
+    context = context_for_query(transcript)
+    user = f"Student's question: {transcript}"
+    if language:
+        user = f"{user}\n\n{language_instruction(language)}"
+    return (build_voice_system_prompt(context), user)
 
 
-def build_rag_prompt(transcript: str) -> str:
+def build_rag_prompt(transcript: str, language: str | None = None) -> str:
     """
     Enrich the transcribed user query with ChromaDB context and wrap it
     in the production voice system prompt (app.voice_system_prompt).
@@ -120,46 +121,33 @@ def build_rag_prompt(transcript: str) -> str:
     surface). Anything that actually sends to the model should use
     `build_rag_prompt_parts` so the roles are right.
     """
-    system, user = build_rag_prompt_parts(transcript)
+    system, user = build_rag_prompt_parts(transcript, language=language)
     return f"{system}\n\n{user}"
 
 
 # ── Pipeline factory ─────────────────────────────────────────────────
 
 def _build_llm_service():
-    """
-    Build the Pipecat LLM service for the active backend.
+    """Build the Pipecat OpenAI LLM service.
 
-    Ollama (Windows/Linux) -> OLLamaLLMService (unchanged).
-    MLX (Apple Silicon)    -> OpenAILLMService pointed at mlx_lm.server
-                              (OpenAI-compatible, streaming included).
-    Returns None when the service is unavailable or init fails.
+    The local Ollama/MLX services were removed with RAG; every generation
+    service points at OpenAI. Returns None when the service is unavailable.
     """
-    from app.llm_backend import provider_name, MLX_MODEL, MLX_BASE_URL
+    from app.llm_backend import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, provider_name
 
     try:
-        if provider_name() == "mlx":
-            from pipecat.services.openai.llm import OpenAILLMService
+        provider_name()
+        from pipecat.services.openai.llm import OpenAILLMService
 
-            llm = OpenAILLMService(
-                settings=OpenAILLMService.Settings(model=MLX_MODEL),
-                base_url=f"{MLX_BASE_URL}/v1",
-                api_key="mlx",  # local server — any non-empty key works
-            )
-            logger.info(f"  [OK] OpenAILLMService initialized (MLX model={MLX_MODEL})")
-            return llm
-
-        from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
-
-        llm = OLLamaLLMService(
-            model=DEFAULT_LLM_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            settings=OllamaLLMSettings(),
+        llm = OpenAILLMService(
+            settings=OpenAILLMService.Settings(model=LLM_MODEL),
+            base_url=LLM_BASE_URL,
+            api_key=LLM_API_KEY,
         )
-        logger.info(f"  [OK] OLLamaLLMService initialized (model={DEFAULT_LLM_MODEL})")
+        logger.info(f"  [OK] OpenAILLMService initialized (model={LLM_MODEL})")
         return llm
     except ImportError:
-        logger.warning("  [SKIP] LLM service not available for this backend")
+        logger.warning("  [SKIP] OpenAI LLM service not available")
         return None
     except Exception as e:
         logger.warning(f"  [SKIP] LLM init failed: {e}")
@@ -179,11 +167,11 @@ async def create_local_voice_pipeline(transport=None):
         (PipelineRunner, PipelineTask) tuple.
 
     Pipecat 1.6.0 pipeline flow:
-        transport.input() → VAD → STT → [RAG enrichment] → LLM → TTS → transport.output()
+        transport.input() → VAD → STT → [document context] → LLM → TTS → transport.output()
     """
     logger.info("Creating local voice pipeline...")
     logger.info(f"  Device: {DEVICE}, Compute: {COMPUTE_TYPE}")
-    logger.info(f"  LLM: {DEFAULT_LLM_MODEL} @ {OLLAMA_BASE_URL}")
+    logger.info(f"  LLM: {settings.LLM_MODEL} @ {settings.LLM_BASE_URL}")
     logger.info(f"  {_vram_info()}")
 
     # ---- 1. Voice Activity Detection ---------------------------------
@@ -321,7 +309,8 @@ def _bg_priority_enabled() -> bool:
 def run_rag_query_sync(user_text: str, mode: str = "voice",
                        retrieval_query: str | None = None,
                        history: list[str] | None = None,
-                       profile: dict | None = None) -> str | None:
+                       profile: dict | None = None,
+                       language: str | None = None) -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
     Uses shared RAG module for consistent quality across all interfaces.
@@ -348,7 +337,7 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
     from app.rag import query_rag
     if not _bg_priority_enabled():
         return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                         history=history, profile=profile)
+                         history=history, profile=profile, language=language)
 
     from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
@@ -357,11 +346,11 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
         label = "voice" if defect is None else f"unclassified:{mode}"
         with GATE.voice_turn(label=label):
             return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                             history=history, profile=profile)
+                             history=history, profile=profile, language=language)
     try:
         with GATE.background_unit(label="background", mode=mode):
             return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                             history=history, profile=profile)
+                             history=history, profile=profile, language=language)
     except BackgroundDeferred:
         # Refused because the line stayed busy past its budget. It answers
         # nothing rather than being interleaved -- and this is NOT a
@@ -372,7 +361,8 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
         return None
 
 
-async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | None:
+async def test_pipeline_with_text(user_text: str, mode: str = "chat",
+                                  language: str | None = None) -> str | None:
     """
     Test the full RAG → LLM chain with a text query (no audio).
     Returns the LLM response string, or None on failure.
@@ -390,7 +380,7 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
     from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
     async def _run() -> str | None:
-        system, prompt = build_rag_prompt_parts(user_text)
+        system, prompt = build_rag_prompt_parts(user_text, language=language)
         from app.llm_backend import _messages, chat as backend_chat
 
         # `to_thread`, because `backend_chat` is SYNCHRONOUS and performs an
@@ -403,7 +393,6 @@ async def test_pipeline_with_text(user_text: str, mode: str = "chat") -> str | N
         answer = await asyncio.to_thread(
             backend_chat,
             messages=_messages(system, prompt),
-            preferred=[DEFAULT_LLM_MODEL],
             num_ctx=NUM_CTX,
         )
         logger.info(f"LLM response: {answer[:100]}...")

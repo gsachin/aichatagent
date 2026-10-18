@@ -52,11 +52,11 @@ class FakeKokoro:
         self.fail_after = fail_after          # None = never; N = raise at chunk N
         self.calls = []
 
-    def create(self, text, voice=None, speed=None):
+    def create(self, text, voice=None, speed=None, **kwargs):
         self.calls.append(("batch", text, voice, speed))
         return np.zeros(2400, dtype=np.float32), 24000
 
-    async def create_stream(self, text, voice=None, speed=None):
+    async def create_stream(self, text, voice=None, speed=None, **kwargs):
         self.calls.append(("stream", text, voice, speed))
         for i in range(2):
             if self.fail_after is not None and i >= self.fail_after:

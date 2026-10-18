@@ -57,6 +57,7 @@ from xml.sax.saxutils import escape
 import json
 import logging
 from pathlib import Path
+from urllib.parse import quote
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -286,6 +287,38 @@ async def lifespan(app_instance):
     global _db_available, _outbound_worker, _follow_up_scheduler
     # Startup
     _reconcile_workers()
+
+    # Surface the three independent choices at one place: generation provider,
+    # context source, and TTS provider. A misconfigured openai provider fails
+    # here, before a caller is on the line.
+    try:
+        from app.config import ConfigurationError
+        from app.llm_backend import provider_name
+
+        logger.info(
+            "LLM provider=%s context=%s tts=%s",
+            provider_name(), settings.CONTEXT_MODE, settings.TTS_PROVIDER,
+        )
+        if not settings.LLM_API_KEY:
+            logger.warning(
+                "LLM_API_KEY is empty: every LLM call will use the fixed-response "
+                "path until the key is added to .env and the stack is restarted."
+            )
+        if settings.CONTEXT_MODE == "doc":
+            from app.doc_context import document_stats, source_label
+
+            stats = document_stats()
+            logger.info(
+                "Document context: %s — %d bytes, %d tokens%s",
+                source_label(), stats.bytes_read, stats.tokens,
+                " [TRUNCATED]" if (stats.truncated_bytes or stats.truncated_tokens) else "",
+            )
+    except ConfigurationError:
+        logger.exception("Invalid LLM configuration — refusing to start")
+        raise
+    except Exception:
+        logger.exception("LLM configuration check failed")
+
     try:
         from app.database import init_db
 
@@ -317,27 +350,22 @@ async def lifespan(app_instance):
     except Exception:
         logger.debug("Machine-profile drift check skipped", exc_info=True)
 
-    # Pre-warm RAG and Whisper so first voice note doesn't timeout
+    # Pre-warm the document, the configured STT provider and Kokoro so the
+    # first turn is warm.
     try:
         import asyncio as _asyncio
 
         def _warmup():
-            # Pre-load the RAG backend (MCP session in MCP modes, ChromaDB
-            # in legacy mode) — see app.rag.warmup(); never raises.
             from app.rag import warmup as rag_warmup
 
             rag_warmup()
-            logger.info("RAG backend pre-warmed")
-            # Pre-load the embedding model so the first RAG query doesn't
-            # pay the cold-start cost (HF config checks + model load)
-            from app.llm_backend import get_embedding_function, provider_name
+            logger.info("Document context pre-warmed")
+            # Load the provider chain: Sarvam key check + IndicConformer models
+            # when they are selected, or faster-whisper when it is primary.
+            from app import stt as stt_registry
 
-            if provider_name() == "mlx":
-                get_embedding_function()(["warmup"])
-                logger.info("Embedding model pre-warmed")
-            # Pre-load Whisper model
-            _get_stt_model()
-            logger.info("Whisper model pre-warmed")
+            stt_registry.warmup()
+            logger.info("STT providers pre-warmed")
 
             # Pre-load Kokoro too (C4 / Class A). Whisper was warmed here and
             # Kokoro was not, so the FIRST synthesis of the FIRST call loaded
@@ -407,7 +435,6 @@ async def lifespan(app_instance):
     # Start outbound call worker
     try:
         from app.outbound.caller import OutboundCallWorker
-        from app.config import settings
 
         _outbound_worker = OutboundCallWorker(
             poll_interval=settings.OUTBOUND_POLL_INTERVAL
@@ -421,7 +448,6 @@ async def lifespan(app_instance):
     # Start follow-up scheduler
     try:
         from app.outbound.scheduler import FollowUpScheduler
-        from app.config import settings
 
         _follow_up_scheduler = FollowUpScheduler(
             poll_interval=settings.FOLLOW_UP_POLL_INTERVAL
@@ -437,7 +463,6 @@ async def lifespan(app_instance):
     # nothing ever replayed.
     try:
         from app.crm.worker import CrmOutboxWorker
-        from app.config import settings
 
         _crm_worker = CrmOutboxWorker(
             poll_interval=settings.CRM_OUTBOX_POLL_INTERVAL
@@ -496,18 +521,36 @@ def _resolve_tunnel_host() -> str:
 #
 # `<Stream>` is therefore no longer self-closing.
 
-def _stream_markup(host: str, phone: str = "") -> str:
-    """Build the `<Stream>` element, carrying the caller number when we have it."""
+def _stream_markup(host: str, phone: str = "", language: str = "") -> str:
+    """Build the `<Stream>` element, carrying the caller number and language.
+
+    Both values reach the media stream as custom `<Parameter>`s because Media
+    Streams does not carry them in the `start` event. Values are XML-escaped
+    (R14); an `&` or `<` would otherwise produce TwiML Twilio rejects.
+    """
     url = f"wss://{host}/ws/twilio"
-    if not phone:
+    params = []
+    if phone:
+        params.append(
+            f'<Parameter name="phone" value="{escape(phone, {chr(34): "&quot;"})}" />'
+        )
+    if language:
+        params.append(
+            f'<Parameter name="language" value="{escape(language, {chr(34): "&quot;"})}" />'
+        )
+    if not params:
         return f'<Stream url="{url}" />'
-    # Inside an attribute, the double quote must be escaped too — saxutils
-    # handles &, < and > but leaves quotes alone.
-    return (
-        f'<Stream url="{url}">'
-        f'<Parameter name="phone" value="{escape(phone, {chr(34): "&quot;"})}" />'
-        f"</Stream>"
-    )
+    return f'<Stream url="{url}">' + "".join(params) + "</Stream>"
+
+
+#: Inbound IVR digit -> answer language. 1/2/3 are the demo languages; any
+#: other digit (or no input) keeps DEFAULT_LANGUAGE.
+_LANGUAGE_BY_DIGIT = {"1": "en", "2": "hi", "3": "gu"}
+
+
+def _language_for_call(digits: str, default: str = "") -> str:
+    """Map the IVR digit to a language code (default when unrecognised)."""
+    return _LANGUAGE_BY_DIGIT.get((digits or "").strip(), default or settings.DEFAULT_LANGUAGE)
 
 
 TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -521,14 +564,14 @@ TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 # IVR menu — shown before connecting to AI
 TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather numDigits="1" timeout="3" action="/twilio/voice/connect" method="GET">
+    <Gather numDigits="1" timeout="3" action="{action}" method="GET">
         <Say voice="Polly.Joanna">
             Welcome to the Meridian University Admissions helpline.
-            Press 1 for Undergraduate programs.
-            Press 2 for Postgraduate programs.
-            Press 3 for tuition and fees information.
-            Press 4 to speak with our AI admissions assistant.
-            Or, simply start speaking to ask any question.
+            Press 1 for English.
+            Press 2 for Hindi.
+            Press 3 for Gujarati.
+            Press 4 to continue in the default language.
+            Or, simply start speaking to ask any question in English.
         </Say>
     </Gather>
     <Say voice="Polly.Joanna">I didn't receive any input. Connecting you to the AI assistant now.</Say>
@@ -692,11 +735,13 @@ async def websocket_voice_text(websocket: WebSocket):
             try:
                 from app.pipeline import build_rag_prompt, test_pipeline_with_text
 
-                answer = await test_pipeline_with_text(query)
+                language = str(msg.get("language", "") if isinstance(msg, dict) else "").strip().lower()
+                answer = await test_pipeline_with_text(query, language=language or None)
 
                 await websocket.send_text(json.dumps({
                     "query": query,
                     "answer": answer,
+                    "language": language or "en",
                     "status": "ok",
                 }))
             except Exception as e:
@@ -1043,30 +1088,54 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         return
 
     try:
-        from app.voice_handler import generate_ulaw_greeting
+        from app.voice_handler import generate_ulaw_greeting, _use_sarvam_tts
 
-        # US-017 C4 / Class A: `generate_ulaw_greeting` is SYNCHRONOUS and runs
-        # Kokoro on the calling thread -- and it LOADS the model when cold.
-        # Called directly from an async handler it froze the whole event loop
-        # for a model load on the FIRST turn of the FIRST call, which is the
-        # worst possible moment and the one a caller is most likely to notice.
-        # `to_thread` gives it a worker thread instead.
-        chunks = await _asyncio.wait_for(
-            _asyncio.to_thread(generate_ulaw_greeting, text),
-            timeout=_greeting_timeout_s(),
-        )
-        logger.info(f"AI greeting: {len(chunks)} chunks")
-        # The greeting is agent speech, so the transcript of this call must
-        # contain it. Without this the model's context begins at the caller's
-        # first utterance, and it reintroduces itself on a later turn --
-        # measured 39 times in logs/voice_assistant.log.
-        session.note_greeting_spoken(text)
         # US-014: the greeting is agent speech, so the echo gate is armed for it
         # exactly as for a turn, and -- as for a turn -- it stays armed until the
         # caller has heard the last frame rather than until the last write.
         session.begin_turn()
         session.mark_speaking()
-        await _write_frames(t, chunks, sent)
+
+        if _use_sarvam_tts(session.language):
+            # Bulbul streams over HTTP; writing each chunk as it arrives makes
+            # the first syllable audible in ~0.6 s instead of waiting for the
+            # whole 7 s script. The batch path below remains for Kokoro.
+            noted = False
+
+            async def _stream_greeting() -> None:
+                nonlocal noted
+                async for audio, sr in session.synthesise_stream(text):
+                    if not noted:
+                        # The greeting is agent speech, so the transcript of
+                        # this call must contain it -- but only once audio
+                        # actually exists; a failed stream must not teach the
+                        # model it already introduced itself.
+                        session.note_greeting_spoken(text)
+                        noted = True
+                    await _write_frames(
+                        t, session._chunk_to_ulaw_frames(audio, sr), sent
+                    )
+
+            await _asyncio.wait_for(
+                _stream_greeting(), timeout=_greeting_timeout_s()
+            )
+        else:
+            # US-017 C4 / Class A: `generate_ulaw_greeting` is SYNCHRONOUS and
+            # runs Kokoro on the calling thread -- and it LOADS the model when
+            # cold. Called directly from an async handler it froze the whole
+            # event loop for a model load on the FIRST turn of the FIRST call.
+            # `to_thread` gives it a worker thread instead.
+            chunks = await _asyncio.wait_for(
+                _asyncio.to_thread(
+                    generate_ulaw_greeting, text, language=session.language
+                ),
+                timeout=_greeting_timeout_s(),
+            )
+            logger.info(f"AI greeting: {len(chunks)} chunks")
+            if chunks:
+                session.note_greeting_spoken(text)
+            await _write_frames(t, chunks, sent)
+
         await _await_playout(session)
         if session.cancel_requested():
             # The caller spoke over the greeting. Stop the carrier's buffer too,
@@ -1176,6 +1245,14 @@ async def websocket_twilio(websocket: WebSocket):
                 caller_number = str(
                     (start_payload.get("customParameters") or {}).get("phone") or ""
                 )
+                # The requested answer language travels as a TwiML <Parameter>
+                # (same channel as the phone number, which Media Streams does
+                # not carry in the start event). Empty keeps DEFAULT_LANGUAGE.
+                output_language = str(
+                    (start_payload.get("customParameters") or {}).get("language") or ""
+                ).strip().lower()
+                if output_language:
+                    session.language = output_language
                 from app.crm import session as crm_session
 
                 inbound_session = crm_session.start(
@@ -1204,11 +1281,9 @@ async def websocket_twilio(websocket: WebSocket):
 
                 # Send an initial AI greeting via TTS. It runs as a task, like a
                 # turn, so the reader keeps the socket: see `_run_greeting`.
-                greeting = (
-                    "Hi, I'm the admissions assistant. "
-                    "Ask me anything about Meridian University programs, "
-                    "tuition fees, or how to apply."
-                )
+                from app.voice_system_prompt import call_greeting
+
+                greeting = call_greeting(session.language, "inbound")
                 call.stream_sid = stream_sid or ""
                 call.call_sid = call_sid or ""
                 turn["task"] = _asyncio.create_task(_run_greeting(call, greeting))
@@ -1414,6 +1489,9 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 outbound_params = start_payload.get("customParameters") or {}
                 outbound_lead_id = str(outbound_params.get("leadId") or "")
                 outbound_phone = str(outbound_params.get("phone") or "")
+                outbound_language = str(outbound_params.get("language") or "").strip().lower()
+                if outbound_language:
+                    session.language = outbound_language
                 from app.crm import session as crm_session
 
                 outbound_session = crm_session.start(
@@ -1453,13 +1531,9 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 # Send an initial AI greeting via TTS — identify caller + reason
                 # per the voice system prompt's outbound section. A task, for the
                 # same reasons as inbound: see `_run_greeting`.
-                from app.voice_system_prompt import AGENT_NAME, COMPANY_NAME
+                from app.voice_system_prompt import call_greeting
 
-                greeting = (
-                    f"Hi, this is {AGENT_NAME} calling from {COMPANY_NAME} "
-                    f"Admissions. Do you have a moment to talk about our "
-                    f"programs, tuition fees, or how to apply?"
-                )
+                greeting = call_greeting(session.language, "outbound")
                 call.stream_sid = stream_sid or ""
                 call.call_sid = call_sid or ""
                 turn["task"] = _asyncio.create_task(_run_greeting(call, greeting))
@@ -1553,7 +1627,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
 @app.api_route("/twilio/outbound-voice", methods=["GET", "POST"])
 async def twilio_outbound_voice_webhook(
-    leadId: str = Query(""), phone: str = Query("")
+    leadId: str = Query(""), phone: str = Query(""), language: str = Query("")
 ):
     """
     Twilio fetches this URL when an outbound call is answered.
@@ -1570,10 +1644,12 @@ async def twilio_outbound_voice_webhook(
 
     from app.outbound.twiml import outbound_connect_twiml
 
-    twiml = outbound_connect_twiml(host, {"leadId": leadId, "phone": phone})
+    twiml = outbound_connect_twiml(
+        host, {"leadId": leadId, "phone": phone, "language": language}
+    )
     logger.info(
         f"/twilio/outbound-voice: serving TwiML with host={host}, "
-        f"lead={'set' if leadId else 'none'}"
+        f"lead={'set' if leadId else 'none'}, language={language or 'default'}"
     )
     return Response(content=twiml, media_type="application/xml")
 
@@ -1676,7 +1752,7 @@ async def twilio_outbound_status_callback(
 # ── HTTP: TwiML voice webhook ────────────────────────────────────────
 
 @app.get("/twilio/voice")
-async def twilio_voice_webhook(From: str = Query("")):
+async def twilio_voice_webhook(From: str = Query(""), language: str = Query("")):
     """
     Twilio voice webhook — serves IVR menu first.
     After the caller presses a digit (or timeout), connects to /ws/twilio.
@@ -1702,13 +1778,23 @@ async def twilio_voice_webhook(From: str = Query("")):
                         d.live, d.limit)
             return Response(content=_busy_twiml(host), media_type="application/xml")
 
-    twiml = TWIML_IVR_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
+    twiml = TWIML_IVR_TEMPLATE.format(
+        host=host,
+        stream=_stream_markup(host, From, language or settings.DEFAULT_LANGUAGE),
+        # A dedicated Twilio number can pin the language with ?language=hi.
+        # Digits 1/2/3 select per call; an unknown digit keeps the default.
+        action=(
+            f"/twilio/voice/connect?language={quote(language)}"
+            if language else "/twilio/voice/connect"
+        ),
+    )
     logger.info(f"/twilio/voice: serving IVR menu with host={host}, caller={'set' if From else 'unknown'}")
     return Response(content=twiml, media_type="application/xml")
 
 
 @app.get("/twilio/voice/connect")
-async def twilio_voice_connect(Digits: str = "", From: str = Query("")):
+async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
+                               language: str = Query("")):
     """
     Called by Twilio after IVR <Gather> completes.
     Connects the caller to the AI WebSocket stream.
@@ -1734,8 +1820,16 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query("")):
                         d.live, d.limit)
             return Response(content=_busy_twiml(host), media_type="application/xml")
 
-    logger.info(f"/twilio/voice/connect: digit={Digits}, host={host}, caller={'set' if From else 'unknown'}")
-    twiml = TWIML_TEMPLATE.format(host=host, stream=_stream_markup(host, From))
+    chosen_language = _language_for_call(
+        Digits, language or settings.DEFAULT_LANGUAGE
+    )
+    logger.info(
+        f"/twilio/voice/connect: digit={Digits}, language={chosen_language}, "
+        f"host={host}, caller={'set' if From else 'unknown'}"
+    )
+    twiml = TWIML_TEMPLATE.format(
+        host=host, stream=_stream_markup(host, From, chosen_language)
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -2049,6 +2143,7 @@ async def _whatsapp_chat_rag(
     history: list[str] | None = None,
     profile: dict | None = None,
     program: str = "",
+    language: str | None = None,
 ) -> str:
     """
     RAG answer for WhatsApp text chat using the chat-oriented prompt
@@ -2080,6 +2175,7 @@ async def _whatsapp_chat_rag(
             retrieval_query=retrieval_query,
             history=history,
             profile=profile,
+            language=language,
         )
         if answer:
             return answer
@@ -2321,6 +2417,7 @@ async def twilio_whatsapp_webhook(
     From: str = Form(default=""),
     To: str = Form(default=""),
     WaId: str = Form(default=""),
+    Language: str = Form(default=""),
 ):
     """
     Twilio WhatsApp webhook — receives incoming text, image, or document messages.
@@ -2440,6 +2537,10 @@ async def twilio_whatsapp_webhook(
                 "Program of interest": lead_program,
             },
             program=lead_program,
+            language=(
+                (Language.strip().lower() if isinstance(Language, str) else "")
+                or settings.DEFAULT_LANGUAGE
+            ),
         )
 
     # An explicit "my name is X" / "call me X" is an instruction, and it has to
@@ -3384,6 +3485,28 @@ async def api_health():
     return JSONResponse({"status": "ok"})
 
 
+def _ready_with_stt(payload: dict) -> dict:
+    """Attach the STT/TTS provider chains to the readiness payload (non-secret)."""
+    out = dict(payload)
+    try:
+        from app import stt as stt_registry
+
+        out["stt"] = stt_registry.health()
+    except Exception as exc:                    # noqa: BLE001
+        out["stt"] = {"error": str(exc)}
+    try:
+        from app import tts_sarvam
+
+        out["tts"] = {
+            "provider": settings.TTS_PROVIDER,
+            "sarvam": tts_sarvam.health(),
+            "kokoro_voice": settings.KOKORO_VOICE,
+        }
+    except Exception as exc:                    # noqa: BLE001
+        out["tts"] = {"error": str(exc)}
+    return out
+
+
 @app.get("/ready")
 async def api_ready(refresh: int = 0):
     """US-007 Phase 1.1: the boot gate's own verdict, readable at call time.
@@ -3399,7 +3522,7 @@ async def api_ready(refresh: int = 0):
 
     global _readiness_cache
     if refresh != 1 and _readiness_cache is not None:
-        return JSONResponse(_readiness_cache)
+        return JSONResponse(_ready_with_stt(_readiness_cache))
     async with _readiness_lock:
         if refresh == 1:
             if _readiness_cache is None:
@@ -3415,7 +3538,7 @@ async def api_ready(refresh: int = 0):
         if "status" not in _readiness_cache:
             _readiness_cache["status"] = (
                 "ready" if _readiness_cache.get("ready") else "not_ready")
-        return JSONResponse(_readiness_cache)
+        return JSONResponse(_ready_with_stt(_readiness_cache))
 
 
 @app.get("/api/perf/policy")
@@ -3435,16 +3558,13 @@ async def api_perf_policy():
     """
     from app.admission import status as admission_status
     from app.work_priority import policy_status
-    # A3 (2026-09-19): the retrieval breaker's state, beside the other two.
-    # `mcp_rag_status()` is a pure in-memory snapshot (no HTTP, no blocking
-    # call) -- US-013 built a three-state breaker no operator could read, and
-    # this makes it readable on the same surface as admission and priority.
-    from app.rag_mcp import mcp_rag_status
+    from app.llm_backend import health as llm_health
 
     return JSONResponse({
         "admission": admission_status(),
         "work_priority": policy_status(),
-        "retrieval": mcp_rag_status(),
+        "retrieval": {"removed": True, "context_mode": settings.CONTEXT_MODE},
+        "llm": llm_health(),
     })
 
 

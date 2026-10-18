@@ -41,22 +41,17 @@ PROFILE_MARKER_CLOSE = "# === END MACHINE PROFILE ==="
 #: Keys managed inside the block, in canonical order. Everything else in
 #: .env is never touched.
 MANAGED_KEYS = [
-    "LLM_PROVIDER",
-    "MLX_MODEL",
-    "MLX_EMBED_MODEL",
-    "OLLAMA_MODEL",
-    "OLLAMA_NUM_CTX",
-    "WHISPER_MODEL",
+    # WHISPER_MODEL is deliberately NOT managed: multilingual STT requires
+    # "small"/"medium" (not "small.en"), and predeploy must not rewrite it back
+    # to an English-only tier value.
     "WHISPER_NUM_THREADS",
     "FASTAPI_WORKERS",
-    "RAG_TOP_K",
-    "RAG_FETCH_K",
 ]
 
 SNAPSHOT_FILENAME = ".machine_profile.json"
 
-#: Default values used for keys that are inert on the active provider
-#: (e.g. OLLAMA_MODEL on an MLX machine) — keeps the block uniform.
+#: Defaults retained for the tier tables below. The local LLM/RAG tiers are
+#: inert now; the tables are kept because Whisper/worker sizing still uses them.
 DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-14B-Instruct-4bit"
 DEFAULT_MLX_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b-instruct-q3_K_M"

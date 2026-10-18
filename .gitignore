@@ -27,8 +27,12 @@ app/static/audio/
 Thumbs.db
 Desktop.ini
 
-# ChromaDB (large binary files)
+# ChromaDB (large binary files) — legacy data; runtime no longer uses it
 chroma_local_db/
+
+# Benchmark artifacts and Indic-TTS checkpoints (~1.5 GB per language)
+doc/perf/results/
+tts_service/checkpoints/
 
 # Pytest
 .pytest_cache/

@@ -44,25 +44,6 @@ from app.config import settings
 
 PROJ = Path(__file__).resolve().parent.parent
 
-#: A prefill at or below this is a cache hit, not a fresh evaluation. The
-#: measured cold prefill for the voice prompt is ~2,900 ms and the measured
-#: warm one is ~50 ms, so the gap is two orders of magnitude and the exact
-#: threshold is not delicate.
-PREFIX_WARM_MS = 400.0
-
-#: `ollama.ps` reports `expires_at` years out when keep_alive=-1. Used only to
-#: decide whether to call residency "held indefinitely" in the report.
-#:
-#: NOTE (US-011): this constant has no reader anywhere in the repository. The
-#: warming path imports `app.llm_backend.KEEP_ALIVE` instead, which is the
-#: RESOLVED value — an int -1, because Ollama's duration parser rejects the
-#: string "-1" with a 400 on every request. So this is not a spare copy of that
-#: value but a differently-typed one: any future caller that picks it up would
-#: send the string and break every call. It is migrated rather than deleted
-#: because removing a module-level name is a separate decision; it should
-#: probably go.
-KEEP_ALIVE_FOREVER = settings.OLLAMA_KEEP_ALIVE
-
 
 @dataclass
 class ServiceState:
@@ -97,15 +78,7 @@ class Readiness:
 # ── Clause 1 — services listening ──────────────────────────────────────────
 
 def load_env() -> None:
-    """Load `.env` before anything reads it.
-
-    Must happen before `app.llm_backend` / `app.rag` are imported: both snapshot
-    their settings at import time (`KEEP_ALIVE`, `OLLAMA_NUM_CTX`,
-    `OLLAMA_TEMPERATURE`). Warming with the wrong `num_ctx` or temperature would
-    warm a DIFFERENT prefix than the one the caller hits, and clause 3 would
-    then be confirming the wrong thing — the exact failure this story exists to
-    prevent. Idempotent; never raises.
-    """
+    """Load `.env` before anything reads it. Idempotent; never raises."""
     try:
         from dotenv import load_dotenv
 
@@ -115,19 +88,16 @@ def load_env() -> None:
 
 
 def default_services() -> list[tuple[str, str, int, bool, str]]:
-    """(name, host, port, blocks_readiness, degrades) for every tracked service.
+    """(name, host, port, blocks_readiness, degrades) for tracked services.
 
-    Hosts are the literal IPv4 loopback on purpose: on this box a connect to
-    `::1` does not fail fast, so a `localhost` probe would add ~2 s per dead
-    service and make a not-ready report look like a hang.
+    RAG/ERC and Ollama were removed. FastAPI blocks readiness; Postgres is
+    reported because it degrades post-call lead persistence, not a live turn.
+    Hosts are the literal IPv4 loopback: ``localhost`` costs ~2 s when the
+    target is down on this box.
     """
     return [
-        ("FastAPI",   "127.0.0.1", settings.FASTAPI_PORT,           True,  ""),
-        ("Ollama",    "127.0.0.1", 11434,                           True,
-         "no inference at all - every turn fails"),
-        ("ERC MCP",   "127.0.0.1", 8010,                            False,
-         "retrieval falls back to the local Chroma store (MOD-02)"),
-        ("Postgres",  "127.0.0.1", 5432,                            False,
+        ("FastAPI",   "127.0.0.1", settings.FASTAPI_PORT, True,  ""),
+        ("Postgres",  "127.0.0.1", 5432,                  False,
          "lead persistence and CRM sync (MOD-05, post-call)"),
     ]
 
@@ -190,114 +160,48 @@ def gpu_clock_state() -> dict:
     return out
 
 
-# ── Clause 3 — the real voice prompt, warmed and confirmed ─────────────────
-
-def build_warm_prompt() -> str:
-    """The prompt the serving path actually sends on a first turn.
-
-    Byte-identical to `app.rag.query_rag`'s voice branch with empty retrieval,
-    which is the state a boot-time warm can honestly reproduce. The prefix that
-    matters is the system prompt; per TAC-4 the cache break point sits at the
-    `{context}` insertion, so warming with the no-context marker warms the
-    whole system-prompt prefix.
-    """
-    from app.voice_system_prompt import build_voice_system_prompt
-
-    return build_voice_system_prompt("")
-
-
-def _ollama_chat(prompt: str, model: str, num_ctx: int,
-                 temperature: float | None, keep_alive) -> dict:
-    """One chat call with the SAME shape the serving path uses.
-
-    Sent through `ollama.chat` rather than raw HTTP so `num_ctx`, the message
-    shape and the template are byte-identical to a real turn — otherwise the
-    warmed prefix is not the prefix the caller will hit.
-    """
-    import ollama
-
-    options: dict = {"num_ctx": int(num_ctx)}
-    if temperature is not None:
-        options["temperature"] = float(temperature)
-    return ollama.chat(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        options=options,
-        keep_alive=keep_alive,
-    )
-
-
-def ollama_ps(base_url: str = "http://127.0.0.1:11434") -> list[dict]:
-    """The engine's own statement of what is resident. [] on any failure."""
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/ps", timeout=5) as resp:
-            return json.loads(resp.read()).get("models", [])
-    except Exception:
-        return []
-
+# ── Clause 3 — remote provider reachability ───────────────────────────────
 
 def warm_and_confirm(model: str | None = None,
                      num_ctx: int | None = None,
                      temperature: float | None = None) -> dict:
-    """Submit the real voice prompt twice; confirm warmth from the engine.
+    """Confirm the remote provider is reachable.
 
-    Returns a dict carrying both prefills, the load duration, the residency
-    evidence and a `warm` verdict. The two numbers are reported so the operator
-    reads evidence rather than a boolean this module asserts about itself.
+    There is no local runner to warm and no ``/api/ps`` residency to confirm:
+    the local backends were removed. The blocking claim is an OpenAI
+    reachability probe; a failed call reaches the fixed-response path.
     """
-    from app.llm_backend import KEEP_ALIVE, default_model, pick_model
-    from app.rag import OLLAMA_NUM_CTX, OLLAMA_TEMPERATURE
+    from app.llm_backend import LLM_MODEL, is_ready, provider_name
 
-    model = model or pick_model(default_model(("qwen2.5:7b-instruct-q3_K_M",
-                                               "qwen2.5:7b-instruct",
-                                               "qwen2.5:7b")))
-    num_ctx = int(num_ctx if num_ctx is not None else OLLAMA_NUM_CTX)
-    if temperature is None and OLLAMA_TEMPERATURE:
-        try:
-            temperature = float(OLLAMA_TEMPERATURE)
-        except (TypeError, ValueError):
-            temperature = None
-
-    out: dict = {"model": model, "num_ctx": num_ctx, "warm": False,
-                 "first_prefill_ms": None, "confirm_prefill_ms": None,
-                 "load_ms": None, "error": None}
     try:
-        prompt = build_warm_prompt()
-        out["prompt_chars"] = len(prompt)
-
-        first = _ollama_chat(prompt, model, num_ctx, temperature, KEEP_ALIVE)
-        out["first_prefill_ms"] = round(first.get("prompt_eval_duration", 0) / 1e6, 1)
-        out["load_ms"] = round(first.get("load_duration", 0) / 1e6, 1)
-        out["prompt_eval_count"] = first.get("prompt_eval_count")
-
-        # Same bytes, same options. If the prefix landed in the KV cache this
-        # prefill collapses; if it did not, it stays cold and warmth is refused.
-        confirm = _ollama_chat(prompt, model, num_ctx, temperature, KEEP_ALIVE)
-        out["confirm_prefill_ms"] = round(
-            confirm.get("prompt_eval_duration", 0) / 1e6, 1)
-        out["confirm_load_ms"] = round(confirm.get("load_duration", 0) / 1e6, 1)
-
-        first_ms, confirm_ms = out["first_prefill_ms"], out["confirm_prefill_ms"]
-        out["warm"] = bool(
-            confirm_ms <= PREFIX_WARM_MS
-            or (first_ms > 0 and confirm_ms <= first_ms * 0.5)
-        )
-        out["speedup"] = (round(first_ms / confirm_ms, 1)
-                          if confirm_ms else None)
+        provider_name()
     except Exception as exc:                      # noqa: BLE001 — boot boundary
-        out["error"] = f"{type(exc).__name__}: {exc}"
+        return {
+            "provider": settings.LLM_PROVIDER,
+            "model": LLM_MODEL,
+            "num_ctx": None,
+            "warm": False,
+            "resident": False,
+            "first_prefill_ms": None,
+            "confirm_prefill_ms": None,
+            "load_ms": None,
+            "resident_detail": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
-    resident = ollama_ps()
-    hit = next((m for m in resident if m.get("name") == model
-                or m.get("model") == model), None)
-    out["resident"] = hit is not None
-    out["resident_detail"] = ({
-        "expires_at": hit.get("expires_at"),
-        "size_bytes": hit.get("size"),
-        "size_vram": hit.get("size_vram"),
-        "context_length": hit.get("context_length"),
-    } if hit else None)
-    return out
+    ready = is_ready()
+    return {
+        "provider": "openai",
+        "model": LLM_MODEL,
+        "num_ctx": None,
+        "warm": ready,
+        "resident": ready,
+        "first_prefill_ms": None,
+        "confirm_prefill_ms": None,
+        "load_ms": None,
+        "resident_detail": None,
+        "error": None if ready else "OpenAI API not reachable",
+    }
 
 
 # ── Clause 4 — every managed key has a reader ──────────────────────────────
@@ -362,31 +266,6 @@ def effective_config_rows() -> list[dict]:
 
 # ── The gate ───────────────────────────────────────────────────────────────
 
-def check_embed_residency(base_url: str = "http://127.0.0.1:11434") -> dict:
-    """The retrieval embed model's residency, from the engine (A5, 2026-09-19).
-
-    Every retrieval depends on `EMBED_MODEL` (nomic-embed-text), and its lease
-    used to be the server's 5-minute default on every embed request, so the
-    first retrieval of each session paid a cold embed load (~1-3 s on this
-    box) that nothing reported. The lease is now held on the embed path; this
-    check asserts residency so a lapse is a named, visible degradation instead
-    of an invisible first-turn cost. Reported, never blocking: a cold embed
-    slows retrieval, it does not fail it (TAC-7 philosophy).
-    """
-    from app.llm_backend import EMBED_MODEL
-
-    out: dict = {"model": EMBED_MODEL, "resident": False, "detail": None}
-    ps = ollama_ps(base_url)
-    hit = next((m for m in ps if str(m.get("name", "")).split(":")[0]
-                == EMBED_MODEL.split(":")[0]), None)
-    out["resident"] = hit is not None
-    if hit:
-        out["detail"] = {"expires_at": hit.get("expires_at"),
-                         "size_bytes": hit.get("size"),
-                         "size_vram": hit.get("size_vram")}
-    return out
-
-
 def assess(do_warm: bool = True) -> Readiness:
     """Evaluate all four clauses. Never raises; never assumes success."""
     load_env()
@@ -405,15 +284,9 @@ def assess(do_warm: bool = True) -> Readiness:
         r.prefix = warm_and_confirm()
         if r.prefix.get("error"):
             r.clauses["prefix"] = False
-            r.missing.append(f"prefix warm failed — {r.prefix['error']}")
-        elif not r.prefix.get("warm"):
-            r.clauses["prefix"] = False
-            r.missing.append(
-                "prompt prefix NOT warm — engine prefill "
-                f"{r.prefix.get('confirm_prefill_ms')} ms on an identical "
-                f"repeat (warm means <= {PREFIX_WARM_MS:.0f} ms)")
+            r.missing.append(f"remote provider unreachable — {r.prefix['error']}")
         else:
-            r.clauses["prefix"] = True
+            r.clauses["prefix"] = bool(r.prefix.get("warm"))
         r.model = {"model": r.prefix.get("model"),
                    "resident": r.prefix.get("resident"),
                    "detail": r.prefix.get("resident_detail"),
@@ -421,25 +294,15 @@ def assess(do_warm: bool = True) -> Readiness:
         r.clauses["residency"] = bool(r.prefix.get("resident"))
         if not r.clauses["residency"]:
             r.missing.append(
-                f"model {r.prefix.get('model')} is NOT resident per /api/ps")
-        # AC-3 scenario 2. A card reporting its idle clock immediately after a
-        # successful warm call means the warm did not actually wake it — a
-        # resident-but-parked model is exactly the state that makes a "first
-        # call is warm" claim false. UNKNOWN never fails the gate.
-        r.gpu = gpu_clock_state()
-        if r.gpu.get("available") and r.gpu.get("idle"):
-            r.clauses["residency"] = False
-            r.missing.append(
-                f"GPU is idle-clocked at {r.gpu['mem_mhz']} of "
-                f"{r.gpu['max_mem_mhz']} MHz after the warm — the model is "
-                f"resident but the card is parked")
+                f"model {r.prefix.get('model')} is NOT reachable at the "
+                "configured OpenAI endpoint")
+        r.gpu = {"skipped": "remote provider"}
     else:
-        ps = ollama_ps()
-        r.model = {"model": None, "resident": bool(ps),
-                   "detail": {"models": [m.get("name") for m in ps]}}
-        r.clauses["residency"] = bool(ps)
+        r.model = {"model": None, "resident": False,
+                   "detail": {"provider": "openai"}}
+        r.clauses["residency"] = False
         r.clauses["prefix"] = False
-        r.prefix = {"skipped": "--no-warm: prefix warmth NOT verified"}
+        r.prefix = {"skipped": "--no-warm: remote reachability NOT verified"}
 
     r.config = check_config_keys()
     r.clauses["config_keys"] = not (r.config.get("without_reader")
@@ -474,14 +337,9 @@ def assess(do_warm: bool = True) -> Readiness:
     except Exception as exc:                          # noqa: BLE001
         r.degraded.append(f"call assets: check failed ({type(exc).__name__}: {exc})")
 
-    # A5 (2026-09-19): the retrieval embed model is asserted too -- reported,
-    # never blocking (a cold embed slows the first retrieval, it does not fail
-    # it). The chat model's residency remains the blocking clause 2.
-    r.embed = check_embed_residency()
-    if not r.embed.get("resident"):
-        r.degraded.append(
-            f"embed model {r.embed.get('model')} is NOT resident per /api/ps — "
-            f"the first retrieval of the next call pays a cold embed load")
+    # RAG/embeddings were removed; the document is passed in full. No embed
+    # residency has any meaning here.
+    r.embed = {"skipped": "RAG removed; CONTEXT_MODE=doc"}
 
     r.ready = all(r.clauses.values())
     return r
@@ -506,9 +364,9 @@ def refresh_payload(cached: dict, fresh: Readiness) -> dict:
     d["clauses"]["prefix"] = (dict(cached).get("clauses") or {}).get("prefix", False)
     d["ready"] = bool(d["clauses"]) and all(d["clauses"].values())
     d["status"] = "ready" if d["ready"] else "not_ready"
-    d["basis"] = ("cheap re-assessment (services/residency/gpu/config) at call time; "
-                  "the prefix clause is carried from the boot assessment - a poll "
-                  "never re-warms")
+    d["basis"] = ("cheap re-assessment (services/remote reachability/config) at "
+                  "call time; the prefix clause is carried from the boot "
+                  "assessment - a poll never re-warms")
     return d
 
 
@@ -516,8 +374,8 @@ def render(r: Readiness) -> str:
     ok = lambda b: "OK  " if b else "FAIL"          # noqa: E731
     lines = ["", "== READINESS " + ("READY" if r.ready else "NOT READY") + " " + "=" * 40]
     lines.append(f"  [{ok(r.clauses.get('services'))}] clause 1  turn-path services listening")
-    lines.append(f"  [{ok(r.clauses.get('residency'))}] clause 2  model resident, confirmed by the engine")
-    lines.append(f"  [{ok(r.clauses.get('prefix'))}] clause 3  prompt prefix warm, confirmed by prefill")
+    lines.append(f"  [{ok(r.clauses.get('residency'))}] clause 2  OpenAI endpoint reachable")
+    lines.append(f"  [{ok(r.clauses.get('prefix'))}] clause 3  remote completion reachable")
     lines.append(f"  [{ok(r.clauses.get('config_keys'))}] clause 4  every managed key has a reader")
     lines.append("")
     lines.append("  services:")
@@ -532,17 +390,9 @@ def render(r: Readiness) -> str:
             if k in r.prefix:
                 lines.append(f"    {k:<18} {r.prefix[k]}")
     if r.embed:
-        verdict = "resident" if r.embed.get("resident") else "NOT RESIDENT"
-        lines.append(f"  embed model: {r.embed.get('model')} -> {verdict} "
-                     f"(reported; degrades the first retrieval when cold)")
+        lines.append(f"  embeddings: {r.embed.get('skipped') or 'removed'}")
     if r.gpu:
-        g = r.gpu
-        if g.get("available"):
-            verdict = "IDLE-CLOCKED (parked)" if g.get("idle") else "awake"
-            lines.append(f"  gpu: mem clock {g['mem_mhz']} of {g['max_mem_mhz']} MHz "
-                         f"-> {verdict}")
-        else:
-            lines.append(f"  gpu: UNKNOWN — {g.get('detail') or 'nvidia-smi unavailable'}")
+        lines.append(f"  gpu: {r.gpu.get('skipped') or 'not used for remote inference'}")
     if r.config:
         lines.append(f"  config: {r.config.get('checked')} keys checked, "
                      f"{r.config.get('unread_count', 0)} without a reader, "

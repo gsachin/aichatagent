@@ -781,3 +781,99 @@ def build_voice_system_prompt(context: str | None) -> str:
             bool(settings.BARGE_IN_ENABLED)
         ],
     )
+
+
+#: Human names for the language codes the demo accepts. Indic-TTS covers the
+#: 13 AI4Bharat languages; Kokoro covers the rest. An unknown code is passed
+#: through to the model as-is rather than silently forced to English.
+LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "as": "Assamese",
+    "bn": "Bengali",
+    "brx": "Bodo",
+    "gu": "Gujarati",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "mni": "Manipuri",
+    "mr": "Marathi",
+    "or": "Odia",
+    "raj": "Rajasthani",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "ja": "Japanese",
+    "pt": "Portuguese",
+    "zh": "Chinese",
+}
+
+
+#: Fixed opening scripts. They are spoken through the same TTS provider as the
+#: answer: Gujarati via Bulbul, Hindi via Kokoro hf_alpha. Keeping the text
+#: here means the language that selects the voice also selects the script.
+_INBOUND_GREETING = {
+    "en": (
+        "Hi, I'm the admissions assistant. Ask me anything about "
+        "{company_name} programs, tuition fees, or how to apply."
+    ),
+    "hi": (
+        "नमस्ते, मैं एडमिशन सहायक हूँ। {company_name} के कोर्स, फीस या "
+        "एडमिशन के बारे में कुछ भी पूछिए।"
+    ),
+    "gu": (
+        "નમસ્તે, હું એડમિશન સહાયક છું. {company_name} ના કોર્સ, ફી અથવા "
+        "એડમિશન વિશે કંઈ પણ પૂછો."
+    ),
+}
+
+_OUTBOUND_GREETING = {
+    "en": (
+        "Hi, this is {agent_name} calling from {company_name} Admissions. "
+        "Do you have a moment to talk about our programs, tuition fees, or "
+        "how to apply?"
+    ),
+    "hi": (
+        "नमस्ते, मैं {company_name} एडमिशन से {agent_name} बोल रहा हूँ। "
+        "क्या आपके पास हमारे कोर्स, फीस या एडमिशन के बारे में बात करने के "
+        "लिए एक मिनट है?"
+    ),
+    "gu": (
+        "નમસ્તે, હું {company_name} એડમિશનમાંથી {agent_name} બોલું છું. "
+        "શું તમારી પાસે અમારા કોર્સ, ફી અથવા એડમિશન વિશે વાત કરવા એક "
+        "મિનિટ છે?"
+    ),
+}
+
+
+def call_greeting(language: str | None, direction: str = "inbound") -> str:
+    """The opening script in the call's language (English fallback)."""
+    code = (language or "en").strip().lower().split("-", 1)[0]
+    table = _OUTBOUND_GREETING if direction == "outbound" else _INBOUND_GREETING
+    template = table.get(code, table["en"])
+    return template.format(agent_name=AGENT_NAME, company_name=COMPANY_NAME)
+
+
+def language_instruction(language: str | None) -> str:
+    """The per-turn answer-language rule.
+
+    Deliberately returned as a USER-turn suffix (see ``_build_llm_prompt``) so
+    the system prompt + document prefix stays byte-identical across languages
+    and remains eligible for OpenAI prompt caching. Proper nouns and numbers
+    stay in Latin script so the existing grounding boundary can still match
+    them against the English knowledge base.
+    """
+    code = (language or "en").strip().lower()
+    name = LANGUAGE_NAMES.get(code, code or "English")
+    return (
+        f"Answer in {name}. Use natural, conversational {name} with simple, "
+        f"everyday words. Translate every sentence, heading, label and list item into "
+        f"{name}. Keep only these in Latin script: Meridian University, degree "
+        "abbreviations such as B.Tech, MBA, BCA and B.Com, numbers, currency "
+        "amounts, email addresses and URLs. Translate programme fields and "
+        f"research areas into {name}. Do not leave English words, headings or "
+        f"sentences in the answer. If the document has no answer, say so in "
+        f"{name}. This instruction overrides any earlier instruction about "
+        "language, citations or formatting."
+    )

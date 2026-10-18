@@ -43,9 +43,8 @@ os.chdir(PROJ)
 #: call to the engine, a full TTS synthesis, a model load, a retrieval.
 BLOCKING = {
     "generate_ulaw_greeting",   # Kokoro synthesis, and a cold model load
-    "backend_chat",             # synchronous HTTP to Ollama
-    "run_rag_query_sync",       # the whole RAG+LLM chain
-    "_retrieve_context",        # retrieval, sync
+    "backend_chat",             # synchronous HTTP to OpenAI
+    "run_rag_query_sync",       # document context + LLM chain
     "_get_tts_engine",          # loads the ONNX model
     "_get_stt_model",           # loads faster-whisper
 

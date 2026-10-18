@@ -1,5 +1,11 @@
 # University Admissions Voice AI — Project Summary, Pipeline & Model Inventory
 
+> **2026-10-17 migration:** RAG/embeddings and the local Ollama/MLX LLM were
+> removed. `CONTEXT_MODE=doc` passes
+> `content/meridian/meridian_knowledge_base.md` in full on every turn, and every
+> LLM call goes to OpenAI. Sections below that still describe Chroma/MCP
+> retrieval or local models are historical design notes, not the running system.
+
 **Product:** Meridian University Admissions Voice AI Assistant
 **Repo:** `D:\project\universityDemo`
 **Audience:** anyone who needs to explain what this system does, how a call flows
@@ -34,10 +40,13 @@ Around the conversation it does the admissions back-office work:
 | Admin dashboard (Streamlit) | `app/dashboard/` |
 | MCP tool server for external agents | `app/mcp/` |
 
-**Design stance:** everything AI runs **locally**. No call audio, transcript, or
-student record leaves the host — the LLM, speech-to-text, text-to-speech, and
-embeddings are all self-hosted. The only outbound traffic is Twilio (the phone
-carrier) and the university's own CRM.
+**Current demo posture (2026-10):** the demo deliberately opts into two external
+services. `LLM_PROVIDER=openai` sends the prompt — including the caller's
+utterance, known facts, and the full knowledge base in `CONTEXT_MODE=doc` — to
+the OpenAI API, and `STT_PROVIDER=sarvam` sends each caller utterance's audio to
+Sarvam Saaras v4. Both are explicit switches with key checks; the local chain
+(`STT_PROVIDER=indic_conformer` or `whisper`) keeps audio on the host. Review
+retention/redaction and obtain consent before using either outside a demo.
 
 ---
 
@@ -77,7 +86,7 @@ carrier) and the university's own CRM.
    └────────────┬─────────────┘
                 ▼
    ┌──────────────────────────┐
-   │ 8. Text-to-Speech        │  Kokoro ONNX (voice af_heart) → PCM → µ-law
+   │ 8. Text-to-Speech        │  Sarvam Bulbul (gu) / Kokoro (en,hi) → PCM → µ-law
    └────────────┬─────────────┘
                 ▼
               audio back to the caller ──▶ (loop back to step 1, listening)
@@ -148,15 +157,43 @@ hears no difference; nothing is guessed.
 
 ### Stage 3 — Speech-to-text
 
-**faster-whisper** (CTranslate2 runtime, not stock PyTorch Whisper).
+The live path tries providers in the order configured by `STT_PROVIDER` then
+`STT_FALLBACK_PROVIDERS`; a provider failure is logged and the next one is tried.
 
-- Model: `WHISPER_MODEL=small.en` (English-only, small variant)
-- Device: CUDA when `CUDA_VISIBLE_DEVICES` is set, else CPU
-- Compute type: `int8` on CUDA, `float32` on CPU
-- Threads: `WHISPER_NUM_THREADS=4` (machine-sized by `scripts/predeploy.py`)
-- Loaded **once per process** and shared by every concurrent call
+1. **Sarvam Saaras v4** (`STT_PROVIDER=sarvam`, the demo default) — REST
+   `POST /speech-to-text`, `mode=codemix`, automatic language detection, and up
+   to 50 domain keyterms (Meridian, B.Tech, MBA, fees, …). 8 kHz telephony is
+   supported natively. Speculative STT is disabled for this provider: a
+   speculative pass would send and bill the same utterance twice.
+2. **AI4Bharat IndicConformer-600M** (`indic_conformer`) — offline fallback via
+   `onnx-asr` int8 ONNX, Hindi and Gujarati models (~138 MB each), CPU. No
+   keyterms; it is deliberately second.
+3. **faster-whisper** (`whisper`) — last resort, `WHISPER_MODEL` (`small` in
+   `.env`), CTranslate2 CUDA int8 / CPU float32, loaded once per process.
 
-Apple Silicon has no CTranslate2 Metal backend, so the platform layer maps
+Local benchmark on 15 synthetic domain utterances round-tripped through 8 kHz
+µ-law (`doc/perf/tools/benchmark_asr.py`, 2026-10-17, live Sarvam key). WER and
+CER are **domain-normalised**: "MBA"/"एमबीए", "fees"/"फीस", "B.Tech"/"बीटेक"
+are canonicalised before scoring. Raw WER for Sarvam is 0.250 only because its
+`codemix` output keeps English terms in Latin while the reference is
+Devanagari; the domain score is the fair comparison. The intent proxy asks
+whether the domain term the intent layer keys on survived; it is not the LLM
+policy layer.
+
+| Provider | WER (domain) | CER (domain) | Entity recall | Intent proxy | p50 | p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| **Sarvam Saaras v4** | **0.052** | **0.040** | **0.85** | **1.00** | **424 ms** | **472 ms** |
+| IndicConformer 600M (hi+gu) | 0.066 | 0.070 | 0.77 | 0.87 | 780 ms | 1136 ms |
+| faster-whisper `small` | 0.584 | 1.240 | 0.12 | 0.20 | 545 ms | 2269 ms |
+
+Sarvam wins on every quality metric and is roughly twice as fast as the local
+fallback. The Whisper row is the live pre-2026-10 failure: on Gujarati it
+returned WER 1.0, and on Hindi it lost almost every programme name. The
+benchmark is re-runnable with
+`--providers sarvam,indic_conformer,whisper`; generated clips and results live
+under `doc/perf/results/`.
+
+Apple Silicon has no CTranslate2 Metal backend, so the Whisper path maps
 `mps → cpu + int8` (NEON-accelerated) rather than failing.
 
 ### Stage 4 — Noise and quality gate (pre-LLM guardrails)
@@ -223,7 +260,12 @@ retrieval degrades.
 
 ### Stage 7 — LLM generation
 
-**Ollama**, at a literal IPv4 address (`127.0.0.1`, never `localhost`).
+**Default: Ollama**, at a literal IPv4 address (`127.0.0.1`, never
+`localhost`). **Opt-in: OpenAI Chat Completions** (`LLM_PROVIDER=openai`,
+`LLM_MODEL=gpt-6-luna`) — no local fallback; a failed remote call reaches the
+pre-rendered fixed-response path.
+
+#### Local (default, unchanged)
 
 | Setting | Value | Why |
 |---|---|---|
@@ -247,6 +289,29 @@ Two hard-won constraints are encoded here:
    which silently undid the boot pre-warm and produced a measured 32.9 s cold load
    *with working pre-warm code in the repo*.
 
+#### Remote (opt-in: `LLM_PROVIDER=openai`)
+
+- OpenAI Chat Completions, default `gpt-6-luna`; both batch (`chat`) and
+  streaming (`generate_stream`) map to the same contract as the Ollama path.
+- `LLM_FALLBACK_PROVIDER=none` is the declared policy: on failure the caller
+  hears the pre-rendered fixed response; no second local model is called.
+- `CONTEXT_MODE=doc` passes the full
+  `content/meridian/meridian_knowledge_base.md` (~15 KB / ~3.2k tokens) every
+  turn instead of retrieving chunks. `DOC_MAX_BYTES=2,000,000` and
+  `DOC_MAX_TOKENS=500,000` are guards for future documents; the current KB is
+  far below both. Chroma and the MCP retrieval service are not on the path.
+- The answer-language instruction is appended to the **user** turn, so the
+  system-prompt + document prefix stays byte-identical across languages and
+  remains eligible for OpenAI prompt caching.
+- OpenAI reports token usage but not engine prefill/decode durations;
+  `EngineCounters` carries the counts and `None` durations (never fabricated
+  zeros). TTFT remains a wall-clock mark in `perf_trace`.
+- Gujarati output uses Sarvam Bulbul v4 Flash (`TTS_PROVIDER=sarvam`,
+  `SARVAM_TTS_LANGUAGES=gu`); English and Hindi stay on Kokoro. The isolated
+  AI4Bharat Indic-TTS service remains an optional local fallback
+  (`TTS_PROVIDER=indic_tts`). Qwen3-TTS does not support any Indic language and
+  is not used.
+
 **Streaming** (`LLM_STREAM`) is available and the generation is consumed as token
 deltas, cut into complete clauses by `ClauseCutter` so TTS can start on the first
 clause while the model is still decoding. A clause ends on sentence punctuation
@@ -255,7 +320,21 @@ boundary rule the TTS sentence splitter uses, so a clause is never re-split.
 
 ### Stage 8 — Text-to-speech
 
-**Kokoro v1.0 ONNX** (`kokoro_onnx`), run on `onnxruntime`.
+**Gujarati: Sarvam Bulbul v4 Flash** (`TTS_PROVIDER=sarvam`,
+`SARVAM_TTS_LANGUAGES=gu`). `POST /text-to-speech/stream` with
+`language_code=gu-IN`, persona `pooja_gu_customer`,
+`output_audio_codec=linear16`, `speech_sample_rate=8000`, `pace=1.1`. The
+response is raw 8 kHz PCM, the carrier rate, so `_pcm_to_ulaw_chunks` has no
+resampling to do. Measured 2026-10-17: **582 ms first chunk**, 1.36 s total for
+5.13 s of audio; a round-trip through ASR recovered the sentence with
+`Meridian University` and `B.Com` preserved. Gujarati voices:
+`pooja_gu_customer`, `pooja_gu_conversational`, `bhavik_gu_conversation`.
+Kokoro has no Gujarati voice, so there is no local Gujarati fallback: if
+Bulbul fails, the turn uses the fixed-response path rather than reading
+Gujarati text with an English voice.
+
+**All other languages: Kokoro v1.0 ONNX** (`kokoro_onnx`), run on
+`onnxruntime`.
 
 - Voice: `af_heart` (configurable), speed `1.0`, clamped to `[0.5, 2.0]`
 - Execution provider: **requests CUDA, then reports what the session actually
@@ -298,14 +377,19 @@ caller-facing failure.
 
 ## 4. What we use in AI — by function
 
+> **Historical inventory.** The LLM and speech rows below predate the 2026-10
+> OpenAI/Sarvam migration. The live LLM is OpenAI (`app/llm_backend.py`), and
+> the live STT chain is Stage 3 above. The rest of this section is retained for
+> the local-fallback design and is not the current request path.
+
 | Function | Technology | Kind |
 |---|---|---|
-| Speech recognition | faster-whisper (CTranslate2) | Neural, encoder-decoder transformer |
+| Speech recognition | Sarvam Saaras v4 → IndicConformer 600M → faster-whisper | Neural (cloud/ONNX/CTranslate2) |
 | Language understanding & answer generation | Ollama-served LLM (llama3.2:3b) | Neural, decoder-only transformer |
 | Knowledge retrieval | enterprise-rag-core: hybrid dense + BM25, RRF fusion | Vector search + lexical ranking |
 | Reranking | cross-encoder MiniLM (INT8 ONNX) | Neural cross-encoder |
 | Embeddings | nomic-embed-text (768-dim) | Neural, served by Ollama |
-| Speech synthesis | Kokoro v1.0 ONNX | Neural TTS |
+| Speech synthesis | Sarvam Bulbul v4 Flash (Gujarati) / Kokoro v1.0 ONNX (other languages) | Neural TTS |
 | End-of-speech detection | RMS energy counter | **Deterministic** — no model |
 | Echo / barge-in gate | RMS ratio vs decaying playback envelope | **Deterministic** — no model |
 | Noise rejection | logprob + probabilities + regex | **Deterministic** |
@@ -332,8 +416,11 @@ machine's GPU.
 
 | Model | Role | Runtime | Where |
 |---|---|---|---|
-| `faster-whisper small.en` | Speech-to-text | CTranslate2 (CUDA int8 / CPU float32) | `app/voice_handler.py` |
-| Kokoro `kokoro-v1.0.onnx` + `voices-v1.0.bin` | Text-to-speech, voice `af_heart` | onnxruntime (CUDA → CPU fallback) | `app/voice_handler.py` |
+| Sarvam Saaras v4 | Speech-to-text (primary in the demo) | Sarvam REST API | `app/stt_sarvam.py` |
+| `IndicConformer-600M` int8 ONNX (hi, gu) | Speech-to-text (offline fallback) | onnx-asr / onnxruntime CPU | `app/stt_indic.py` |
+| `faster-whisper` `small` | Speech-to-text (last resort) | CTranslate2 (CUDA int8 / CPU float32) | `app/voice_handler.py` |
+| Sarvam Bulbul v4 Flash | Gujarati text-to-speech, persona `pooja_gu_customer` | Sarvam HTTP streaming (8 kHz linear16) | `app/tts_sarvam.py` |
+| Kokoro `kokoro-v1.0.onnx` + `voices-v1.0.bin` | Text-to-speech for English/Hindi, voice `af_heart` | onnxruntime (CUDA → CPU fallback) | `app/voice_handler.py` |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (INT8 ONNX, 22 MiB) | Reranking retrieved chunks | onnxruntime | `enterprise-rag-core` |
 | `mlx-community/Qwen2.5-14B-Instruct-4bit` | **macOS Apple Silicon alternative** to Ollama | `mlx_lm.server` | `app/llm_backend.py` |
 | `nomic-ai/nomic-embed-text-v1.5` | macOS embedding alternative | transformers / sentence-transformers | `app/llm_backend.py` |

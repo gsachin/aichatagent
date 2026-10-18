@@ -48,7 +48,7 @@ ENV PATH=/root/.local/bin:$PATH
 COPY . /app
 
 # Create necessary directories
-RUN mkdir -p /app/logs /app/chroma_local_db /app/models
+RUN mkdir -p /app/logs /app/models
 
 # Verify installation
 RUN python -c "import torch; import streamlit; import fastapi; print('✓ All dependencies installed')"

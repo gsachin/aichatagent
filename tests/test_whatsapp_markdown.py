@@ -47,10 +47,11 @@ def test_whatsapp_chat_rag_passes_history_and_profile(monkeypatch):
 
     seen = {}
 
-    def fake(q, mode="voice", retrieval_query=None, history=None, profile=None):
+    def fake(q, mode="voice", retrieval_query=None, history=None, profile=None,
+             language=None):
         seen.update(
             q=q, mode=mode, retrieval_query=retrieval_query,
-            history=history, profile=profile,
+            history=history, profile=profile, language=language,
         )
         return "**Fees** are $18,500 & <competitive>"
 
@@ -82,7 +83,8 @@ def test_retrieval_query_keeps_a_program_the_question_names(monkeypatch):
 
     seen = {}
 
-    def fake(q, mode="voice", retrieval_query=None, history=None, profile=None):
+    def fake(q, mode="voice", retrieval_query=None, history=None, profile=None,
+             language=None):
         seen["retrieval_query"] = retrieval_query
         return "ok"
 

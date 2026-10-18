@@ -131,6 +131,18 @@ class Settings:
     WHISPER_NUM_THREADS: int = field(
         default_factory=lambda: _env_int("WHISPER_NUM_THREADS", 4)
     )
+    # auto = let Whisper detect the spoken language per utterance (requires a
+    # multilingual model such as "small"/"medium", not "small.en"). A fixed
+    # code (en/hi/gu/...) forces that language for STT.
+    STT_LANGUAGE: str = field(
+        default_factory=lambda: _env("STT_LANGUAGE", "auto").strip().lower()
+    )
+    # Detection below this probability keeps the session's previous language.
+    # Short phone utterances can score low; the value is deliberately
+    # configurable and logged on every turn.
+    STT_LANGUAGE_MIN_PROB: float = field(
+        default_factory=lambda: _env_float("STT_LANGUAGE_MIN_PROB", 0.5)
+    )
     # A presence check, not a value: `_get_stt_model` picks cuda when this is
     # set and non-empty. Kept as the raw string so the truthiness test is
     # unchanged — "0" selects cuda here exactly as it did before, which is the
@@ -139,7 +151,104 @@ class Settings:
         default_factory=lambda: _env("CUDA_VISIBLE_DEVICES", "")
     )
 
-    # ── Text-to-speech (Kokoro) ─────────────────────────────────────
+    # ── STT provider (2026-10) ──────────────────────────────────────
+    # whisper          — local faster-whisper, the historical path
+    # sarvam           — Sarvam Saaras v4 REST (Indic-first, 8 kHz telephony)
+    # indic_conformer  — AI4Bharat IndicConformer-600M via onnx-asr (offline)
+    # The fallback list is tried in order when the primary fails. Whisper is
+    # always last-resort (the loop does not add it implicitly).
+    STT_PROVIDER: str = field(
+        default_factory=lambda: _env("STT_PROVIDER", "whisper").strip().lower()
+    )
+    STT_FALLBACK_PROVIDERS: str = field(
+        default_factory=lambda: _env(
+            "STT_FALLBACK_PROVIDERS", "indic_conformer,whisper"
+        ).strip().lower()
+    )
+    # Sarvam's REST endpoint accepts <=30 s; the session sends one utterance.
+    SARVAM_API_KEY: str = field(default_factory=lambda: _env("SARVAM_API_KEY", ""))
+    SARVAM_STT_URL: str = field(
+        default_factory=lambda: _env(
+            "SARVAM_STT_URL", "https://api.sarvam.ai/speech-to-text"
+        )
+    )
+    SARVAM_STT_MODEL: str = field(
+        default_factory=lambda: _env("SARVAM_STT_MODEL", "saaras:v4")
+    )
+    # codemix keeps English words (B.Tech, MBA, fees) in Latin script, which is
+    # both natural for Indian callers and compatible with the grounding boundary.
+    SARVAM_STT_MODE: str = field(
+        default_factory=lambda: _env("SARVAM_STT_MODE", "codemix")
+    )
+    SARVAM_STT_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("SARVAM_STT_TIMEOUT_S", 8.0)
+    )
+    # Comma-separated; empty uses the built-in Meridian domain list.
+    SARVAM_STT_KEYTERMS: str = field(
+        default_factory=lambda: _env("SARVAM_STT_KEYTERMS", "")
+    )
+    # Offline fallback. The OpenVoiceOS repositories are the ONNX exports of
+    # AI4Bharat's IndicConformer; int8 is ~138 MB per language.
+    INDIC_CONFORMER_MODEL_HI: str = field(
+        default_factory=lambda: _env(
+            "INDIC_CONFORMER_MODEL_HI",
+            "OpenVoiceOS/ai4bharat-indicconformer-hi-onnx",
+        )
+    )
+    INDIC_CONFORMER_MODEL_GU: str = field(
+        default_factory=lambda: _env(
+            "INDIC_CONFORMER_MODEL_GU",
+            "OpenVoiceOS/ai4bharat-indicconformer-gu-onnx",
+        )
+    )
+    INDIC_CONFORMER_QUANTIZATION: str = field(
+        default_factory=lambda: _env("INDIC_CONFORMER_QUANTIZATION", "int8")
+    )
+    # cpu | cuda. CPU int8 is ~0.25 RTF on this box and avoids contention with
+    # Kokoro/Whisper on the 16 GB card.
+    INDIC_CONFORMER_DEVICE: str = field(
+        default_factory=lambda: _env("INDIC_CONFORMER_DEVICE", "cpu").strip().lower()
+    )
+    # Cloud STT is billed per request; a speculative pass would bill the same
+    # utterance twice. The live dispatch disables speculation for sarvam.
+    STT_SPECULATIVE_ENABLED: bool = field(
+        default_factory=lambda: _env("STT_SPECULATIVE_ENABLED", "1").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+
+    # ── Text-to-speech (Kokoro / Sarvam Bulbul) ─────────────────────
+    # kokoro | sarvam | indic_tts. `sarvam` routes only the languages in
+    # SARVAM_TTS_LANGUAGES; every other language stays on Kokoro. The demo uses
+    # it for Gujarati, which Kokoro does not have a voice for.
+    SARVAM_TTS_LANGUAGES: str = field(
+        default_factory=lambda: _env("SARVAM_TTS_LANGUAGES", "gu").strip().lower()
+    )
+    SARVAM_TTS_MODEL: str = field(
+        default_factory=lambda: _env("SARVAM_TTS_MODEL", "bulbul:v4-flash")
+    )
+    SARVAM_TTS_URL: str = field(
+        default_factory=lambda: _env(
+            "SARVAM_TTS_URL", "https://api.sarvam.ai/text-to-speech/stream"
+        )
+    )
+    # Persona ID, not a short v3 name. Gujarati options:
+    #   pooja_gu_customer, pooja_gu_conversational, bhavik_gu_conversation.
+    SARVAM_TTS_SPEAKER: str = field(
+        default_factory=lambda: _env(
+            "SARVAM_TTS_SPEAKER", "pooja_gu_customer"
+        ).strip()
+    )
+    SARVAM_TTS_PACE: float = field(
+        default_factory=lambda: _env_float("SARVAM_TTS_PACE", 1.1)
+    )
+    # HTTP streaming accepts 8000-24000. 8000 is the Twilio carrier rate, so
+    # `_pcm_to_ulaw_chunks` has no resampling to do.
+    SARVAM_TTS_SAMPLE_RATE: int = field(
+        default_factory=lambda: _env_int("SARVAM_TTS_SAMPLE_RATE", 8000)
+    )
+    SARVAM_TTS_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("SARVAM_TTS_TIMEOUT_S", 15.0)
+    )
     # `.strip() or` and `.strip().lower()` are the call sites' own
     # normalisation, copied rather than re-invented so the value resolved here
     # is the one the synthesiser used.
@@ -339,26 +448,12 @@ class Settings:
         default_factory=lambda: _env_float("BARGE_IN_REF_DECAY", 0.95)
     )
 
-    # ── LLM backend: Ollama ─────────────────────────────────────────
-    # The literal IPv4 default is deliberate, not a shortcut: on this platform
-    # "localhost" resolves to ::1 first and Ollama binds IPv4 only, so the
-    # refused IPv6 connect burns ~2,066 ms in SYN retransmits before Python
-    # falls back — paid on every model-resolution and embedding call.
-    OLLAMA_URL: str = field(
-        default_factory=lambda: _env("OLLAMA_URL", "http://127.0.0.1:11434")
+    # ── Prompt sizing / streaming ────────────────────────────────────
+    # Retained for call-site compatibility: OpenAI's context window is
+    # model-defined, but the utility calls still pass this as a size hint.
+    SMALL_TASK_NUM_CTX: int = field(
+        default_factory=lambda: _env_int("SMALL_TASK_NUM_CTX", 8192)
     )
-    OLLAMA_MODEL: str = field(
-        default_factory=lambda: _env("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-    )
-    # The single source of truth for the default context window. 8192 is what
-    # the production voice system prompt (~3.5k tokens) plus RAG context needs;
-    # scripts/predeploy.py sizes it per machine.
-    OLLAMA_NUM_CTX: int = field(default_factory=lambda: _env_int("OLLAMA_NUM_CTX", 8192))
-    # "" means "use the provider's own default": the call sites guard with
-    # `float(T) if T else None`, so the empty string must survive intact rather
-    # than being coerced to a number here.
-    OLLAMA_TEMPERATURE: str = field(default_factory=lambda: _env("OLLAMA_TEMPERATURE", ""))
-    EMBED_MODEL: str = field(default_factory=lambda: _env("EMBED_MODEL", "nomic-embed-text"))
     # US-004 streaming LLM, behind a flag; the batch path is retained unchanged
     # as the BRD-15 revert.
     LLM_STREAM: bool = field(
@@ -368,100 +463,97 @@ class Settings:
     LLM_PROVIDER: str = field(
         default_factory=lambda: _env("LLM_PROVIDER", "auto").strip().lower()
     )
-    # An escape hatch for a deliberate, MEASURED divergence — never a required
-    # key. It defaults to OLLAMA_NUM_CTX because Ollama tears a runner down
-    # whenever a request arrives with a different num_ctx, paying a full cold
-    # reload (~6-11 s measured on this box); five context sizes against one
-    # model meant the reload was paid constantly. Re-read from the same source
-    # rather than from the resolved field, so this stays correct whatever the
-    # field order becomes.
-    SMALL_TASK_NUM_CTX: int = field(
-        default_factory=lambda: int(
-            _env("SMALL_TASK_NUM_CTX", _env("OLLAMA_NUM_CTX", "8192"))
-        )
-    )
-    # The raw text, not the resolved value: Ollama's Go duration parser rejects
-    # "-1" as a duration, so an integer (including a negative one) has to be
-    # sent as an int while "24h" stays a string. `_resolve_keep_alive` decides
-    # that at the call site. Getting it wrong breaks every call, not merely
-    # residency.
-    OLLAMA_KEEP_ALIVE: str = field(
-        default_factory=lambda: _env("OLLAMA_KEEP_ALIVE", "-1")
-    )
 
-    # ── LLM backend: MLX (macOS Apple Silicon) ──────────────────────
-    MLX_BASE_URL: str = field(
-        default_factory=lambda: _env("MLX_BASE_URL", "http://127.0.0.1:1234")
+    # ── Remote LLM backend: OpenAI Chat Completions ──────────────────
+    # The only provider. ``auto`` is accepted as a migration alias and also
+    # resolves to OpenAI; a stale ollama/mlx value is a configuration error.
+    LLM_MODEL: str = field(
+        default_factory=lambda: _env("LLM_MODEL", "gpt-6-luna").strip()
     )
-    MLX_MODEL: str = field(
-        default_factory=lambda: _env("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
+    LLM_API_KEY: str = field(
+        default_factory=lambda: _env("LLM_API_KEY", "").strip()
     )
-    MLX_PORT: int = field(default_factory=lambda: _env_int("MLX_PORT", 1234))
-    MLX_EMBED_MODEL: str = field(
-        default_factory=lambda: _env("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
-    )
-    # mlx_lm.server has no context-size flag — max_tokens is the only output
-    # window control on the MLX path.
-    MLX_MAX_TOKENS: int = field(default_factory=lambda: _env_int("MLX_MAX_TOKENS", 2048))
-
-    # ── Retrieval / knowledge base ──────────────────────────────────
-    # Absolute and derived from the repo root, not the CWD, exactly as the call
-    # sites did — a relative default here would move with the process's working
-    # directory. A relative value IN .env still resolves against the CWD, which
-    # is the call sites' behaviour preserved, not an oversight.
-    CHROMA_DB_PATH: str = field(
+    LLM_BASE_URL: str = field(
         default_factory=lambda: _env(
-            "CHROMA_DB_PATH", str(Path(__file__).resolve().parent.parent / "chroma_local_db")
-        )
+            "LLM_BASE_URL", "https://api.openai.com/v1"
+        ).strip() or "https://api.openai.com/v1"
     )
-    # Chunking is markdown-aware; these are the legacy defaults.
-    RAG_CHUNK_SIZE: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 600))
-    RAG_CHUNK_OVERLAP: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 90))
-    # Retrieval.
-    RAG_FETCH_K: int = field(default_factory=lambda: _env_int("RAG_FETCH_K", 20))
-    RAG_TOP_K: int = field(default_factory=lambda: _env_int("RAG_TOP_K", 5))
-    # Optional features — every one defaults to the pre-existing behaviour.
-    RAG_SEARCH_MODE: str = field(default_factory=lambda: _env("RAG_SEARCH_MODE", "mmr"))
-    # Cosine distance; 0.0 = disabled.
-    RAG_SIMILARITY_THRESHOLD: float = field(
-        default_factory=lambda: _env_float("RAG_SIMILARITY_THRESHOLD", 0.0)
+    LLM_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("LLM_TIMEOUT_S", 15.0)
     )
-    # 0 = off.
-    RAG_MAX_CONTEXT_CHARS: int = field(
-        default_factory=lambda: _env_int("RAG_MAX_CONTEXT_CHARS", 0)
+    LLM_MAX_TOKENS: int = field(
+        default_factory=lambda: _env_int("LLM_MAX_TOKENS", 192)
     )
-    # Output-token ceiling for the SPOKEN answer. 192 comes from the measured
-    # answer-length distribution, not from taste: over 83 golden-set cases the
-    # 95th percentile was 106 tokens (qwen2.5:14b) and 82 (llama3.2:3b), so a
-    # ceiling of 192 truncates none of them while bounding the worst case —
-    # the one thing an unbounded generation cannot give a live call. 0 or a
-    # negative removes the ceiling.
-    OLLAMA_NUM_PREDICT: int = field(
-        default_factory=lambda: _env_int_or("OLLAMA_NUM_PREDICT", 192)
+    # Empty = do not send a temperature at all. OpenAI reasoning models
+    # (including the default gpt-6-luna) reject non-default values with a 400,
+    # so the safe default is "omit"; set a value only for a model that accepts
+    # it.
+    LLM_TEMPERATURE: str = field(
+        default_factory=lambda: _env("LLM_TEMPERATURE", "").strip()
+    )
+    # "" means "do not send a token ceiling" (used by structured extraction).
+    LLM_REASONING_EFFORT: str = field(
+        default_factory=lambda: _env("LLM_REASONING_EFFORT", "none").strip().lower()
+    )
+    LLM_PROMPT_CACHE_KEY: str = field(
+        default_factory=lambda: _env("LLM_PROMPT_CACHE_KEY", "").strip()
+    )
+    # Escape hatch for a gateway that rejects ``stream_options``. OpenAI's own
+    # Chat Completions endpoint supports it; the usage-only final chunk is
+    # what supplies token counts on the streamed path.
+    LLM_STREAM_INCLUDE_USAGE: bool = field(
+        default_factory=lambda: _env("LLM_STREAM_INCLUDE_USAGE", "1")
+        .strip().lower() in ("1", "true", "yes", "on")
+    )
+    # "none" is the declared policy: an OpenAI failure reaches the fixed
+    # response path; there is no second model.
+    # (The key is intentionally not read any more.)
+
+    # ── Document context (RAG removed) ───────────────────────────────
+    CONTEXT_MODE: str = field(
+        default_factory=lambda: _env("CONTEXT_MODE", "doc").strip().lower()
+    )
+    DOC_PATHS: str = field(
+        default_factory=lambda: _env(
+            "DOC_PATHS", "content/meridian/meridian_knowledge_base.md"
+        ).strip()
+    )
+    DOC_MAX_BYTES: int = field(
+        default_factory=lambda: _env_int("DOC_MAX_BYTES", 2_000_000)
+    )
+    DOC_MAX_TOKENS: int = field(
+        default_factory=lambda: _env_int("DOC_MAX_TOKENS", 500_000)
+    )
+    DEFAULT_LANGUAGE: str = field(
+        default_factory=lambda: _env("DEFAULT_LANGUAGE", "en").strip().lower()
+    )
+    SUPPORTED_LANGUAGES: str = field(
+        default_factory=lambda: _env("SUPPORTED_LANGUAGES", "en,hi").strip()
+    )
+    GROUNDING_LANGUAGE_MODE: str = field(
+        default_factory=lambda: _env(
+            "GROUNDING_LANGUAGE_MODE", "relaxed"
+        ).strip().lower()
     )
 
-    # ── MCP retrieval service ───────────────────────────────────────
-    RAG_MCP_URL: str = field(
-        default_factory=lambda: _env("RAG_MCP_URL", "http://127.0.0.1:8010/mcp")
+    # ── TTS provider selection ───────────────────────────────────────
+    # kokoro (default) preserves today's behaviour; `sarvam` routes the
+    # languages in SARVAM_TTS_LANGUAGES to Bulbul v4 Flash and leaves the rest
+    # on Kokoro; indic_tts is opt-in once the isolated service is running.
+    TTS_PROVIDER: str = field(
+        default_factory=lambda: _env("TTS_PROVIDER", "kokoro").strip().lower()
     )
-    # The read timeout; connect is fixed at 1.0s in the client. 6.0s, raised
-    # from 2.5s: under load ERC's embedding call queues behind Ollama
-    # generation, so a 2.5s read timeout fired on a service that answers in
-    # milliseconds — and the fallback then paid for a SECOND embedding. Waiting
-    # is strictly cheaper than timing out and re-retrieving locally.
-    RAG_MCP_TIMEOUT: float = field(
-        default_factory=lambda: _env_float("RAG_MCP_TIMEOUT", 6.0)
+    INDIC_TTS_URL: str = field(
+        default_factory=lambda: _env(
+            "INDIC_TTS_URL", "http://127.0.0.1:8020"
+        ).strip()
     )
-    # US-013 AC-2: a half-open probe gets a fraction of the serving budget, so
-    # rediscovering "still down" costs a fraction of a full timeout. The floor
-    # in `_timeout` keeps a probe from reading a merely-busy service as dead.
-    RAG_MCP_PROBE_FRACTION: float = field(
-        default_factory=lambda: _env_float("RAG_MCP_PROBE_FRACTION", 0.25)
+    INDIC_TTS_LANGUAGE: str = field(
+        default_factory=lambda: _env("INDIC_TTS_LANGUAGE", "hi").strip().lower()
     )
-    # Circuit-breaker cooldown.
-    RAG_MCP_COOLDOWN: float = field(
-        default_factory=lambda: _env_float("RAG_MCP_COOLDOWN", 30)
-    )
+
+    # ── LLM backend: OpenAI Chat Completions (the only provider) ─────
+    # (The local Ollama/MLX fields and RAG/embedding fields were removed.)
 
     # ── Logging ─────────────────────────────────────────────────────
     # `.strip().upper()` is the call site's normalisation. A value that is not

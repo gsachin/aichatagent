@@ -84,16 +84,19 @@ function Get-DotEnvValue {
     param([string]$Key, [string]$Default)
     $envFile = Join-Path $ProjectRoot ".env"
     if (-not (Test-Path $envFile)) { return $Default }
+    # LAST definition wins, matching python-dotenv. The previous first-wins
+    # loop disagreed with the app whenever a key appeared both inside the
+    # MACHINE PROFILE block and as a manual override after it.
+    $found = $Default
     foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
         $s = $line.Trim()
         if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
         $i = $s.IndexOf('=')
         if ($s.Substring(0, $i).Trim() -ne $Key) { continue }
         $v = $s.Substring($i + 1).Trim().Trim('"').Trim("'")
-        if ($v) { return $v }
-        return $Default
+        $found = if ($v) { $v } else { $Default }
     }
-    return $Default
+    return $found
 }
 
 function Get-DotEnvPort {
@@ -109,7 +112,6 @@ function Get-DotEnvPort {
 
 $FastAPIPort = Get-DotEnvPort -Key "FASTAPI_PORT" -Default 8000
 $StreamlitMainPort = Get-DotEnvPort -Key "STREAMLIT_PORT" -Default 8501
-$RagMcpPort = Get-DotEnvPort -Key "RAG_MCP_PORT" -Default 8010
 
 # ---- Port ownership -------------------------------------------------------
 function Stop-PortOwner {
@@ -395,7 +397,7 @@ if (-not $finalCheck) {
     Write-Err "Cannot kill cloudflared -- reboot may be needed"
 }
 
-foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort, $RagMcpPort)) {
+foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort)) {
     $null = Stop-PortOwner -Port $port
 }
 Write-OK "Process cleanup complete"
@@ -407,7 +409,7 @@ Write-OK "Cleared stale TUNNEL_HOST env var (server will read .whatsapp_tunnel f
 # ==== Step 2: Verify ports are free ========================================
 Write-Step "Step 2: Verifying ports are free"
 
-foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort, $RagMcpPort)) {
+foreach ($port in @($FastAPIPort, $StreamlitMainPort, $StreamlitDashboardPort, $CrmApiPort)) {
     $attempt = 0
     $portBusy = $true
     while ($portBusy -and $attempt -lt 10) {
@@ -694,104 +696,13 @@ if ((Test-Path $CrmApiRoot) -and (Test-Path $CrmPython)) {
     }
 }
 
-# ==== Step 6: Ollama model pre-warming ====================================
-Write-Step "Step 6: Ollama model pre-warming"
+# ==== Step 6: LLM pre-warming ============================================
+Write-Step "Step 6: LLM pre-warming"
+Write-OK "Remote LLM: OpenAI - no local model to load or warm"
 
-$ollamaUp = $false
-$ollamaCheck = curl.exe -s -o NUL -w "%{http_code}" "http://127.0.0.1:11434/api/tags" 2>$null
-if ($ollamaCheck -eq "200") {
-    Write-OK "Ollama is running"
-    $ollamaUp = $true
-} else {
-    # US-007 / AC-2: a skipped pre-warm is a NOT-READY condition, not a warning
-    # an operator can scroll past. The first call would otherwise pay the cold
-    # load (measured 32,919 ms) with a caller listening to silence.
-    Write-Err "Ollama not reachable on port 11434 -- the stack is NOT READY"
-    Write-Err "  Without the engine there is no inference at all. Start Ollama, then re-run."
-    $script:WarmNotReady = $true
-}
-
-if ($ollamaUp) {
-    # US-007 / AC-1: warm with THE REAL VOICE PROMPT, not the literal "ping".
-    # "ping" warms weights only; the prompt prefix -- the thing that makes the
-    # first turn fast -- stayed cold. `app.boot_readiness` builds the identical
-    # prompt the serving path sends (same builder, same num_ctx, same
-    # temperature, same keep_alive) and then CONFIRMS warmth from the engine's
-    # own prefill counters rather than from a log line this script wrote.
-    Write-OK "Pre-warming with the real voice prompt (prefix, not a placeholder) ..."
-    # `python -m app.<mod>` resolves the package from the CWD, and this script
-    # never sets one -- without this, an operator running it from anywhere but
-    # the repo root gets "No module named app". PROJ inside the module is
-    # derived from __file__, so .env resolves correctly either way.
-    Push-Location $ProjectRoot
-    try {
-        $readyJson = cmd /c "$PythonExe -m app.boot_readiness --json 2>&1"
-    } finally { Pop-Location }
-    try {
-        $readyState = ($readyJson | Out-String | ConvertFrom-Json)
-        $pfx  = $readyState.prefix
-        $load = if ($pfx.load_ms -ne $null) { $pfx.load_ms } else { "n/a" }
-        if ($pfx.warm) {
-            Write-OK ("  prefix warm: prefill {0} ms -> {1} ms on an identical repeat (x{2})" -f `
-                $pfx.first_prefill_ms, $pfx.confirm_prefill_ms, $pfx.speedup)
-            Write-OK ("  model resident: {0} (load {1} ms)" -f $pfx.model, $load)
-        } else {
-            Write-Err ("  prefix NOT warm: prefill {0} ms on an identical repeat" -f $pfx.confirm_prefill_ms)
-            Write-Err ("  detail: {0}" -f $pfx.error)
-            $script:WarmNotReady = $true
-        }
-    } catch {
-        Write-Err ("Pre-warm could not be verified: {0}" -f $_.Exception.Message)
-        Write-Err "  Raw output: $readyJson"
-        $script:WarmNotReady = $true
-    }
-}
-
-# ==== Step 6b: Enterprise RAG Core MCP service =============================
-Write-Step "Step 6b: Enterprise RAG Core MCP service"
-
-# Start the standalone RAG service AFTER Ollama pre-warm (first-ever-run
-# prepopulate embeds via Ollama). The ERC launcher self-heals its venv,
-# prepopulates the KB idempotently, and serves the MCP endpoint on :8010.
-# Failures are warn-only: the app falls back to local Chroma (auto mode).
-$ERCLauncher = Join-Path $ERCRoot "start_services.ps1"
-$ERCKb = Join-Path $ProjectRoot "content\meridian\meridian_knowledge_base.md"
-if ((Test-Path $ERCRoot) -and (Test-Path $ERCLauncher)) {
-    Write-OK ("Starting ERC MCP service via {0} ..." -f $ERCLauncher)
-    # Route the ERC launcher through cmd.exe with FILE redirection -- never a
-    # PowerShell output capture. A $out = powershell.exe ... 2>&1 capture
-    # pumps anonymous pipes; the launcher's MCP server (a long-lived
-    # grandchild) inherits those pipe write-handles, so the pipes never reach
-    # EOF and the capture hangs forever even after the launcher exits.
-    # Per-run log filename. File redirection solved the pipe hang above, but it
-    # hands the same long-lived grandchild an open handle to this file -- so
-    # with a fixed name it stays locked for as long as any server from the
-    # previous run is alive, and cmd.exe then cannot open the redirect target
-    # at all ("The process cannot access the file..."), so a stale
-    # erc_launcher.log gets dumped below as if it were this run's output.
-    # Step 1 freeing $RagMcpPort is what releases that handle; the unique name
-    # keeps the redirect safe even if a server somehow outlives the kill.
-    $ercLauncherLog = Join-Path $env:TEMP ("erc_launcher_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
-    # One log per launch would otherwise accumulate in TEMP forever.
-    Get-ChildItem (Join-Path $env:TEMP "erc_launcher_*.log") -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ERCLauncher`" -Port $RagMcpPort -KbPath `"$ERCKb`" -SkipPrepopulate > `"$ercLauncherLog`" 2>&1"
-    if ($LASTEXITCODE -eq 0) {
-        Write-OK ("ERC MCP service up: http://127.0.0.1:{0}/mcp (retrieval: MCP-first, automatic fallback)" -f $RagMcpPort)
-    } else {
-        Write-Warn "ERC launcher failed -- RAG falls back to local Chroma (auto mode)"
-        Write-Warn ("Full launcher log: {0}" -f $ercLauncherLog)
-        $ercTail = Get-Content $ercLauncherLog -Tail 5 -ErrorAction SilentlyContinue
-        if ($ercTail) {
-            $ercTail | ForEach-Object { Write-Warn $_ }
-        } else {
-            Write-Warn "  (launcher log is empty -- it never started; see the error above)"
-        }
-    }
-} else {
-    Write-Warn "enterprise-rag-core repo not found at $ERCRoot -- RAG falls back to local Chroma (auto mode)"
-}
+# ==== Step 6b: Retrieval service ==========================================
+Write-Step "Step 6b: Retrieval service"
+Write-OK "RAG removed - the full knowledge base is passed to OpenAI; no ERC/Chroma"
 
 # ==== Step 7: Start Cloudflare tunnel ======================================
 Write-Step "Step 7: Starting Cloudflare tunnel"
@@ -1043,8 +954,7 @@ if ($CrmApiProcess -and -not $CrmApiProcess.HasExited) {
 } else {
     Write-Host ("   Salesforce API:   {0}not started{1}  (expected at {0}{2}{1})" -f $YELLOW, $RESET, $CrmApiRoot)
 }
-Write-Host ("   Enterprise RAG Core: {0}{1}{2}  (repo: {0}https://github.com/gsachin/enterprise-rag-core{2})" -f $CYAN, $ERCRoot, $RESET)
-Write-Host ("     MCP service:       {0}http://127.0.0.1:{1}/mcp{2}  (retrieval: MCP-first, automatic fallback)" -f $CYAN, $RagMcpPort, $RESET)
+Write-Host ("   LLM:              {0}OpenAI (full-document context, no RAG){1}" -f $CYAN, $RESET)
 
 if ($WithStreamlit) {
     Write-Host ("   Dashboard:         {0}http://localhost:{1}{2}" -f $CYAN, $StreamlitDashboardPort, $RESET)

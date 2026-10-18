@@ -464,10 +464,13 @@ def test_a_genuine_answer_survives_untouched():
     assert _session().grounded(real) == real
 
 
-def test_the_boundary_still_fails_open_with_no_evidence():
+def test_the_boundary_still_fails_open_with_no_evidence(override_settings):
     """BUG-16. No evidence means no judgement, not "everything is invented"."""
     from app.voice_handler import VoiceCallSession
 
+    # Doc mode always carries the full document as evidence; this test is
+    # specifically the no-context case.
+    override_settings(CONTEXT_MODE="off")
     s = VoiceCallSession()
     s.note_unoffered("mechanical engineering program")
     said = "We have a mechanical engineering program."

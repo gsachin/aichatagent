@@ -8,9 +8,9 @@ Windows / macOS / cloud Linux:
   Phase C (INSTALL) — install whatever is missing (idempotent, never
                       downgrades, refuses destructive actions).
   Phase D (START)   — start services in dependency order (least dependent
-                      first): Docker -> PostgreSQL -> Ollama (+models) ->
-                      FastAPI -> Cloudflare tunnel -> Twilio updates ->
-                      Streamlit + per-port tunnels.
+                      first): Docker -> PostgreSQL -> FastAPI -> Cloudflare
+                      tunnel -> Twilio updates -> Streamlit + per-port tunnels.
+                      LLM generation is remote (OpenAI); no local model runs.
   Phase E (TWILIO)  — voice + status-callback webhooks via API; WhatsApp
                       sandbox instructions (console-only, no API).
 
@@ -49,9 +49,8 @@ VENV_PY = (
 IS_WINDOWS = platform.system() == "Windows"
 IS_MACOS = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
+IS_APPLE_SILICON = IS_MACOS and platform.machine() in ("arm64", "aarch64")
 
-REQUIRED_MODELS = ["qwen2.5:7b-instruct-q3_K_M", "nomic-embed-text"]
-OLLAMA_API = "http://127.0.0.1:11434"
 DOCKER_DESKTOP_WIN = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
 PIP_LOCK = ROOT / ".pip-install.lock"
 
@@ -66,27 +65,21 @@ DOCKER_CLI_PATHS = (
     Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe")),
     Path(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe"),
 )
-OLLAMA_CLI_PATHS = (
-    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")),
-)
 # Standalone exe fallback when the winget MSI fails (it hung on one machine).
 CLOUDFLARED_URL = ("https://github.com/cloudflare/cloudflared/releases/latest/download/"
                    "cloudflared-windows-amd64.exe")
 
-# Apple MLX backend (macOS Apple Silicon only — replaces Ollama there)
-MLX_MODEL = os.environ.get("MLX_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
-MLX_EMBED_MODEL = os.environ.get("MLX_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
-MLX_PORT = int(os.environ.get("MLX_PORT", "1234"))
-MLX_BASE_URL = os.environ.get("MLX_BASE_URL", f"http://127.0.0.1:{MLX_PORT}")
-IS_APPLE_SILICON = IS_MACOS and platform.machine() in ("arm64", "aarch64")
-
 
 def _llm_provider() -> str:
-    """'mlx' on Apple Silicon unless LLM_PROVIDER says otherwise, else 'ollama'."""
-    explicit = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
-    if explicit in ("mlx", "ollama"):
-        return explicit
-    return "mlx" if IS_APPLE_SILICON else "ollama"
+    """The generation provider. There is exactly one: OpenAI.
+
+    ``auto`` is accepted as a migration alias. A stale ollama/mlx value is
+    reported and ignored: the local backends and their models were removed.
+    """
+    explicit = _env_value("LLM_PROVIDER", "auto").strip().lower()
+    if explicit in ("ollama", "mlx"):
+        print(f"    WARNING: LLM_PROVIDER={explicit!r} was removed; using OpenAI")
+    return "openai"
 
 
 def _env_value(key: str, default: str) -> str:
@@ -112,17 +105,10 @@ def _env_value(key: str, default: str) -> str:
         return default
 
 
-def _hf_model_cached(model_id: str) -> bool:
-    """Filesystem-only check that a HuggingFace model is fully downloaded."""
-    org, repo = model_id.split("/", 1)
-    hub = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-    return (hub / f"models--{org}--{repo}").is_dir()
-
 # winget package IDs (Windows)
 WINGET_PACKAGES = {
     "python": "Python.Python.3.11",
     "docker": "Docker.DockerDesktop",
-    "ollama": "Ollama.Ollama",
     "cloudflared": "Cloudflare.cloudflared",
     "ffmpeg": "Gyan.FFmpeg",
 }
@@ -183,17 +169,6 @@ def _find_docker() -> str | None:
     if found:
         return found
     for p in DOCKER_CLI_PATHS:
-        if p.is_file():
-            return str(p)
-    return None
-
-
-def _find_ollama() -> str | None:
-    """Locate ollama.exe: PATH first, then the default per-user install dir."""
-    found = shutil.which("ollama")
-    if found:
-        return found
-    for p in OLLAMA_CLI_PATHS:
         if p.is_file():
             return str(p)
     return None
@@ -361,69 +336,13 @@ def check_docker() -> bool:
     return daemon_ok and compose_ok
 
 
-def _ollama_models() -> list:
-    data = _http_get(f"{OLLAMA_API}/api/tags")
-    if data is None:
-        return []
-    try:
-        return [m.get("name", "") for m in json.loads(data).get("models", [])]
-    except Exception:
-        return []
-
-
-def _missing_models(models: list, required: list | None = None) -> list:
-    """Tags may carry suffixes (nomic-embed-text:latest) — match by prefix."""
-    required = required if required is not None else REQUIRED_MODELS
-    return [
-        m for m in required
-        if not any(name == m or name.startswith(m + ":") for name in models)
-    ]
-
-
-def _mlx_models_served() -> list:
-    data = _http_get(f"{MLX_BASE_URL}/v1/models")
-    if data is None:
-        return []
-    try:
-        return [m.get("id", "") for m in json.loads(data).get("data", [])]
-    except Exception:
-        return []
-
-
 def check_llm() -> bool:
-    """Verify the active LLM backend (MLX on Apple Silicon, Ollama elsewhere)."""
-    if _llm_provider() == "mlx":
-        if not _hf_model_cached(MLX_MODEL):
-            err(f"MLX model not downloaded: {MLX_MODEL} (install phase pulls it)")
-            return False
-        if not _port_listening(MLX_PORT):
-            warn(f"MLX model cached but server not serving on :{MLX_PORT}")
-            return False
-        served = _mlx_models_served()
-        if served and not any(m.startswith(MLX_MODEL) for m in served):
-            warn(f"MLX server serving different model: {served[0]}")
-            return False
-        ok(f"MLX server up on :{MLX_PORT} serving {MLX_MODEL}")
-        return True
-
-    if not _find_ollama():
-        err("ollama binary not found (PATH + default install locations)")
+    """Verify the remote OpenAI configuration. No local model is checked."""
+    key = _env_value("LLM_API_KEY", "")
+    if not key:
+        err("LLM_API_KEY is empty (OpenAI is the only provider)")
         return False
-    if not _port_listening(11434):
-        warn("Ollama installed but not serving on :11434")
-        return False
-    models = _ollama_models()
-    missing = _missing_models(models)
-    if missing:
-        # /api/tags can return a transient partial list right after a
-        # restart — re-query once before warning.
-        time.sleep(2)
-        models = _ollama_models()
-        missing = _missing_models(models)
-    if missing:
-        warn(f"Ollama up, missing models: {missing}")
-        return False
-    ok(f"Ollama up with {len(models)} models (required present)")
+    ok("OpenAI configured (remote); no local LLM service is required")
     return True
 
 
@@ -501,19 +420,8 @@ def check_venv() -> bool:
     return False
 
 
-def check_rag_store() -> bool:
-    store = ROOT / "chroma_local_db"
-    if store.is_dir() and any(store.iterdir()):
-        ok("RAG vector store present (chroma_local_db/)")
-        return True
-    warn("RAG vector store missing/empty — will be rebuilt from content/meridian")
-    return False
-
-
 def check_ports() -> None:
     ports = [("8000 (FastAPI)", 8000), ("8501 (Chatbot)", 8501), ("8502 (Dashboard)", 8502)]
-    if _llm_provider() == "mlx":
-        ports.append((f"{MLX_PORT} (MLX LLM)", MLX_PORT))
     for name, port in ports:
         if _port_listening(port):
             warn(f"port {port} in use ({name}) — may already be running")
@@ -545,8 +453,6 @@ def install_windows() -> None:
             warn("Docker Desktop installed — starting it now (first start may take minutes)")
         # User-scope installs never touch the running shell's PATH — repair it.
         ensure_docker_on_path()
-    if not _find_ollama():
-        _winget(WINGET_PACKAGES["ollama"])
     if not which("cloudflared"):
         if not _winget(WINGET_PACKAGES["cloudflared"]):
             _install_cloudflared_manual()
@@ -560,8 +466,8 @@ def install_macos() -> None:
         warn("Homebrew missing — install with:")
         print('    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
         return
-    # Note: no ollama on macOS — the LLM runs on Apple MLX (mlx-lm,
-    # installed via pip into .venv by ensure_venv/requirements markers).
+    # Note: no local LLM on macOS; generation is remote (OpenAI).
+    # Whisper/TTS still use the local Python stack.
     for pkg in ("python@3.11", "cloudflared", "ffmpeg"):
         if not which(pkg):
             run(["brew", "install", pkg])
@@ -587,9 +493,6 @@ def install_linux() -> None:
         if not which("docker"):
             err("docker still not on PATH — open a new shell and re-run")
             sys.exit(1)
-    if not which("ollama"):
-        run(["curl", "-fsSL", "https://ollama.com/install.sh", "-o", "/tmp/install-ollama.sh"])
-        run(["sh", "/tmp/install-ollama.sh"])
     if not which("cloudflared"):
         # Official Cloudflare apt repository
         run(["bash", "-c",
@@ -697,17 +600,9 @@ def ensure_venv() -> None:
 #: explicit stale value in .env is the only way left to still get the slow
 #: behaviour -- and nothing else in the stack would ever report it. That
 #: silence is exactly how these regressions hid the first time.
-PERF_ENV_TRAPS = (
-    ("OLLAMA_URL", ("http://localhost:11434", "localhost:11434"), "http://127.0.0.1:11434",
-     "'localhost' resolves to ::1 first, Ollama binds IPv4 only, so every "
-     "model-resolution call burns ~2,066 ms in SYN retransmits"),
-    ("RAG_MCP_TIMEOUT", ("2.5",), "6.0",
-     "2.5 s fires on ERC while it is queued behind generation, then the "
-     "fallback pays for a second embedding"),
-    ("OLLAMA_KEEP_ALIVE", ("300", "5m", "5min"), "-1",
-     "a 5-minute expiry unloads the model between calls; the next caller "
-     "pays a cold reload"),
-)
+PERF_ENV_TRAPS = ()
+# Ollama/RAG latency traps were removed with the local backend. Kept as an
+# empty tuple so the existing check_perf_env caller stays simple.
 
 
 def check_perf_env(env_text: str) -> list[str]:
@@ -749,100 +644,14 @@ def ensure_env_file() -> None:
 
 
 def ensure_llm_up() -> bool:
-    """Start the LLM backend for this platform (MLX server or Ollama)."""
-    if _llm_provider() == "mlx":
-        return _ensure_mlx_up()
-    return _ensure_ollama_up()
-
-
-def _ensure_mlx_up() -> bool:
-    # Model from .env (predeploy may have sized it for this machine).
-    model = _env_value("MLX_MODEL", MLX_MODEL)
-    if _port_listening(MLX_PORT):
-        return True
-    if DRY_RUN:
-        print(f"    $ start mlx_lm.server on :{MLX_PORT} (model {model})")
-        return True
-    if not VENV_PY.is_file():
-        warn("no venv — cannot start the MLX server; run full bootstrap first")
-        return False
-    logs = ROOT / "logs"
-    logs.mkdir(exist_ok=True)
-    _detach(
-        [str(VENV_PY), "-m", "mlx_lm.server", "--model", model,
-         "--host", "127.0.0.1", "--port", str(MLX_PORT)],
-        logs / "mlx_server.log",
-    )
-    # First load of a 14B model can take well over a minute.
-    return _wait_for(
-        "MLX server", lambda: _http_get(f"{MLX_BASE_URL}/v1/models") is not None,
-        90, 2, f"MLX server up on :{MLX_PORT} serving {MLX_MODEL}")
-
-
-def _ensure_ollama_up() -> bool:
-    if _port_listening(11434):
-        return True
-    if DRY_RUN:
-        print("    $ (start ollama service)")
-        return True
-    if IS_MACOS:
-        run(["brew", "services", "start", "ollama"], check=False)
-    elif IS_LINUX:
-        run(["systemctl", "enable", "--now", "ollama"], check=False)
-    elif IS_WINDOWS:
-        exe = Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"))
-        if exe.is_file():
-            print("    launching Ollama app...")
-            subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            warn("Ollama app not found at the default path — start it manually")
-    return _wait_for("Ollama API", lambda: _port_listening(11434), 30, 2, "Ollama serving")
+    """The LLM is remote; there is no local backend to start."""
+    ok("remote LLM (OpenAI) - nothing to start locally")
+    return True
 
 
 def ensure_models() -> None:
-    # Model names come from .env — scripts/predeploy.py sizes them per
-    # machine before this runs, so the sized model gets pulled/warmed.
-    if _llm_provider() == "mlx":
-        step("Ensuring MLX models (HuggingFace downloads)")
-        if not VENV_PY.is_file():
-            warn("no venv — cannot download MLX models; run full bootstrap first")
-            return
-        required = (
-            _env_value("MLX_MODEL", MLX_MODEL),
-            _env_value("MLX_EMBED_MODEL", MLX_EMBED_MODEL),
-        )
-        for model_id in required:
-            if _hf_model_cached(model_id):
-                ok(f"model cached: {model_id}")
-                continue
-            print(f"    downloading {model_id} (one-time, several GB)...")
-            run([str(VENV_PY), "-c",
-                 f"from huggingface_hub import snapshot_download; "
-                 f"snapshot_download('{model_id}')"])
-            ok(f"downloaded {model_id}")
-        return
-
-    required = [
-        _env_value("OLLAMA_MODEL", REQUIRED_MODELS[0]),
-        _env_value("EMBED_MODEL", REQUIRED_MODELS[1]),
-    ]
-    ollama = _find_ollama()
-    if not ollama:
-        err("ollama binary not found (PATH + default install locations) — cannot pull models")
-        return
-    models = _ollama_models()
-    missing = _missing_models(models, required)
-    for m in required:
-        if m not in missing:
-            ok(f"model present: {m}")
-        else:
-            print(f"    pulling {m} (one-time, several GB)...")
-            r = run([ollama, "pull", m], check=False)
-            if r is None or r.returncode == 0:
-                ok(f"pulled {m}")
-            else:
-                warn(f"pull of {m} failed (another pull may be in progress) — "
-                     "re-run to finish model downloads")
+    """The LLM is remote; there are no local models to download."""
+    ok("remote LLM (OpenAI) - no local model downloads")
 
 
 def ensure_machine_profile() -> None:
@@ -878,19 +687,6 @@ def ensure_postgres() -> bool:
         [docker, "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
         capture_output=True).returncode == 0,
         30, 2, "PostgreSQL ready")
-
-
-def ensure_rag_store() -> None:
-    store = ROOT / "chroma_local_db"
-    if store.is_dir() and any(store.iterdir()):
-        ok("RAG store present — skip rebuild")
-        return
-    if not VENV_PY.is_file():
-        warn("no venv — cannot rebuild store; run full bootstrap first")
-        return
-    step("Rebuilding RAG vector store (content/meridian -> chroma_local_db)")
-    run([str(VENV_PY), str(ROOT / "scripts" / "rebuild_rag_index.py")])
-    ok("RAG store rebuilt")
 
 
 def ensure_demo_data(with_demo_data: bool) -> None:
@@ -954,44 +750,8 @@ def _detach(cmd, log_path: Path, cwd=ROOT):
 
 
 def _prewarm_llm() -> None:
-    """Keep the LLM resident in memory before the first real call (PS1 parity)."""
-    if DRY_RUN:
-        print("    $ (pre-warm LLM)")
-        return
-    if _llm_provider() == "mlx":
-        body = json.dumps({
-            "model": MLX_MODEL,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }).encode()
-        req = urllib.request.Request(
-            f"{MLX_BASE_URL}/v1/chat/completions", data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120):
-                ok(f"MLX model pre-warmed ({MLX_MODEL})")
-        except Exception:
-            warn("MLX pre-warm request failed")
-        return
-
-    models = _ollama_models()
-    if not models:
-        warn("No Ollama models found — run: ollama pull qwen2.5:7b")
-        return
-    for model in models:
-        body = json.dumps({
-            "model": model, "prompt": "ping", "keep_alive": "24h", "max_tokens": 1,
-        }).encode()
-        req = urllib.request.Request(
-            f"{OLLAMA_API}/api/generate", data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120):
-                ok(f"pre-warmed {model} (keep_alive=24h)")
-        except Exception:
-            warn(f"pre-warm failed for {model}")
+    """The LLM is remote; there is no local model to warm."""
+    ok("remote LLM (OpenAI) - no local pre-warm")
 
 
 def start_unix(args) -> None:
@@ -1006,7 +766,7 @@ def start_unix(args) -> None:
                 logs / "fastapi.log")
     _wait_for("FastAPI", lambda: _port_listening(8000), 90, 2, "FastAPI up on :8000")
 
-    # 1b. LLM pre-warm (MLX chat or Ollama keep_alive=24h, PS1 parity)
+    # 1b. Remote LLM: nothing local to warm (PS1 parity)
     _prewarm_llm()
 
     # 2. Cloudflare tunnel for FastAPI
@@ -1102,7 +862,6 @@ def main() -> int:
     check_env_file()
     check_machine_profile()
     check_venv()
-    check_rag_store()
     check_ports()
 
     if args.check_only:
@@ -1125,7 +884,6 @@ def main() -> int:
             ensure_llm_up()
             ensure_models()
             ensure_postgres()
-            ensure_rag_store()
             ensure_demo_data(args.with_demo_data)
     else:
         step("Phase C skipped (--skip-install)")

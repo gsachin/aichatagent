@@ -31,13 +31,15 @@ else:
 # generations. Ingestion is now owned exclusively by
 # scripts/rebuild_rag_index.py; this bot only READS the shared store.
 
-from app.rag import get_retriever
+from langchain_core.documents import Document
+from langchain_core.runnables import RunnableLambda
 
-retriever = get_retriever()
-if retriever is None:
-    print("   ERROR: Vector store not found. Run scripts/rebuild_rag_index.py first.")
-    sys.exit(1)
-print("   Vector store loaded (shared Meridian store).")
+from app.doc_context import document_context
+
+retriever = RunnableLambda(
+    lambda _input: [Document(page_content=document_context())]
+)
+print("   Document context loaded (RAG removed; no embeddings).")
 
 # ── Step 3: Build RAG chain ────────────────────────────────────────
 from langchain_classic.chains import create_retrieval_chain
@@ -45,8 +47,8 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_core.prompts import ChatPromptTemplate
 from app.llm_backend import get_chat_model
 
-print(f"\n--> Booting Qwen 2.5 (temp=0.0) via {provider_name()}...")
-llm = get_chat_model(model="qwen2.5:7b", temperature=0.0)
+print(f"\n--> Booting the LLM via {provider_name()}...")
+llm = get_chat_model(model="qwen2.5:7b")
 
 system_prompt = (
     "You are a warm, helpful, and highly precise University Admissions Advisor. "

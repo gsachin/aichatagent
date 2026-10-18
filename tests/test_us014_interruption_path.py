@@ -283,7 +283,10 @@ async def test_the_greeting_yields_to_the_caller(monkeypatch):
     its synthesis. It is a task now, under the same rules as a turn.
     """
     session = VoiceCallSession()
-    monkeypatch.setattr(vh, "generate_ulaw_greeting", lambda text: [CHUNK] * 10)
+    monkeypatch.setattr(
+        vh, "generate_ulaw_greeting",
+        lambda text, language="": [CHUNK] * 10,
+    )
     ws = FakeWS(session=session)
     turn = main._VoiceTurn(websocket=ws, session=session, label="test",
                            stream_sid="MZ1", call_sid="CA1")
@@ -321,7 +324,10 @@ def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
 
     monkeypatch.setattr(crm_session, "start", lambda *a, **k: _FakeSession())
     monkeypatch.setattr(crm_session, "end", lambda *a, **k: _FakeSession())
-    monkeypatch.setattr(vh, "generate_ulaw_greeting", lambda text: [CHUNK] * 8)
+    monkeypatch.setattr(
+        vh, "generate_ulaw_greeting",
+        lambda text, language="": [CHUNK] * 8,
+    )
 
     async def _no_hangup(*a, **k):
         return None

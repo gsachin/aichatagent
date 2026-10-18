@@ -42,6 +42,7 @@ from typing import AsyncIterator, Callable
 # other importer had already loaded .env — this module never did.
 from app import audio_format
 from app.config import settings
+from app.voice_system_prompt import language_instruction
 
 logger = logging.getLogger("voice_handler")
 
@@ -54,7 +55,19 @@ voice_events = logging.getLogger("voice_events")
 
 _stt_model = None
 _tts_engine = None
-_STT_MODEL_SIZE = settings.WHISPER_MODEL  # small.en or medium.en
+_STT_MODEL_SIZE = settings.WHISPER_MODEL  # small / small.en / medium
+_SUPPORTED_LANGUAGES = {
+    part.strip().lower()
+    for part in (settings.SUPPORTED_LANGUAGES or "").split(",")
+    if part.strip()
+}
+_TTS_LANGUAGE_WARNED: set[str] = set()
+
+
+def _configured_stt_language() -> str | None:
+    """None means auto-detect; a code forces that STT language."""
+    code = (settings.STT_LANGUAGE or "auto").strip().lower()
+    return None if code in ("", "auto") else code
 
 
 def _get_stt_model():
@@ -200,6 +213,104 @@ TTS_CACHE_SCOPE = settings.TTS_CACHE_SCOPE
 #: flag because adoption is gated on DG-03; the batch path (`_synthesise`) is
 #: retained unchanged as the BRD-15 revert (flip the flag, no code change).
 TTS_STREAM = settings.TTS_STREAM
+
+#: TTS provider selection. ``kokoro`` is the default and preserves today's
+#: behaviour. ``indic_tts`` routes Indic languages to the isolated AI4Bharat
+#: service; English still uses Kokoro, and Hindi falls back to Kokoro's
+#: hf_alpha if the service is unavailable.
+TTS_PROVIDER = settings.TTS_PROVIDER
+
+#: Kokoro voices for the languages it supports. The code is the leading letter
+#: of the voice name (a=American English, b=British, e=Spanish, f=French,
+#: h=Hindi, i=Italian, j=Japanese, p=Portuguese, z=Chinese).
+_KOKORO_LANGUAGE_VOICES = {
+    "en": "af_heart",
+    "hi": "hf_alpha",
+    "es": "ef_dora",
+    "fr": "ff_siwis",
+    "it": "if_sara",
+    "ja": "jf_alpha",
+    "pt": "pf_dora",
+    "zh": "zf_xiaoxiao",
+}
+
+#: espeak-ng language code for kokoro-onnx's phonemizer. `Kokoro.create` and
+#: `create_stream` default to ``en-us`` for EVERY voice. That default is
+#: audible: Hindi text phonemized as en-us carries `(hi)...(enus)` language
+#: switch flags and an English phone set, which is the "foreign accent" heard
+#: on live calls (log: "extra phones may appear in the en-us phoneset"). The
+#: voice's language, not the library default, must choose the phoneme set.
+_KOKORO_PHONEME_LANG = {
+    "en": "en-us",
+    "hi": "hi",
+    "es": "es",
+    "fr": "fr-fr",
+    "it": "it",
+    "ja": "ja",
+    "pt": "pt-br",
+    "zh": "cmn",
+}
+
+
+def _kokoro_lang_for(language: str | None, voice: str = "") -> str:
+    """espeak-ng language for a Kokoro voice.
+
+    English is the only language with two voice families: ``a*`` is American,
+    ``b*`` is British. Every other mapped voice has one phoneme set.
+    """
+    code = (language or settings.DEFAULT_LANGUAGE or "en").strip().lower()
+    if code == "en" and (voice or "").startswith("b"):
+        return "en-gb"
+    return _KOKORO_PHONEME_LANG.get(code, "en-us")
+
+#: Languages the Indic-TTS release provides. Mirrors app/indic_tts.py; kept
+#: here so the hot path does not import the HTTP client just to decide.
+_INDIC_TTS_LANGUAGES = frozenset({
+    "as", "bn", "brx", "gu", "hi", "kn", "ml", "mni", "mr", "or", "raj", "ta", "te",
+})
+
+
+def _tts_voice_for(language: str | None) -> str:
+    """Kokoro voice for a language, falling back to the configured voice.
+
+    An explicitly configured voice wins when it already belongs to the
+    requested language, so KOKORO_VOICE stays meaningful. English accepts both
+    the American (a*) and British (b*) voice families.
+    """
+    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    configured = _tts_voice()
+    if code == "en" and configured[:1] in ("a", "b"):
+        return configured
+    mapped = _KOKORO_LANGUAGE_VOICES.get(code)
+    if mapped and configured[:1] == mapped[:1]:
+        return configured
+    return mapped or configured
+
+
+def _use_indic_tts(language: str | None) -> bool:
+    """Does this turn belong to the Indic-TTS service?"""
+    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    return TTS_PROVIDER == "indic_tts" and code in _INDIC_TTS_LANGUAGES
+
+
+#: Languages routed to Sarvam Bulbul. The demo sets `gu`; English and Hindi
+#: remain on Kokoro. Parsed once, like the Kokoro maps above.
+_SARVAM_TTS_LANGUAGES = frozenset(
+    part.strip().lower()
+    for part in (settings.SARVAM_TTS_LANGUAGES or "").split(",")
+    if part.strip()
+)
+
+
+def _use_sarvam_tts(language: str | None) -> bool:
+    """Does this turn belong to Sarvam Bulbul?
+
+    The key check is deliberately not here: a missing key should flow through
+    the adapter as a TTS failure and the fixed-response path, not silently
+    select the English Kokoro voice for Gujarati text.
+    """
+    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    return TTS_PROVIDER == "sarvam" and code in _SARVAM_TTS_LANGUAGES
 
 #: BUG-07 boundary (`app/voice_grounding.py`): a spoken number or named thing
 #: must be traceable to what retrieval returned, or to something the caller
@@ -389,18 +500,39 @@ def load_call_asset_ulaw(name: str) -> list[bytes] | None:
     return [pcm_to_ulaw(pcm[i:i + chunk]) for i in range(0, len(pcm), chunk)]
 
 
-def generate_ulaw_greeting(text: str) -> list[bytes]:
-    """
-    Quick TTS → µ-law chunker for use in WebSocket start handlers.
+def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
+    """TTS → µ-law chunker for the fixed opening script.
+
+    The greeting is spoken through the same provider as the answer: Gujarati
+    via Sarvam Bulbul (8 kHz linear16) and other languages via Kokoro. Passing
+    the call language here is what keeps a Gujarati call from opening in an
+    English voice.
 
     Returns a list of µ-law byte chunks ready for Twilio Media Streams.
     """
-    kokoro = _get_tts_engine()
-    audio, sr = kokoro.create(text, voice=_tts_voice(), speed=_tts_speed())
+    code = (language or settings.DEFAULT_LANGUAGE or "en").strip().lower()
+    if _use_sarvam_tts(code):
+        from app import tts_sarvam
+
+        audio, sr = tts_sarvam.synthesise(
+            text, code,
+            speaker=tts_sarvam.speaker_for(code),
+            pace=float(settings.SARVAM_TTS_PACE),
+        )
+    else:
+        kokoro = _get_tts_engine()
+        voice = _tts_voice_for(code) if code else _tts_voice()
+        audio, sr = kokoro.create(
+            text, voice=voice, speed=_tts_speed(),
+            lang=_kokoro_lang_for(code, voice) if code else "en-us",
+        )
     from scipy.signal import resample
 
-    target_len = int(len(audio) * 8000 / 24000)
-    audio_8k = resample(audio, target_len)
+    target_len = int(len(audio) * 8000 / sr)
+    target_len -= target_len % 160
+    if target_len <= 0:
+        return []
+    audio_8k = resample(audio, target_len) if sr != 8000 else audio[:target_len]
     audio_8k_int16 = (audio_8k * 32767).clip(-32768, 32767).astype(np.int16)
     chunk_size = 160
     chunks = []
@@ -661,6 +793,34 @@ HUMAN_TRANSFER_REPLY = (
 
 _NOISE_LADDER = [NOISE_REPLY, LINE_QUALITY_REPLY, ALT_CHANNEL_REPLY, HUMAN_TRANSFER_REPLY]
 
+#: The same ladder in the caller's language. The fixed English lines used to be
+#: spoken to Hindi callers whenever Whisper produced a low-confidence turn --
+#: after the caller had explicitly asked for Hindi. Each step stays distinct for
+#: the same reason as the English ladder (test_d4_ladder...).
+_NOISE_LADDER_HI = [
+    "माफ़ कीजिए, मैं ठीक से सुन नहीं पाया। क्या आप दोबारा कह सकते हैं?",
+    "लगता है लाइन पर आवाज़ साफ़ नहीं आ रही। कृपया फ़ोन के थोड़ा और पास बोलिए।",
+    "कनेक्शन ठीक नहीं हो रहा है। आप हमें WhatsApp पर संदेश भेज सकते हैं, "
+    "या एडमिशन ऑफ़िस को ईमेल कर सकते हैं।",
+    "माफ़ कीजिए, मैं अब भी साफ़ नहीं सुन पा रहा हूँ। मैं किसी सलाहकार से आपको "
+    "कॉल करने के लिए कहूँगा। क्या आप अपना नंबर दोबारा बता सकते हैं?",
+]
+
+_NOISE_LADDER_GU = [
+    "માફ કરશો, મને બરાબર સંભળાયું નહીં. શું તમે ફરી કહી શકશો?",
+    "લાઇન પર અવાજ સાફ આવતો નથી. કૃપા કરીને ફોનની થોડી નજીક બોલો.",
+    "કનેક્શન ઠીક થઈ રહ્યું નથી. તમે અમને WhatsApp પર સંદેશ મોકલી શકો છો, "
+    "અથવા એડમિશન ઓફિસને ઈમેલ કરી શકો છો.",
+    "માફ કરશો, હજી પણ સ્પષ્ટ સંભળાતું નથી. હું કોઈ કાઉન્સેલરને તમને કૉલ કરવા "
+    "કહીશ. શું તમે તમારો નંબર ફરી કહી શકશો?",
+]
+
+_NOISE_LADDERS = {
+    "en": _NOISE_LADDER,
+    "hi": _NOISE_LADDER_HI,
+    "gu": _NOISE_LADDER_GU,
+}
+
 # ── D1 output-boundary scrubber ────────────────────────────────────────
 # Leaked reasoning/meta narration observed in real calls. Sentence-level
 # filter: any sentence containing one of these markers is dropped before
@@ -786,6 +946,44 @@ def is_noise_fragment(text: str) -> bool:
     return len(t.split()) == 1 and t in _NOISE_WORDS
 
 
+def looks_like_hallucination(text: str, audio_seconds: float) -> bool:
+    """Detect Whisper's repetition and over-production failures.
+
+    Observed live on 2026-10-17: 0.92 s of telephone audio produced 191
+    characters ("अगर बद्दाना ... वो आप वो आप ...") with avg_logprob -0.46 and a
+    low no-speech probability, so the existing log-prob threshold could not
+    gate it. Two independent signals catch that shape:
+
+    * more than ~6 words per second of audio (normal speech is 2-4);
+    * the same 2-4 word phrase repeated three or more times and covering at
+      least half the transcript.
+
+    A caller who genuinely repeats a phrase ("हाँ हाँ हाँ") has a short
+    transcript and never hits the coverage test.
+    """
+    words = (text or "").split()
+    if not words:
+        return False
+    # Below half a second the rate is dominated by endpointing noise; the
+    # repetition test below still applies to a long transcript.
+    if audio_seconds >= 0.5 and len(words) / audio_seconds > 6.0:
+        return True
+    if len(words) < 8:
+        return False
+    for n in (2, 3, 4):
+        i = 0
+        while i + n <= len(words):
+            repeats = 1
+            j = i + n
+            while j + n <= len(words) and words[j:j + n] == words[i:i + n]:
+                repeats += 1
+                j += n
+            if repeats >= 3 and repeats * n >= len(words) * 0.5:
+                return True
+            i += 1
+    return False
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split answer text at sentence boundaries for per-sentence streaming.
 
@@ -797,14 +995,17 @@ def _split_sentences(text: str) -> list[str]:
     sentence by sentence is what makes the first chunk small: the first
     sentence's audio exists while later ones are still being synthesised.
 
-    Conservative split: only on `.` `!` `?` `;` followed by whitespace and a
-    capital letter, and never right after a digit -- so a price like
-    "$1,700. Scholarships" stays intact while real sentence boundaries
-    split. (An abbreviation like "Dr. Smith" still splits into two synthesis
-    chunks; that costs a clause boundary of silence, never correctness --
-    and US-004's clause cutter replaces this splitter when it lands.)
+    Conservative split: Latin sentences only on `.` `!` `?` `;` followed by
+    whitespace and a capital letter, never right after a digit; Indic scripts
+    split on the danda (`।`/`॥`) because they do not capitalise the next
+    sentence. A price like "$1,700. Scholarships" stays intact. (An
+    abbreviation like "Dr. Smith" still splits into two synthesis chunks;
+    that costs a clause boundary of silence, never correctness.)
     """
-    parts = re.split(r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])", text.strip())
+    parts = re.split(
+        r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])|(?<=[।॥])\s*",
+        text.strip(),
+    )
     return [p for p in (p.strip() for p in parts) if p]
 
 
@@ -823,6 +1024,7 @@ class VoiceCallSession:
         max_utterance_frames: int = 300,     # ~6 seconds max
         sample_rate: int = 8000,             # Twilio uses 8 kHz
         direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
+        language: str = "",                  # BCP-47-ish code; "" -> DEFAULT_LANGUAGE
     ):
         # BRD-04: one decision, and `None` resolves to the setting rather than
         # to a literal. The parameter used to default to the number 30 while no
@@ -842,6 +1044,7 @@ class VoiceCallSession:
         self._spec_advance_ms = _speculative_advance_ms()
         self._sample_rate = sample_rate
         self.direction = direction
+        self.language = (language or settings.DEFAULT_LANGUAGE).strip().lower()
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
 
@@ -1107,13 +1310,26 @@ class VoiceCallSession:
         if not GROUNDING_ENABLED:
             return text
         try:
-            from app.rag import last_retrieved_context
+            if settings.CONTEXT_MODE == "doc":
+                # No retrieval in doc mode: the full document is the evidence.
+                from app.doc_context import document_context
 
-            self.note_grounding_evidence(last_retrieved_context())
+                self.note_grounding_evidence(document_context())
+            elif settings.CONTEXT_MODE != "off":
+                from app.rag import last_retrieved_context
+
+                self.note_grounding_evidence(last_retrieved_context())
         except Exception:                          # noqa: BLE001
             pass                                   # never let the guard break a call
         from app.voice_grounding import enforce_grounding, is_refusal
 
+        # The English entity index cannot match a translated programme name.
+        # In relaxed mode, non-English answers still enforce numbers but skip
+        # the name branch; the prompt separately asks for Latin-script names.
+        check_names = not (
+            settings.GROUNDING_LANGUAGE_MODE == "relaxed"
+            and (self.language or "en").lower() != "en"
+        )
         out = enforce_grounding(
             text,
             "\n".join(self._grounding_evidence),
@@ -1121,6 +1337,7 @@ class VoiceCallSession:
             unoffered=self._unoffered,
             refusal_index=self._refusals_total,
             subject_denied=sum(self._subject_denied.values()),
+            check_names=check_names,
             log=self.log_event,
         )
         # Count a turn the boundary REPLACED with a refusal. The count is
@@ -1490,6 +1707,13 @@ class VoiceCallSession:
         unit test driving feed_audio directly), because there is nothing to
         schedule the transcription onto.
         """
+        if not settings.STT_SPECULATIVE_ENABLED:
+            return
+        # A speculative pass would send the same utterance to the cloud twice
+        # and bill it twice. Cloud providers get one request after endpointing;
+        # the local providers keep the latency-hiding pass.
+        if (settings.STT_PROVIDER or "").strip().lower() == "sarvam":
+            return
         if self._spec_advance_ms <= 0 or self._spec_started:
             return
         trigger = self._silence_threshold - round(self._spec_advance_ms / 20)
@@ -1556,7 +1780,12 @@ class VoiceCallSession:
         in a row, which is the defect this ladder exists to prevent.
         """
         self._noise_streak += 1
-        return _NOISE_LADDER[min(self._noise_streak - 1, len(_NOISE_LADDER) - 1)]
+        return self._noise_line(self._noise_streak - 1)
+
+    def _noise_line(self, index: int) -> str:
+        """The escalation line in the language the caller is hearing."""
+        ladder = _NOISE_LADDERS.get(self.language, _NOISE_LADDER)
+        return ladder[min(max(index, 0), len(ladder) - 1)]
 
     def is_silent(self, ulaw_chunk: bytes) -> bool:
         """
@@ -1836,7 +2065,7 @@ class VoiceCallSession:
             self.log_event("META_LEAK_SCRUBBED", before=len(answer), after=len(scrubbed or ""))
         if scrubbed is None:
             logger.warning(f"VoiceCall: answer fully scrubbed as meta-leak: {answer[:100]!r}")
-            scrubbed = NOISE_REPLY
+            scrubbed = self._noise_line(0)
         answer = scrubbed
 
         # BUG-07: the same boundary the streamed path applies per clause.
@@ -1898,7 +2127,14 @@ class VoiceCallSession:
     }
 
     def _post_process_transcript(self, text: str) -> str:
-        """Apply domain corrections to fix common STT errors on phone audio."""
+        """Apply domain corrections to fix common STT errors on phone audio.
+
+        The correction table is English-specific (``emma`` -> MBA, ``faze`` ->
+        fees). Applying it to Devanagari/Gujarati/Gurmukhi output would corrupt
+        real words, so any non-ASCII transcript is returned unchanged.
+        """
+        if any(ord(ch) > 127 for ch in text):
+            return text.strip()
         result = text
         text_lower = result.lower()
         for wrong, correct in self._CORRECTIONS.items():
@@ -1911,7 +2147,117 @@ class VoiceCallSession:
     # ── Internal ──────────────────────────────────────────────────
 
     async def _transcribe(self, audio_16k_int16: np.ndarray) -> tuple[str, bool]:
-        """Run faster-whisper STT in a thread (GPU via CTranslate2).
+        """Transcribe one utterance through the configured provider chain.
+
+        Sarvam Saaras is the Indic-first primary, IndicConformer is the offline
+        fallback, and faster-whisper is the last resort. A provider failure is
+        logged and the next one is tried, so a cloud outage never leaves the
+        caller with dead air.
+        """
+        from app.stt import provider_order
+
+        last_error: Exception | None = None
+        for provider in provider_order():
+            try:
+                if provider == "sarvam":
+                    from app import stt_sarvam
+
+                    if not stt_sarvam.is_configured():
+                        # Boot reports this once; do not warn on every turn.
+                        last_error = RuntimeError("SARVAM_API_KEY is empty")
+                        continue
+                    return await self._transcribe_sarvam(audio_16k_int16)
+                if provider == "indic_conformer":
+                    if not self._indic_language():
+                        raise RuntimeError(
+                            "session language is not Hindi/Gujarati"
+                        )
+                    return await self._transcribe_indic(audio_16k_int16)
+                if provider == "whisper":
+                    return await self._transcribe_whisper(audio_16k_int16)
+                raise RuntimeError(f"unknown STT provider {provider!r}")
+            except Exception as exc:            # noqa: BLE001
+                last_error = exc
+                logger.warning(
+                    "STT provider %s failed (%s); trying the next provider",
+                    provider, exc,
+                )
+        logger.error("All STT providers failed; last error: %s", last_error)
+        return "", True
+
+    def _indic_language(self) -> str:
+        code = (self.language or "").strip().lower()
+        return code if code in ("hi", "gu") else ""
+
+    async def _transcribe_sarvam(
+        self, audio_16k_int16: np.ndarray
+    ) -> tuple[str, bool]:
+        from app import stt_sarvam
+
+        result = await asyncio.to_thread(
+            stt_sarvam.transcribe, audio_16k_int16, language_hint=None
+        )
+        transcript = self._post_process_transcript(result.transcript)
+        hallucinated = looks_like_hallucination(
+            transcript, len(audio_16k_int16) / 16000.0
+        )
+        low_conf = bool(hallucinated or not transcript.strip())
+        detected = (result.language or "").strip().lower()
+        probability = float(result.language_probability or 0.0)
+        logger.info(
+            "STT(sarvam): \"%s\" (lang=%s, prob=%.2f, %.0f ms, "
+            "hallucination=%s, low_conf=%s)",
+            transcript[:100], detected or "?", probability,
+            result.latency_ms, hallucinated, low_conf,
+        )
+        self._apply_detected_language(detected, probability, transcript, low_conf)
+        if self._trace is not None:
+            self._trace.mark("stt_done")
+            self._trace.note(
+                stt_chars=len(transcript), stt_low_conf=bool(low_conf),
+                stt_hallucination=bool(hallucinated),
+                stt_language=detected, stt_language_prob=round(probability, 2),
+                stt_provider="sarvam", stt_latency_ms=round(result.latency_ms, 1),
+                answer_language=self.language,
+            )
+        return transcript, low_conf
+
+    async def _transcribe_indic(
+        self, audio_16k_int16: np.ndarray
+    ) -> tuple[str, bool]:
+        from app import stt_indic
+
+        language = self._indic_language()
+        result = await asyncio.to_thread(
+            stt_indic.transcribe, audio_16k_int16, language
+        )
+        transcript = self._post_process_transcript(result.transcript)
+        hallucinated = looks_like_hallucination(
+            transcript, len(audio_16k_int16) / 16000.0
+        )
+        low_conf = bool(hallucinated or not transcript.strip())
+        logger.info(
+            "STT(indic_conformer): \"%s\" (lang=%s, %.0f ms, "
+            "hallucination=%s, low_conf=%s)",
+            transcript[:100], language, result.latency_ms,
+            hallucinated, low_conf,
+        )
+        if self._trace is not None:
+            self._trace.mark("stt_done")
+            self._trace.note(
+                stt_chars=len(transcript), stt_low_conf=bool(low_conf),
+                stt_hallucination=bool(hallucinated),
+                stt_language=language,
+                stt_provider="indic_conformer",
+                stt_latency_ms=round(result.latency_ms, 1),
+                answer_language=self.language,
+            )
+        return transcript, low_conf
+
+    async def _transcribe_whisper(
+        self, audio_16k_int16: np.ndarray
+    ) -> tuple[str, bool]:
+        """Local faster-whisper STT (the historical path).
 
         Accepts int16 numpy array directly — no PyAV/file I/O needed,
         which avoids the AppLocker DLL block on this machine.
@@ -1936,7 +2282,7 @@ class VoiceCallSession:
             segments, info = await asyncio.to_thread(
                 lambda: model.transcribe(
                     audio_float,
-                    language="en",
+                    language=_configured_stt_language(),
                     beam_size=1,
                     best_of=1,
                     temperature=0.0,
@@ -1956,7 +2302,13 @@ class VoiceCallSession:
                 logprobs.append(seg.avg_logprob)
                 no_speech_probs.append(seg.no_speech_prob)
             transcript = self._post_process_transcript(" ".join(texts))
-            low_conf = bool(
+            # Whisper's repetition loop is not visible to avg_logprob: the live
+            # example scored -0.46 while repeating "वो आप" twenty times. Gate
+            # it on the transcript's own shape before the LLM sees it.
+            hallucinated = looks_like_hallucination(
+                transcript, len(audio_16k_int16) / 16000.0
+            )
+            low_conf = hallucinated or bool(
                 logprobs
                 and (
                     min(logprobs) < STT_MIN_AVG_LOGPROB
@@ -1964,19 +2316,53 @@ class VoiceCallSession:
                 )
             )
             min_logprob = min(logprobs) if logprobs else None
+            detected = str(getattr(info, "language", "") or "").lower()
+            lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
             logger.info(
                 f"STT: \"{transcript[:100]}\" "
-                f"(lang={info.language}, prob={info.language_probability:.2f}, "
+                f"(lang={info.language}, prob={lang_prob:.2f}, "
                 f"min_logprob={f'{min_logprob:.2f}' if min_logprob is not None else 'n/a'}, "
-                f"low_conf={low_conf})"
+                f"hallucination={hallucinated}, low_conf={low_conf})"
             )
+            self._apply_detected_language(detected, lang_prob, transcript, low_conf)
             if self._trace is not None:
                 self._trace.mark("stt_done")
-                self._trace.note(stt_chars=len(transcript), stt_low_conf=bool(low_conf))
+                self._trace.note(
+                    stt_chars=len(transcript), stt_low_conf=bool(low_conf),
+                    stt_hallucination=bool(hallucinated),
+                    stt_language=detected, stt_language_prob=round(lang_prob, 2),
+                    answer_language=self.language,
+                )
             return transcript, low_conf
         except Exception:
-            logger.exception("VoiceCall: STT failed")
+            logger.exception("VoiceCall: Whisper STT failed")
             return "", True
+
+    def _apply_detected_language(self, detected: str, probability: float,
+                                 transcript: str, low_conf: bool) -> None:
+        """Switch the answer language to the language the caller actually spoke.
+
+        Only in ``STT_LANGUAGE=auto``. A low-confidence transcription, a short
+        utterance, an unsupported code, or a probability below
+        ``STT_LANGUAGE_MIN_PROB`` keeps the session's previous language.
+        """
+        if _configured_stt_language() is not None:
+            return
+        if low_conf or len(transcript.strip()) < STT_MIN_CHARS:
+            return
+        if detected not in _SUPPORTED_LANGUAGES:
+            return
+        if probability < settings.STT_LANGUAGE_MIN_PROB:
+            return
+        if detected == self.language:
+            return
+        logger.info(
+            "STT: detected language %s (prob=%.2f) -> answer language %s",
+            detected, probability, detected,
+        )
+        self.language = detected
+        self.log_event("STT_LANGUAGE", language=detected,
+                       prob=round(probability, 2))
 
     async def _query_llm(self, question: str) -> str:
         """Query the shared RAG + LLM pipeline in a thread."""
@@ -2018,9 +2404,14 @@ class VoiceCallSession:
             # one-line shape; a deployment that flips the flag must not silently
             # lose the evidence.
             try:
-                from app.rag import last_retrieved_context
+                if settings.CONTEXT_MODE == "doc":
+                    from app.doc_context import document_context
 
-                self.note_grounding_evidence(last_retrieved_context())
+                    self.note_grounding_evidence(document_context())
+                elif settings.CONTEXT_MODE != "off":
+                    from app.rag import last_retrieved_context
+
+                    self.note_grounding_evidence(last_retrieved_context())
             except Exception:                      # noqa: BLE001
                 pass                               # never let the guard break a call
             if self._trace is not None:
@@ -2194,6 +2585,13 @@ class VoiceCallSession:
                 )
         else:
             prompt = "\n".join(head) + f"\n{question}"
+
+        # The language instruction lives in the USER turn, after the stable
+        # system + document prefix, so the prompt-cache prefix does not change
+        # when the requested language does.
+        instruction = language_instruction(self.language)
+        if instruction:
+            prompt = f"{prompt}\n\n{instruction}"
         return prompt
 
     #: TTS cache (DG-06 / US-012).
@@ -2216,7 +2614,12 @@ class VoiceCallSession:
     _tts_cache_max = 50
 
     async def _synthesise(self, text: str) -> np.ndarray | None:
-        """Run Kokoro TTS in a thread, return float32 PCM array. Cached for speed."""
+        """Run TTS in a thread, return float32 PCM. Cached for speed.
+
+        Default provider is Kokoro. When ``TTS_PROVIDER=indic_tts`` and the
+        answer language is one of the AI4Bharat languages, the isolated Indic
+        service is used; Kokoro Hindi is the fallback for ``hi`` only.
+        """
         self.log_event("TTS_STARTED", chars=len(text))
         try:
             tts_text = text[:500] if len(text) > 500 else text
@@ -2224,10 +2627,38 @@ class VoiceCallSession:
             # US-012: shared (DG-06 default) or per-call (the pre-decided
             # fallback). Chosen by configuration only -- AC-4 requires the
             # revert to be a setting, never a code change.
-            voice, speed = _tts_voice(), _tts_speed()
+            language = (
+                getattr(self, "language", "") or settings.DEFAULT_LANGUAGE
+            ).strip().lower()
+            if _use_sarvam_tts(language):
+                provider = "sarvam_tts"
+            elif _use_indic_tts(language):
+                provider = "indic_tts"
+            else:
+                provider = "kokoro"
+            if provider == "sarvam_tts":
+                from app import tts_sarvam
+
+                voice = tts_sarvam.speaker_for(language)
+            elif provider == "kokoro":
+                voice = _tts_voice_for(language)
+            else:
+                voice = ""
+            if provider == "kokoro" and language not in _KOKORO_LANGUAGE_VOICES:
+                if language not in _TTS_LANGUAGE_WARNED:
+                    _TTS_LANGUAGE_WARNED.add(language)
+                    logger.warning(
+                        "Kokoro has no voice for language=%s; using %s. "
+                        "Set TTS_PROVIDER=indic_tts for this language.",
+                        language, voice,
+                    )
+            speed = (
+                float(settings.SARVAM_TTS_PACE)
+                if provider == "sarvam_tts" else _tts_speed()
+            )
             cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
                      else VoiceCallSession._shared_tts_cache)
-            cache_key = (tts_text, voice, speed)
+            cache_key = (provider, language, tts_text, voice, speed)
 
             # Check cache
             if cache_key in cache:
@@ -2258,20 +2689,52 @@ class VoiceCallSession:
                 # other caller (TAC-2).
                 return cached_audio.copy()
 
-            # Only a miss needs the model. Loading it inside the hit path meant a
-            # cache hit still touched the engine, which kept the isolation tests
-            # from running without a GPU.
-            #
-            # `to_thread` because this LOADS the Kokoro ONNX model when cold --
-            # and it was never pre-warmed at boot, so the first synthesis of the
-            # first call did exactly that, on the event loop, freezing every
-            # other live call for the duration. The boot warmup now loads it, so
-            # this is normally a cache hit; the thread hop is what makes a cold
-            # path survivable rather than fatal.
-            kokoro = await asyncio.to_thread(_get_tts_engine)
-            audio, sr = await asyncio.to_thread(
-                kokoro.create, tts_text, voice=voice, speed=speed
-            )
+            if provider == "sarvam_tts":
+                from app import tts_sarvam
+
+                audio, sr = await asyncio.to_thread(
+                    tts_sarvam.synthesise, tts_text, language,
+                    speaker=voice, pace=speed,
+                )
+            elif provider == "indic_tts":
+                from app import indic_tts
+
+                result = await asyncio.to_thread(
+                    indic_tts.synthesise, tts_text, language
+                )
+                if result is None and language == "hi":
+                    # The service is down; Hindi is the one Indic language
+                    # Kokoro can still speak. The cache key is rewritten so a
+                    # later service recovery is not hidden by this entry.
+                    kokoro = await asyncio.to_thread(_get_tts_engine)
+                    audio, sr = await asyncio.to_thread(
+                        kokoro.create, tts_text,
+                        voice=_KOKORO_LANGUAGE_VOICES["hi"], speed=speed,
+                        lang="hi",
+                    )
+                    provider = "kokoro"
+                    voice = _KOKORO_LANGUAGE_VOICES["hi"]
+                    cache_key = (provider, language, tts_text, voice, speed)
+                elif result is None:
+                    raise RuntimeError(f"Indic-TTS unavailable for {language}")
+                else:
+                    audio, sr = result
+            else:
+                # Only a miss needs the model. Loading it inside the hit path
+                # meant a cache hit still touched the engine, which kept the
+                # isolation tests from running without a GPU.
+                #
+                # `to_thread` because this LOADS the Kokoro ONNX model when
+                # cold -- and it was never pre-warmed at boot, so the first
+                # synthesis of the first call did exactly that, on the event
+                # loop, freezing every other live call for the duration. The
+                # boot warmup now loads it, so this is normally a cache hit;
+                # the thread hop is what makes a cold path survivable.
+                kokoro = await asyncio.to_thread(_get_tts_engine)
+                audio, sr = await asyncio.to_thread(
+                    kokoro.create, tts_text, voice=voice, speed=speed,
+                    lang=_kokoro_lang_for(language, voice),
+                )
             # Store in cache. Bound first, FIFO by insertion order (TAC-3):
             # re-inserting an existing key keeps its original position, which is
             # what makes the eviction order predictable.
@@ -2341,11 +2804,40 @@ class VoiceCallSession:
         """
         self.log_event("TTS_STARTED", chars=len(text))
         tts_text = text[:500] if len(text) > 500 else text
-        voice = voice if voice is not None else _tts_voice()
-        speed = speed if speed is not None else _tts_speed()
+        language = (
+            getattr(self, "language", "") or settings.DEFAULT_LANGUAGE
+        ).strip().lower()
+        if _use_sarvam_tts(language):
+            provider = "sarvam_tts"
+        elif _use_indic_tts(language):
+            provider = "indic_tts"
+        else:
+            provider = "kokoro"
+        if provider == "sarvam_tts":
+            from app import tts_sarvam
+
+            # `voice` from the Kokoro call sites is a Kokoro voice name; the
+            # Sarvam speaker is a persona ID and is chosen by language.
+            voice = tts_sarvam.speaker_for(language)
+        elif provider == "kokoro":
+            voice = voice if voice is not None else _tts_voice_for(language)
+        else:
+            voice = ""
+        if provider == "kokoro" and language not in _KOKORO_LANGUAGE_VOICES:
+            if language not in _TTS_LANGUAGE_WARNED:
+                _TTS_LANGUAGE_WARNED.add(language)
+                logger.warning(
+                    "Kokoro has no voice for language=%s; using %s. "
+                    "Set TTS_PROVIDER=indic_tts for this language.",
+                    language, voice,
+                )
+        if provider == "sarvam_tts":
+            speed = speed if speed is not None else float(settings.SARVAM_TTS_PACE)
+        else:
+            speed = speed if speed is not None else _tts_speed()
         cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
                  else VoiceCallSession._shared_tts_cache)
-        cache_key = (tts_text, voice, speed)
+        cache_key = (provider, language, tts_text, voice, speed)
 
         if cache_key in cache:
             cached_audio, cached_sr, owner = cache[cache_key]
@@ -2365,6 +2857,86 @@ class VoiceCallSession:
             yield cached_audio.copy(), cached_sr
             return
 
+        if provider == "sarvam_tts":
+            # Bulbul HTTP streaming returns raw 8 kHz linear16 PCM as it is
+            # generated; each chunk is yielded straight through. If the first
+            # chunk fails, re-raise so the caller can fall back; a mid-stream
+            # failure ends the turn degraded (the caller already heard audio).
+            from app import tts_sarvam
+
+            parts: list[np.ndarray] = []
+            sr_out = int(settings.SARVAM_TTS_SAMPLE_RATE)
+            first = True
+            try:
+                async for audio in tts_sarvam.astream(
+                        tts_text, language, speaker=voice, pace=speed):
+                    if first:
+                        first = False
+                        self.log_event("TTS_FIRST_CHUNK", samples=int(len(audio)))
+                        if self._trace is not None:
+                            self._trace.mark("tts_first_chunk")
+                    parts.append(audio)
+                    yield audio, sr_out
+            except Exception:
+                logger.exception("VoiceCall: Sarvam streaming TTS failed")
+                if first:
+                    raise
+                return
+            if parts:
+                audio_full = np.concatenate(parts)
+                if cache_key not in cache and len(cache) >= self._tts_cache_max:
+                    oldest = next(iter(cache))
+                    del cache[oldest]
+                cache[cache_key] = (audio_full.copy(), sr_out, self.call_id)
+                logger.info(
+                    "VoiceCall: TTS streamed via Sarvam (%.1fs at %d Hz)",
+                    len(audio_full) / sr_out, sr_out,
+                )
+                if self._trace is not None:
+                    self._trace.mark("tts_done")
+                    self._trace.note(
+                        tts_cache_hit=False,
+                        tts_cache_scope=TTS_CACHE_SCOPE,
+                        tts_cache_cross_call=False,
+                        tts_cache_key_sha=_cache_key_sha(cache_key),
+                        audio_s=round(len(audio_full) / sr_out, 2),
+                    )
+            return
+
+        if provider == "indic_tts":
+            # Indic-TTS is non-streaming: one batch synthesis, then yield the
+            # whole result as the single chunk. The caller's µ-law conversion
+            # is unchanged because the sample rate travels with the chunk.
+            from app import indic_tts
+
+            result = await asyncio.to_thread(
+                indic_tts.synthesise, tts_text, language
+            )
+            if result is None and language == "hi":
+                kokoro = await asyncio.to_thread(_get_tts_engine)
+                audio, sr = await asyncio.to_thread(
+                    kokoro.create, tts_text,
+                    voice=_KOKORO_LANGUAGE_VOICES["hi"], speed=speed,
+                    lang="hi",
+                )
+                provider = "kokoro"
+                voice = _KOKORO_LANGUAGE_VOICES["hi"]
+                cache_key = (provider, language, tts_text, voice, speed)
+            elif result is None:
+                raise RuntimeError(f"Indic-TTS unavailable for {language}")
+            else:
+                audio, sr = result
+            self.log_event("TTS_FIRST_CHUNK", samples=int(len(audio)))
+            if self._trace is not None:
+                self._trace.mark("tts_first_chunk")
+                self._trace.mark("tts_done")
+            if cache_key not in cache and len(cache) >= self._tts_cache_max:
+                oldest = next(iter(cache))
+                del cache[oldest]
+            cache[cache_key] = (audio.copy(), sr, self.call_id)
+            yield audio, sr
+            return
+
         kokoro = await asyncio.to_thread(_get_tts_engine)
         parts: list[np.ndarray] = []
         sr_out: int | None = None
@@ -2379,7 +2951,8 @@ class VoiceCallSession:
             # here does not change).
             for sentence in _split_sentences(tts_text):
                 async for audio, sr in kokoro.create_stream(
-                        sentence, voice=voice, speed=speed):
+                        sentence, voice=voice, speed=speed,
+                        lang=_kokoro_lang_for(language, voice)):
                     if first:
                         first = False
                         self.log_event("TTS_FIRST_CHUNK", samples=int(len(audio)))

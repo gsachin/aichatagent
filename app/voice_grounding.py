@@ -262,7 +262,8 @@ def _grounded_in(needle: str, hay: str, hay_core: str) -> bool:
     return core in hay_core
 
 def ungrounded_claims(answer: str, context: str,
-                      entities: EntityIndex | None = None) -> list[str]:
+                      entities: EntityIndex | None = None,
+                      *, check_names: bool = True) -> list[str]:
     """Claims in `answer` that do not appear in `context`. Empty means grounded.
 
     `context` should be everything this call has legitimately seen: the
@@ -328,17 +329,28 @@ def ungrounded_claims(answer: str, context: str,
             out.append(claim)
 
     # -- NAMES: is this a thing the corpus actually states? -----------------
-    out.extend(_name_claims(answer, index))
+    # In relaxed mode for a translated answer, the English entity index cannot
+    # match a translated programme name, so only numbers are enforced. The
+    # prompt still asks the model to keep Latin-script names; this is the
+    # safety net for when it does not.
+    if check_names:
+        out.extend(_name_claims(answer, index))
     return out
 
 
 def is_grounded(answer: str, context: str,
-                entities: EntityIndex | None = None) -> bool:
-    return not ungrounded_claims(answer, context, entities)
+                entities: EntityIndex | None = None,
+                *, check_names: bool = True) -> bool:
+    return not ungrounded_claims(
+        answer, context, entities, check_names=check_names
+    )
 
 
 def _sentences(text: str) -> list[str]:
-    return [s for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip()]
+    # Indic scripts use the danda, not a capitalised next sentence.
+    return [s for s in re.split(
+        r"(?<=[.!?])\s+|(?<=[।॥])\s*", text or ""
+    ) if s.strip()]
 
 
 #: A sentence is worth speaking on its own only if it still carries a specific
@@ -358,6 +370,7 @@ def enforce_grounding(answer: str, context: str, *,
                       unoffered: list[str] | None = None,
                       refusal_index: int = 0,
                       subject_denied: int = 0,
+                      check_names: bool = True,
                       log=None) -> str:
     """Speak only what is grounded; never return silence.
 
@@ -394,7 +407,9 @@ def enforce_grounding(answer: str, context: str, *,
     index = entities if entities is not None else default_index()
     kept, dropped = [], []
     for sentence in _sentences(answer):
-        bad = ungrounded_claims(sentence, context, index)
+        bad = ungrounded_claims(
+            sentence, context, index, check_names=check_names
+        )
         if bad:
             dropped.append((sentence, bad))
         else:
@@ -406,7 +421,9 @@ def enforce_grounding(answer: str, context: str, *,
             log("GROUNDING_DROPPED", claims="|".join(bad)[:160],
                 sentence=sentence[:120])
     survivors = " ".join(kept).strip()
-    if survivors and any(_is_substantive(s, index) for s in kept):
+    if survivors and (
+        not check_names or any(_is_substantive(s, index) for s in kept)
+    ):
         return survivors
     if log is not None and survivors:
         log("GROUNDING_REFUSED", reason="survivors carried no grounded fact",

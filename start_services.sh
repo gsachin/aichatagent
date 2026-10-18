@@ -329,77 +329,8 @@ if [ "$SERVER_READY" = "false" ]; then
 fi
 
 # ==== Step 6: LLM pre-warming ==============================================
-write_step "Step 6: LLM pre-warming ($LLM_PROVIDER)"
-
-if [ "$LLM_PROVIDER" = "mlx" ]; then
-    # ---- Apple MLX: ensure mlx_lm.server is up, then warm it -----------
-    if [ -z "$(port_pids "$MLX_PORT")" ]; then
-        write_warn "MLX server not running -- starting mlx_lm.server on :$MLX_PORT..."
-        nohup "$PYTHON" -m mlx_lm.server --model "$MLX_MODEL" \
-            --host 127.0.0.1 --port "$MLX_PORT" \
-            >> "$LOG_DIR/mlx_server.log" 2>&1 &
-        write_ok "MLX server starting (log: $LOG_DIR/mlx_server.log)"
-    else
-        write_ok "MLX server already running on :$MLX_PORT"
-    fi
-
-    # First load of a 14B model can take well over a minute.
-    _attempt=0
-    MLX_UP=false
-    while [ "$MLX_UP" = "false" ] && [ "$_attempt" -lt 90 ]; do
-        sleep 2
-        _attempt=$((_attempt + 1))
-        if [ "$(http_code "$MLX_BASE_URL/v1/models")" = "200" ]; then
-            write_ok "MLX server ready (took ~$((_attempt * 2))s)"
-            MLX_UP=true
-        fi
-    done
-    if [ "$MLX_UP" = "false" ]; then
-        write_err "MLX server did NOT come up - check $LOG_DIR/mlx_server.log"
-        exit 1
-    fi
-
-    if curl -s -X POST "$MLX_BASE_URL/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$MLX_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
-        -o /dev/null 2>/dev/null; then
-        write_ok "  $MLX_MODEL loaded into memory"
-    else
-        write_warn "  Pre-warm request failed for $MLX_MODEL"
-    fi
-else
-    # ---- Ollama: /api/tags + per-model keep_alive pre-warm (PS1 parity) ---
-    if [ "$(http_code "http://127.0.0.1:11434/api/tags")" = "200" ]; then
-        write_ok "Ollama is running"
-    else
-        write_warn "Ollama not reachable on port 11434 -- skip pre-warming"
-    fi
-
-    if [ "$(http_code "http://127.0.0.1:11434/api/tags")" = "200" ]; then
-        _model_list="$(curl -s "http://127.0.0.1:11434/api/tags" 2>/dev/null | \
-            "$PYTHON" -c "import sys,json; print('\n'.join(m['name'] for m in json.load(sys.stdin).get('models',[])))" 2>/dev/null)"
-        if [ -n "$_model_list" ]; then
-            write_ok "Found models: $(echo "$_model_list" | tr '\n' ' ')"
-            _old_ifs="$IFS"; IFS='
-'
-            for _model in $_model_list; do
-                [ -z "$_model" ] && continue
-                write_ok "Pre-warming: $_model ..."
-                if curl -s -X POST "http://127.0.0.1:11434/api/generate" \
-                    -H "Content-Type: application/json" \
-                    -d "{\"model\":\"$_model\",\"prompt\":\"ping\",\"keep_alive\":\"24h\",\"max_tokens\":1}" \
-                    -o /dev/null 2>/dev/null; then
-                    write_ok "  $_model loaded into GPU (keep_alive=24h)"
-                else
-                    write_warn "  Pre-warm failed for $_model"
-                fi
-            done
-            IFS="$_old_ifs"
-        else
-            write_warn "No models found in Ollama -- run: ollama pull qwen2.5:7b"
-        fi
-    fi
-fi
+write_step "Step 6: LLM pre-warming (OpenAI)"
+write_ok "Remote LLM: OpenAI - no local model to load or warm"
 
 # ==== Step 7: Start Cloudflare tunnel ======================================
 write_step "Step 7: Starting Cloudflare tunnel"

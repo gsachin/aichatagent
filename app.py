@@ -1,28 +1,24 @@
 """
-University Admissions Advisor — Streamlit Web UI with Voice Support
-====================================================================
-Text + Voice chat interface powered by local AI.
+University Admissions Advisor — Streamlit Web UI (text chat)
+=============================================================
+Text chat interface powered by OpenAI + the full Meridian knowledge base.
 Run:    streamlit run app.py
         (or: python -m streamlit run app.py --server.headless true)
 """
 
 import os
-import sys
-import io
+import re
 import uuid
 import warnings
-import tempfile
 import threading
 import requests
 import streamlit as st
-import numpy as np
 
 warnings.filterwarnings("ignore")
 os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
 
-# Load the project .env from the repo root — this Streamlit entry point reads
-# OLLAMA_MODEL etc. from the environment, and unlike app/main.py nothing in
-# its import chain loads .env. Anchored to this file so CWD doesn't matter.
+# Load the project .env from the repo root. Anchored to this file so CWD does
+# not matter.
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -93,6 +89,16 @@ def _resolve_public_backend() -> str:
 
 # ── Background helper: log interaction + trigger sentiment ──────────
 
+def _with_answer_language(text: str) -> str:
+    """Append the selected answer-language rule to the chain input."""
+    code = st.session_state.get("answer_language", "en")
+    if not code or code == "en":
+        return text
+    from app.voice_system_prompt import language_instruction
+
+    return f"{text}\n\n{language_instruction(code)}"
+
+
 def _log_and_score_async(phone: str, transcript: str, channel: str,
                          lead_id: str = "", conversation_id: str = ""):
     """
@@ -145,11 +151,16 @@ with st.sidebar:
         "tuition, admission requirements, and more."
     )
     st.markdown("---")
-    st.markdown("### Voice Mode")
-    st.markdown("🎤 **Click the mic button** below the chat to ask questions by voice.")
-    st.session_state.setdefault("tts_enabled", True)
-    tts_enabled = st.checkbox("🔊 Speak responses aloud", value=st.session_state.tts_enabled)
-    st.session_state.tts_enabled = tts_enabled
+    st.markdown("### Answer Language")
+    _language_name = st.selectbox(
+        "The assistant will answer in this language",
+        ["English", "Hindi", "Gujarati"],
+        index=0,
+        key="answer_language_name",
+    )
+    st.session_state["answer_language"] = {
+        "English": "en", "Hindi": "hi", "Gujarati": "gu"
+    }[_language_name]
     st.markdown("---")
     st.markdown("### 📄 Upload Documents")
     st.markdown("Upload your transcript, ID proof, or marksheets to apply for admission.")
@@ -226,42 +237,49 @@ with st.sidebar:
             st.warning("Please complete the chat conversation first (name, email, phone) so we can create your profile.")
     st.markdown("---")
     st.markdown("### Powered by")
-    st.markdown("🐪 **Qwen 2.5 7B** (local LLM)")
-    st.markdown("👂 **Faster-Whisper** (local STT)")
+    st.markdown("☁️ **OpenAI** (remote LLM)")
+    st.markdown("👂 **Faster-Whisper** (multilingual STT)")
     st.markdown("📚 **Meridian University** knowledge base")
     st.markdown("---")
-    st.caption("All data stays on your machine. No internet required.")
+    st.caption(
+        "Prompts, call transcripts and the knowledge base are sent to the "
+        "configured OpenAI endpoint."
+    )
 
 # ── Title ──────────────────────────────────────────────────────────
 st.title("🎓 University Admissions Advisor")
-st.caption("Ask me anything about Meridian — type or use your voice.")
+st.caption("Ask me anything about Meridian University — type your question below.")
 
 # ── Load RAG chain (cached, runs once) ─────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_rag_chain():
-    """Initialize the full RAG pipeline and return the chain."""
+    """Build the document-context chat chain.
+
+    RAG was removed: the retriever returns the whole configured document, so
+    the Streamlit surface follows the same no-embeddings path as voice/text.
+    """
     from langchain_classic.chains import create_retrieval_chain
     from langchain_classic.chains.combine_documents import create_stuff_documents_chain
     from langchain_core.prompts import ChatPromptTemplate
 
+    from app.config import settings
+
     # Use shared RAG module — single source of truth for all interfaces
-    from app.rag import get_retriever, SYSTEM_PROMPT
+    from app.rag import SYSTEM_PROMPT
     from app.llm_backend import get_chat_model
 
-    retriever = get_retriever()
-    if retriever is None:
-        st.error("Failed to initialize vector store. Check that the PDF exists.")
-        st.stop()
+    from langchain_core.documents import Document
+    from langchain_core.runnables import RunnableLambda
 
-    # Ollama (Windows/Linux) or MLX server (Apple Silicon).
-    # Model and context come from .env (OLLAMA_MODEL / OLLAMA_NUM_CTX,
-    # sized by scripts/predeploy.py) — defaults preserve prior behavior.
-    import os as _os
-    llm = get_chat_model(
-        model=_os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M"),
-        temperature=0.0,
-        num_ctx=None,
+    from app.doc_context import document_context
+
+    retriever = RunnableLambda(
+        lambda _input: [Document(page_content=document_context())]
     )
+
+    # OpenAI is the only provider; LLM_MODEL is resolved inside the adapter.
+    # Do not pass temperature: reasoning models reject non-default values.
+    llm = get_chat_model(num_ctx=None)
 
     system_prompt = SYSTEM_PROMPT
 
@@ -274,107 +292,30 @@ def load_rag_chain():
     return create_retrieval_chain(retriever, qa_chain)
 
 
-# ── Load STT model (cached) ────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def load_stt_model():
-    """Load the Faster-Whisper model for speech-to-text."""
-    from faster_whisper import WhisperModel
-    from app.platform import get_whisper_device_config
-
-    # CTranslate2 supports only cpu/cuda — mps is mapped to cpu+int8 here.
-    device, compute_type = get_whisper_device_config()
-    model = WhisperModel("small.en", device=device, compute_type=compute_type)
-    return model
-
-
-def _has_cuda() -> bool:
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
-
-
-@st.cache_resource(show_spinner=False)
-def load_tts():
-    """Load Kokoro TTS engine (local onnx, no internet needed)."""
-    try:
-        from kokoro_onnx import Kokoro
-        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "pipecat", "kokoro-onnx")
-        model_path = os.path.join(cache_dir, "kokoro-v1.0.onnx")
-        voices_path = os.path.join(cache_dir, "voices-v1.0.bin")
-        return Kokoro(model_path, voices_path)
-    except Exception:
-        return None
-
-
-def text_to_audio_bytes(text: str, voice: str = "af_heart") -> bytes:
-    """Convert text to WAV audio bytes using Kokoro TTS."""
-    kokoro = load_tts()
-    if kokoro is None:
-        raise RuntimeError("Kokoro TTS not available")
-    audio, sr = kokoro.create(text, voice=voice, speed=1.0)
-    # Convert float32 → int16 PCM, then wrap in WAV container
-    audio_int16 = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
-    buf = io.BytesIO()
-    import wave
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(audio_int16.tobytes())
-    buf.seek(0)
-    return buf.read()
-
-
-def truncate_for_tts(text: str, max_chars: int = 800) -> str:
-    """Truncate text at a sentence boundary for natural-sounding TTS."""
-    if len(text) <= max_chars:
-        return text
-    # Find the last sentence-ending punctuation before the limit
-    truncated = text[:max_chars]
-    for punct in (". ", "? ", "! ", ".\n", "?\n", "!\n"):
-        last = truncated.rfind(punct)
-        if last > max_chars * 0.6:  # Only use if reasonably close to limit
-            return text[:last + 1]
-    # Fallback: break at last space
-    last_space = truncated.rfind(" ")
-    if last_space > 0:
-        return text[:last_space] + "..."
-    return truncated + "..."
-
-
-# ── Transcribe audio ────────────────────────────────────────────────
-def transcribe_audio(audio_bytes: bytes, sample_rate: int = 16000) -> str:
-    """Convert raw PCM audio to text using local Whisper."""
-    if len(audio_bytes) < 1000:
-        return ""
-
-    # Convert bytes to numpy float32 array
-    audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-
-    model = load_stt_model()
-    segments, _ = model.transcribe(audio_np, beam_size=5)
-    transcript = " ".join(seg.text for seg in segments).strip()
-
-    return transcript
-
-
 # ── Initialize ─────────────────────────────────────────────────────
 if "rag_chain" not in st.session_state:
-    with st.spinner("🔧 Loading PDF, building vector store, booting Qwen 2.5 7B..."):
-        # Quick LLM backend health check (Ollama or MLX server)
+    with st.spinner("🔧 Loading the knowledge base and connecting the LLM..."):
+        # Quick LLM backend health check (OpenAI, Ollama or MLX server)
+        from app.config import ConfigurationError
         from app.llm_backend import is_ready, provider_name
 
+        try:
+            active_provider = provider_name()
+        except ConfigurationError as exc:
+            st.error(f"❌ {exc}")
+            st.stop()
+
         if not is_ready():
-            if provider_name() == "mlx":
+            if active_provider == "openai":
+                st.error("❌ Cannot reach the OpenAI API. Check LLM_API_KEY / LLM_BASE_URL.")
+            elif active_provider == "mlx":
                 st.error("❌ Cannot reach the MLX server. Start it with start_services.sh.")
             else:
-                st.error("❌ Cannot reach Ollama. Make sure the app is running in your system tray.")
+                st.error("❌ Cannot reach the configured LLM provider. Check LLM_API_KEY / LLM_BASE_URL.")
             st.stop()
 
         st.session_state.rag_chain = load_rag_chain()
-        st.success("✅ Bot is ready! Type below or click 🎤 to speak.")
+        st.success("✅ Bot is ready! Type your question below.")
 
 # ── Backend-health banner (prevents silent data loss) ──────────────────
 @st.cache_data(ttl=10)
@@ -412,112 +353,10 @@ if "messages" not in st.session_state:
         {"role": "assistant", "content": greeting}
     ]
 
-# Track which audio messages have been auto-played (prevent replay on rerun)
-if "played_audio_idx" not in st.session_state:
-    st.session_state.played_audio_idx = -1
-
 # ── Display chat history ───────────────────────────────────────────
-for i, msg in enumerate(st.session_state.messages):
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Auto-play new audio that hasn't been played yet
-        if msg.get("audio") and i > st.session_state.played_audio_idx:
-            st.audio(msg["audio"], format="audio/wav", autoplay=True)
-            st.session_state.played_audio_idx = i
-
-# ── Voice input (audio_input) with loop guard ────────────────────
-# Dynamic key prevents infinite loop: st.audio_input persists data
-# across st.rerun() — changing the key creates a fresh widget each time.
-if "voice_key" not in st.session_state:
-    st.session_state.voice_key = 0
-
-audio_value = st.audio_input(
-    "🎤 Click to ask by voice",
-    key=f"voice_{st.session_state.voice_key}"
-)
-
-if audio_value is not None:
-    # Show what was recorded
-    with st.chat_message("user"):
-        st.audio(audio_value)
-        with st.spinner("👂 Transcribing..."):
-            # Read the audio bytes and convert to PCM for Whisper
-            audio_bytes = audio_value.read()
-
-            # Streamlit's audio_input returns audio in the browser's format.
-            # Convert to 16kHz mono 16-bit PCM for Whisper.
-            try:
-                import soundfile as sf
-                audio_np, orig_sr = sf.read(io.BytesIO(audio_bytes))
-                # Convert to mono if stereo
-                if audio_np.ndim > 1:
-                    audio_np = audio_np.mean(axis=1)
-                # Resample to 16kHz if needed
-                if orig_sr != 16000 and len(audio_np) > 0:
-                    from scipy.signal import resample
-                    audio_np = resample(audio_np, int(len(audio_np) * 16000 / orig_sr))
-                # Convert to int16
-                audio_16k = (np.clip(audio_np, -1, 1) * 32767).astype(np.int16)
-                transcript = transcribe_audio(audio_16k.tobytes(), 16000)
-            except Exception as e:
-                # Fallback: try reading as raw WAV
-                try:
-                    import wave
-                    with wave.open(io.BytesIO(audio_bytes), "rb") as w:
-                        pcm = w.readframes(w.getnframes())
-                        transcript = transcribe_audio(pcm, w.getframerate())
-                except Exception:
-                    st.error(f"Audio processing error: {e}")
-                    transcript = ""
-
-        if transcript:
-            st.markdown(f"🗣️ *{transcript}*")
-        else:
-            st.warning("Could not transcribe audio. Please speak clearly and try again.")
-            transcript = ""
-
-    if transcript:
-        # Process through the RAG chain
-        st.session_state.messages.append({"role": "user", "content": f"🎤 {transcript}"})
-
-        with st.chat_message("assistant"):
-            with st.spinner("🤔 Thinking..."):
-                try:
-                    response = st.session_state.rag_chain.invoke({"input": transcript})
-                    answer = response["answer"]
-                except Exception as e:
-                    answer = f"⚠️ Something went wrong: {e}\n\nMake sure Ollama is still running."
-
-            st.markdown(answer)
-
-            # ── Generate TTS audio (store in message for chat history playback) ─
-            audio_for_msg = None
-            if st.session_state.tts_enabled:
-                with st.spinner("🔊 Generating audio..."):
-                    try:
-                        tts_text = truncate_for_tts(answer)
-                        audio_for_msg = text_to_audio_bytes(tts_text)
-                    except Exception as e:
-                        st.warning(f"Audio generation skipped: {e}")
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "audio": audio_for_msg
-            })
-
-            # ── Log interaction + trigger sentiment scoring ────────
-            exchange = f"User (voice): {transcript}\nAssistant: {answer}"
-            _log_and_score_async(
-                phone=st.session_state.get("lead_phone", ""),
-                transcript=exchange,
-                channel="streamlit",
-                lead_id=st.session_state.get("lead_id", ""),
-                conversation_id=st.session_state.get("conversation_id", ""),
-            )
-
-        st.session_state.voice_key += 1  # Reset widget to break rerun loop
-        st.rerun()
 
 if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -543,6 +382,30 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         def has_admission_intent(text):
             return any(kw in text for kw in admission_keywords)
 
+        def _looks_like_phone(text: str) -> bool:
+            # At least 7 digits; "+", spaces, dashes and parentheses allowed.
+            # "Yes" (the live-chat transcript) must not become a phone number.
+            return len(re.sub(r"\D", "", text or "")) >= 7
+
+        def _looks_like_question(text: str) -> bool:
+            """A knowledge question should reach the chain, not the name gate."""
+            lowered = (text or "").lower()
+            if "?" in text:
+                return True
+            if re.search(
+                r"\b(list|programmes?|programs?|fees?|tuition|deadline|eligib"
+                r"ility|apply|admission|documents?)\b",
+                lowered,
+            ):
+                return True
+            return any(
+                marker in text for marker in
+                ("क्या", "सूची", "कितनी", "फीस", "प्रवेश", "कार्यक्रम",
+                 "શું", "યાદી", "કેટલી", "ફી", "પ્રવેશ", "કાર્યક્રમ")
+            )
+
+        _SKIP_WORDS = {"skip", "later", "no", "not now", "maybe later"}
+
         def extract_program(text):
             """
             Canonical Meridian program name for a message, or ''.
@@ -561,7 +424,20 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
 
         # ── State: waiting for name ───────────────────────────
         if awaiting == "name":
-            if has_admission_intent(msg_lower):
+            if msg_lower in _SKIP_WORDS:
+                # Let the visitor use the assistant without giving a profile.
+                st.session_state.lead_collected = True
+                st.session_state.awaiting_field = None
+                answer = (
+                    "No problem — ask me anything about programmes, fees, "
+                    "eligibility or applying."
+                )
+            elif _looks_like_question(msg):
+                # Answer the question now; the name prompt remains pending for
+                # a later turn. Previously any long message was rejected as
+                # "too long for a name", including knowledge questions.
+                answer = None
+            elif has_admission_intent(msg_lower):
                 # User provided name + admission intent in same message
                 # Try to extract just the name part
                 name_part = msg
@@ -598,15 +474,25 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 answer = "That doesn't look like an email address. Could you share a valid email? (e.g., name@example.com)"
 
         # ── State: waiting for phone ──────────────────────────
+        elif awaiting == "phone" and msg_lower not in _SKIP_WORDS \
+                and not _looks_like_phone(msg):
+            answer = (
+                "That doesn't look like a phone number. Please share a number "
+                "with at least 7 digits, or type 'skip'."
+            )
         elif awaiting == "phone":
-            st.session_state.lead_phone = msg
+            phone_value = (
+                f"streamlit_{uuid.uuid4().hex[:12]}"
+                if msg_lower in _SKIP_WORDS else msg
+            )
+            st.session_state.lead_phone = phone_value
             st.session_state.awaiting_field = None
             st.session_state.lead_collected = True
             # Save to backend — include program_interest if already known
             lid, err = sync_lead(
                 name=st.session_state.get("lead_name", ""),
                 email=st.session_state.get("lead_email", ""),
-                phone=st.session_state.get("lead_phone", ""),
+                phone=phone_value,
                 program=st.session_state.get("lead_program", ""),
                 lead_id=st.session_state.get("lead_id", ""),
                 conversation_id=st.session_state.get("conversation_id", ""),
@@ -623,7 +509,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 f"Perfect! I have your info:\n"
                 f"- Name: {st.session_state.lead_name}\n"
                 f"- Email: {st.session_state.lead_email}\n"
-                f"- Phone: {msg}\n\n"
+                f"- Phone: {phone_value}\n\n"
                 f"Is this correct? (Type 'yes' or tell me what to change)"
             )
 
@@ -819,27 +705,18 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         if answer is None:
             with st.spinner("Thinking..."):
                 try:
-                    response = st.session_state.rag_chain.invoke({"input": prompt})
+                    response = st.session_state.rag_chain.invoke(
+                        {"input": _with_answer_language(prompt)}
+                    )
                     answer = response["answer"]
                 except Exception as e:
-                    answer = f"Something went wrong: {e}\n\nMake sure Ollama is still running."
+                    answer = f"Something went wrong: {e}\n\nMake sure LLM_API_KEY and LLM_MODEL are configured (OpenAI)."
 
         st.markdown(answer)
-
-        # ── Generate TTS audio ─
-        audio_for_msg = None
-        if st.session_state.tts_enabled:
-            with st.spinner("🔊 Generating audio..."):
-                try:
-                    tts_text = answer[:500] + "..." if len(answer) > 500 else answer
-                    audio_for_msg = text_to_audio_bytes(tts_text)
-                except Exception as e:
-                    st.warning(f"Audio generation skipped: {e}")
 
         st.session_state.messages.append({
             "role": "assistant",
             "content": answer,
-            "audio": audio_for_msg
         })
 
         # ── Log interaction + trigger sentiment scoring ────────────
@@ -940,6 +817,6 @@ col1, col2 = st.columns([1, 4])
 with col1:
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = [
-            {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything — by text or voice."}
+            {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything about programmes, fees, eligibility or applying."}
         ]
         st.rerun()

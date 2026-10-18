@@ -94,7 +94,11 @@ def test_no_caller_number_still_produces_valid_twiml(client):
     resp = client.get("/twilio/voice")
 
     assert resp.status_code == 200
-    assert "<Parameter" not in resp.text
+    # The language parameter is always present now; what must never appear is
+    # an empty caller parameter (or any empty value).
+    assert 'name="phone"' not in resp.text
+    assert 'value=""' not in resp.text
+    assert '<Parameter name="language"' in resp.text
     assert "<Stream" in resp.text
 
 
@@ -104,6 +108,15 @@ def test_the_outbound_route_passes_the_lead_through(client):
     assert resp.status_code == 200
     assert '<Parameter name="leadId" value="lead-9"' in resp.text
     assert f'value="{CALLER}"' in resp.text
+
+
+def test_outbound_route_passes_the_language(client):
+    resp = client.get(
+        "/twilio/outbound-voice",
+        params={"leadId": "lead-9", "phone": CALLER, "language": "hi"},
+    )
+    assert resp.status_code == 200
+    assert '<Parameter name="language" value="hi"' in resp.text
 
 
 def test_an_untagged_outbound_call_is_still_valid(client):

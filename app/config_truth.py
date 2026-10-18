@@ -40,11 +40,13 @@ _SENSITIVE_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "KEY",
 #: Keys that must parse as integers. A value that cannot parse is a boot-time
 #: failure naming the key (TAC-5) — never a silent fallback, because a silent
 #: fallback is indistinguishable from a deliberate choice.
-_INT_KEYS = ("FASTAPI_WORKERS", "OLLAMA_NUM_CTX", "WHISPER_NUM_THREADS",
-             "RAG_TOP_K", "RAG_FETCH_K", "MIN_UTTERANCE_FRAMES", "STT_MIN_CHARS")
+_INT_KEYS = ("FASTAPI_WORKERS", "WHISPER_NUM_THREADS", "MIN_UTTERANCE_FRAMES",
+             "STT_MIN_CHARS", "LLM_MAX_TOKENS", "DOC_MAX_BYTES", "DOC_MAX_TOKENS",
+             "SARVAM_TTS_SAMPLE_RATE")
 
-_FLOAT_KEYS = ("RAG_SIMILARITY_THRESHOLD", "RAG_MCP_TIMEOUT", "OLLAMA_TEMPERATURE",
-               "KOKORO_SPEED", "RAG_MCP_COOLDOWN")
+_FLOAT_KEYS = ("KOKORO_SPEED", "LLM_TIMEOUT_S", "STT_LANGUAGE_MIN_PROB",
+              "SARVAM_STT_TIMEOUT_S", "SARVAM_TTS_PACE",
+              "SARVAM_TTS_TIMEOUT_S")
 
 #: A "read" is an env lookup, not a mere mention. `app/hardware_profile.py`
 #: writes FASTAPI_WORKERS as a string in a tier table — a naive substring scan
@@ -158,28 +160,7 @@ def is_read_anywhere(key: str, corpus: str | None = None) -> bool:
 #: PowerShell launcher reads the host/port pair. Reported separately so a real
 #: inert key is not buried among them.
 _EXTERNALLY_CONSUMED_PREFIXES = ("PYTHON", "STREAMLIT")
-_EXTERNALLY_CONSUMED = ("FASTAPI_HOST", "FASTAPI_PORT",
-                        # Engine-level keys read by the `ollama serve` PROCESS,
-                        # not by this code. Documented in `.env.example` under
-                        # "Consumed by the Ollama SERVICE, not by this
-                        # application"; an operator who puts them in `.env`
-                        # while tuning the engine would otherwise see them
-                        # reported INERT -- the false positive that says a live
-                        # setting is dead. They are listed EXACTLY rather than
-                        # folded into the prefix above, and `OLLAMA` is
-                        # deliberately NOT a prefix: that would silently excuse
-                        # any future OLLAMA_* key nothing reads, which is the one
-                        # thing this sweep exists to catch.
-                        #
-                        # OLLAMA_KEEP_ALIVE is NOT here, though the engine reads
-                        # that name too. This application reads it as well
-                        # (app/config.py, app/llm_backend.py) as the per-request
-                        # keep_alive, so it is genuinely read and can never be
-                        # inert. See the trap in `.env.example`.
-                        "OLLAMA_NUM_PARALLEL", "OLLAMA_MAX_LOADED_MODELS",
-                        "OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE",
-                        "OLLAMA_CONTEXT_LENGTH", "OLLAMA_HOST",
-                        "OLLAMA_MODELS")
+_EXTERNALLY_CONSUMED = ("FASTAPI_HOST", "FASTAPI_PORT")
 
 
 def is_externally_consumed(key: str) -> bool:
@@ -241,9 +222,6 @@ def sweep_direct_env_reads(exclude_files: tuple[str, ...] = ("config.py", "confi
 #: Anything NOT in this map must resolve through `app/config.py`. That is the
 #: TAC-1 gate: `sweep_unexplained_env_reads()` returns empty.
 DYNAMIC_KEYS: dict[str, str] = {
-    "USE_MCP_RAG": (
-        "The MCP-first seam's mode. test_rag_dispatcher flips it per test "
-        "(14 sites) to exercise off/auto/on against one interpreter."),
     "ADMISSION_ENABLED": (
         "US-016's revert switch. BRD-15 requires reverting by configuration, "
         "and admission.enabled() is the function the rollback path calls."),
@@ -253,12 +231,6 @@ DYNAMIC_KEYS: dict[str, str] = {
     "BG_PRIORITY_ENABLED": (
         "Turns the background/voice admission gate on and off; the gate is "
         "exercised both ways in-process."),
-    "RAG_BREAKER_MODE": (
-        "Breaker policy. test_brd15_rollback sets it at runtime and asserts "
-        "the next read reflects it — the rollback demonstration itself."),
-    "RAG_COLLECTION_NAME": (
-        "Blue/green collection switch (C5). Flipped at runtime to prove the "
-        "seam moves without a restart."),
     "PERF_TRACE": (
         "Tracing toggle; enabled around a block of code under test."),
     "PERF_TRACE_FILE": (
@@ -280,14 +252,6 @@ DYNAMIC_KEYS: dict[str, str] = {
         "admission.asset_drift(), which test_us016_admission drives by changing "
         "the voice in-process and requiring the next status call to report the "
         "drift. The synthesiser's own copy of it resolves through Settings."),
-    "RAG_RETRIEVAL_BUDGET": (
-        "US-013 AC-1's serving budget. test_us013_breaker lowers it in-process "
-        "and requires the very next _timeout(probe=False) to observe the "
-        "tighter cap — an import-time value cannot express that."),
-    "RAG_FALLBACK_RESERVE": (
-        "The reserve kept inside RAG_RETRIEVAL_BUDGET for the local "
-        "re-retrieval. Changed beside the budget by test_us013_breaker, for the "
-        "same reason: the next call must see it."),
 }
 
 _READ_SITE_PATTERNS = (
