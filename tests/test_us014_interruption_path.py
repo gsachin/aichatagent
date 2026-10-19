@@ -389,6 +389,9 @@ def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
             yield [0.0] * 160, 8000
 
     monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
+    # A developer box may have the pre-rendered greeting on disk; this test is
+    # about the handler wiring, so force the fake stream on every box.
+    monkeypatch.setattr(vh, "greeting_asset_frames", lambda *args: None)
 
     async def _no_hangup(*a, **k):
         return None
@@ -536,3 +539,60 @@ async def test_an_ordinary_turn_does_not_claim_the_call_ended(monkeypatch):
     await main._run_voice_turn(turn)
     assert turn.ended["by_turn"] is False
     assert not ws.closed
+
+
+@pytest.mark.anyio
+async def test_the_greeting_uses_a_pre_rendered_asset(monkeypatch, tmp_path):
+    """After a restart the first greeting must come from disk, not the model."""
+    import wave
+
+    import app.admission as admission
+
+    text = "asset probe greeting"
+    name = vh.greeting_asset_name("en", "inbound", text)
+    with wave.open(str(tmp_path / name), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 1600)   # 10 × 20 ms frames
+
+    monkeypatch.setattr(admission, "asset_path", lambda asset: tmp_path / asset)
+
+    async def must_not_synthesise(self, text, **kwargs):
+        raise AssertionError("the pre-rendered greeting was re-synthesised")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", must_not_synthesise)
+
+    async def no_wait(session):
+        return 0
+
+    monkeypatch.setattr(main, "_await_playout", no_wait)
+
+    session = VoiceCallSession(language="en")
+    ws = FakeWS(session=session)
+    turn = main._VoiceTurn(
+        websocket=ws, session=session, label="test",
+        stream_sid="MZ-asset", call_sid="CA-asset",
+    )
+    await main._run_greeting(turn, text)
+
+    media = [message for message in ws.sent if message.get("event") == "media"]
+    assert len(media) == 10
+
+
+@pytest.mark.anyio
+async def test_the_greeting_warmup_skips_an_existing_asset(monkeypatch):
+    import app.voice_system_prompt as vsp
+
+    async def must_not_synthesise(self, text, **kwargs):
+        raise AssertionError("a pre-rendered greeting was warmed unnecessarily")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", must_not_synthesise)
+    monkeypatch.setattr(vh, "greeting_asset_frames", lambda *args: [b"asset"])
+    monkeypatch.setattr(vsp, "call_greeting", lambda language, direction: "asset probe")
+    monkeypatch.setattr(main, "_GREETING_WARMUP_LANGUAGES", ("en",))
+    monkeypatch.setattr(main, "_active_call_sids", {})
+
+    await main._warm_greeting_cache(delay=0)

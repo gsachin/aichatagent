@@ -93,6 +93,42 @@ def check_foreign_wording(name: str, text: str) -> list[str]:
     return problems
 
 
+def _write_wav(audio, sr: int, out_path: Path, *, text: str,
+               language: str, voice: str,
+               phoneme_language: str | None) -> dict:
+    """Write one carrier-format WAV and return its manifest record."""
+    import numpy as np
+
+    audio = np.asarray(audio, dtype=np.float32)
+    if sr != TARGET_SR:
+        from scipy.signal import resample
+        audio = resample(audio, int(len(audio) * TARGET_SR / sr)).astype(np.float32)
+        sr = TARGET_SR
+
+    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(out_path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm16.tobytes())
+
+    data = out_path.read_bytes()
+    return {
+        "file": out_path.name,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sample_rate": sr,
+        "channels": 1,
+        "sample_width": 2,
+        "duration_s": round(len(pcm16) / sr, 3),
+        "text": text,
+        "language": language,
+        "voice": voice,
+        "phoneme_language": phoneme_language,
+    }
+
+
 def synthesise(text: str, out_path: Path, *,
                language: str | None = None,
                voice: str | None = None) -> dict:
@@ -139,42 +175,49 @@ def synthesise(text: str, out_path: Path, *,
             audio, sr = _kokoro_render(
                 engine, text, language, voice, speed
             )
-    audio = np.asarray(audio, dtype=np.float32)
+    return _write_wav(
+        audio, sr, out_path,
+        text=text,
+        language=language or "en",
+        voice=voice,
+        phoneme_language=lang,
+    )
 
-    if sr != TARGET_SR:
-        from scipy.signal import resample
-        audio = resample(audio, int(len(audio) * TARGET_SR / sr)).astype(np.float32)
-        sr = TARGET_SR
 
-    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(out_path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(pcm16.tobytes())
+def synthesise_greeting(text: str, out_path: Path, language: str) -> dict:
+    """Render a fixed greeting through the same provider the live call uses.
 
-    data = out_path.read_bytes()
-    return {
-        "file": out_path.name,
-        "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "sample_rate": sr,
-        "channels": 1,
-        "sample_width": 2,
-        "duration_s": round(len(pcm16) / sr, 3),
-        "text": text,
-        "language": language or "en",
-        "voice": voice,
-        "phoneme_language": lang,
-    }
+    Gujarati is routed to Sarvam Bulbul in the demo; every other selectable
+    language uses Kokoro. The asset is therefore in the same voice the caller
+    would have heard from live synthesis.
+    """
+    from app.voice_handler import _use_sarvam_tts
+
+    if _use_sarvam_tts(language):
+        from app import tts_sarvam
+        from app.config import settings
+
+        speaker = tts_sarvam.speaker_for(language)
+        audio, sr = tts_sarvam.synthesise(
+            text, language,
+            speaker=speaker,
+            pace=float(settings.SARVAM_TTS_PACE),
+        )
+        return _write_wav(
+            audio, sr, out_path,
+            text=text,
+            language=language,
+            voice=speaker,
+            phoneme_language="sarvam",
+        )
+    return synthesise(text, out_path, language=language)
 
 
 def main() -> int:
     from app.admission import ASSET_MANIFEST, BUSY_ASSET, FIXED_RESPONSE_ASSET, asset_path
 
     print("=" * 74)
-    print("US-016 -- building the pre-synthesised call assets")
+    print("US-016 + greetings -- building the pre-synthesised call assets")
     print("=" * 74)
 
     jobs = [
@@ -216,6 +259,27 @@ def main() -> int:
         print(f"  {name:<24} {info['duration_s']:>6.2f}s  {info['bytes']:>8} bytes  "
               f"sha256 {info['sha256'][:12]}  lang {info['language']}  "
               f"voice {info['voice']}")
+
+    # Fixed greetings, one per selectable language and direction. The filename
+    # carries the digest of the live voice/text identity, so a voice change
+    # produces a new file and the runtime falls back to live synthesis until
+    # this script is run again.
+    from app.voice_handler import greeting_asset_name
+    from app.voice_system_prompt import call_greeting
+
+    greeting_languages = ("en", "hi", "gu", *DEFAULT_FOREIGN_LANGUAGES)
+    manifest["greetings"] = {}
+    print("\n  greetings")
+    for code in greeting_languages:
+        for direction in ("inbound", "outbound"):
+            text = call_greeting(code, direction)
+            name = greeting_asset_name(code, direction, text)
+            info = synthesise_greeting(text, asset_path(name), code)
+            info["direction"] = direction
+            manifest["greetings"][name] = info
+            print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+                  f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+                  f"lang {info['language']}  voice {info['voice']}")
 
     asset_path(ASSET_MANIFEST).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

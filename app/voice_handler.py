@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io as _io
 import logging
 import re
@@ -682,7 +683,7 @@ def _turn_outcome(chunks: list[bytes]) -> list[bytes]:
     return chunks
 
 
-def load_call_asset_ulaw(name: str) -> list[bytes] | None:
+def load_call_asset_ulaw(name: str, *, chunk: int = 320) -> list[bytes] | None:
     """Read a pre-synthesised call asset as µ-law chunks. No model, no synthesis.
 
     US-016 AC-5: the fixed response and the busy message are the two sentences
@@ -714,8 +715,36 @@ def load_call_asset_ulaw(name: str) -> list[bytes] | None:
         logger.exception("call asset %s could not be read", name)
         return None
 
-    chunk = 320  # 20 ms at 8 kHz, the Media Streams frame size
+    # `chunk` is BYTES OF 16-BIT PCM: 320 bytes = 160 samples = 20 ms at 8 kHz.
+    # The µ-law output per chunk is 160 bytes, which is the media-stream frame
+    # size, so a greeting asset and a live stream are framed identically.
     return [pcm_to_ulaw(pcm[i:i + chunk]) for i in range(0, len(pcm), chunk)]
+
+
+# ── pre-rendered greeting assets ──────────────────────────────────────
+#: The greeting is fixed per language and direction, so it can be rendered
+#: once by ``scripts/build_call_assets.py`` and loaded from disk on the first
+#: call after a restart. The filename carries a digest of the same identity
+#: used by the in-memory cache (language, direction, wording, provider, voice,
+#: speed, model/sample rate), so a voice or text change produces a new name
+#: and the live path runs until the asset is rebuilt -- never stale audio.
+def _greeting_digest(key: tuple) -> str:
+    payload = "\x1f".join(str(part) for part in key)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def greeting_asset_name(language: str | None, direction: str, text: str) -> str:
+    key = greeting_cache_key(language, direction, text)
+    code, direction_name = key[0], key[1]
+    return f"greeting_{direction_name}_{code}_{_greeting_digest(key)}.wav"
+
+
+def greeting_asset_frames(
+    language: str | None, direction: str, text: str
+) -> list[bytes] | None:
+    """Ready-to-send µ-law frames for a pre-rendered greeting, or ``None``."""
+    frames = load_call_asset_ulaw(greeting_asset_name(language, direction, text))
+    return frames or None
 
 
 def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:

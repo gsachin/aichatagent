@@ -165,6 +165,7 @@ async def _warm_greeting_cache(delay: float = 2.0) -> None:
     try:
         from app.voice_handler import (
             VoiceCallSession,
+            greeting_asset_frames,
             greeting_cache_get,
             greeting_cache_key,
             greeting_cache_put,
@@ -183,6 +184,12 @@ async def _warm_greeting_cache(delay: float = 2.0) -> None:
                 text = call_greeting(language, direction)
                 key = greeting_cache_key(language, direction, text)
                 if greeting_cache_get(key):
+                    continue
+                if greeting_asset_frames(language, direction, text):
+                    logger.info(
+                        "Greeting asset present for %s/%s; warmup skipped",
+                        language, direction,
+                    )
                     continue
                 session = VoiceCallSession(
                     language=language, direction=direction
@@ -1258,6 +1265,7 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
     try:
         from app.voice_handler import (
             generate_ulaw_greeting,
+            greeting_asset_frames,
             greeting_cache_get,
             greeting_cache_key,
             greeting_cache_put,
@@ -1271,6 +1279,16 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         session.mark_speaking()
 
         direction = (getattr(session, "direction", "") or "inbound").strip().lower()
+        greeting_start = _time.perf_counter()
+
+        def _note_first_audio(source: str, frames: list[bytes]) -> None:
+            """One greppable line for the first call after a deploy/restart."""
+            logger.info(
+                "%s: GREETING_FIRST_AUDIO language=%s direction=%s "
+                "source=%s frames=%d elapsed_ms=%.0f",
+                t.label, session.language, direction, source, len(frames),
+                (_time.perf_counter() - greeting_start) * 1000.0,
+            )
         cache_key = greeting_cache_key(session.language, direction, text)
         cached = greeting_cache_get(cache_key)
         if cached:
@@ -1279,61 +1297,81 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
                 f"{direction}, {len(cached)} frames)"
             )
             session.note_greeting_spoken(text)
+            _note_first_audio("cache", cached)
             await _write_frames(t, cached, sent)
         else:
-            frames: list[bytes] = []
-            noted = False
-
-            async def _stream_greeting() -> None:
-                nonlocal noted
-                # Neither provider needs the whole script before the first
-                # frame: Kokoro streams per sentence and Sarvam streams PCM as
-                # it is generated. The first sentence is what the caller hears
-                # while the rest is still being synthesised.
-                async for audio, sr in session.synthesise_stream(text):
-                    if not noted:
-                        # The greeting is agent speech, so the transcript of
-                        # this call must contain it -- but only once audio
-                        # actually exists; a failed stream must not teach the
-                        # model it already introduced itself.
-                        session.note_greeting_spoken(text)
-                        noted = True
-                    chunk_frames = session._chunk_to_ulaw_frames(audio, sr)
-                    frames.extend(chunk_frames)
-                    await _write_frames(t, chunk_frames, sent)
-
-            try:
-                await _asyncio.wait_for(
-                    _stream_greeting(), timeout=_greeting_timeout_s()
-                )
-            except Exception:
-                # The streaming path is shared with every turn, but the
-                # greeting must not lose its batch fallback on Kokoro. Only
-                # fall back when nothing has been spoken: repeating the start
-                # of the greeting would be worse than the delay.
-                if frames or _use_sarvam_tts(session.language):
-                    raise
-                logger.exception(
-                    "%s: streaming greeting failed before audio; "
-                    "falling back to batch synthesis", t.label,
-                )
-                frames = await _asyncio.wait_for(
-                    _asyncio.to_thread(
-                        generate_ulaw_greeting, text,
-                        language=session.language,
-                    ),
-                    timeout=_greeting_timeout_s(),
-                )
-                if frames:
-                    session.note_greeting_spoken(text)
-                await _write_frames(t, frames, sent)
-
-            if frames:
-                greeting_cache_put(cache_key, frames)
+            # A pre-rendered asset is the first-call path after a restart: the
+            # file is already in the agent's voice, so no model or network is
+            # touched. A missing/drifted asset falls through to live synthesis.
+            asset = greeting_asset_frames(session.language, direction, text)
+            if asset:
                 logger.info(
-                    f"{t.label}: greeting synthesised and cached "
-                    f"({session.language}/{direction}, {len(frames)} frames)"
+                    f"{t.label}: greeting asset hit ({session.language}/"
+                    f"{direction}, {len(asset)} frames)"
                 )
+                greeting_cache_put(cache_key, asset)
+                session.note_greeting_spoken(text)
+                _note_first_audio("asset", asset)
+                await _write_frames(t, asset, sent)
+            else:
+                frames: list[bytes] = []
+                noted = False
+                first_audio = False
+
+                async def _stream_greeting() -> None:
+                    nonlocal noted, first_audio
+                    # Neither provider needs the whole script before the first
+                    # frame: Kokoro streams per sentence and Sarvam streams PCM
+                    # as it is generated. The first sentence is what the caller
+                    # hears while the rest is still being synthesised.
+                    async for audio, sr in session.synthesise_stream(text):
+                        if not noted:
+                            # The greeting is agent speech, so the transcript
+                            # of this call must contain it -- but only once
+                            # audio actually exists; a failed stream must not
+                            # teach the model it already introduced itself.
+                            session.note_greeting_spoken(text)
+                            noted = True
+                        chunk_frames = session._chunk_to_ulaw_frames(audio, sr)
+                        if chunk_frames and not first_audio:
+                            first_audio = True
+                            _note_first_audio("stream", chunk_frames)
+                        frames.extend(chunk_frames)
+                        await _write_frames(t, chunk_frames, sent)
+
+                try:
+                    await _asyncio.wait_for(
+                        _stream_greeting(), timeout=_greeting_timeout_s()
+                    )
+                except Exception:
+                    # The streaming path is shared with every turn, but the
+                    # greeting must not lose its batch fallback on Kokoro. Only
+                    # fall back when nothing has been spoken: repeating the
+                    # start of the greeting would be worse than the delay.
+                    if frames or _use_sarvam_tts(session.language):
+                        raise
+                    logger.exception(
+                        "%s: streaming greeting failed before audio; "
+                        "falling back to batch synthesis", t.label,
+                    )
+                    frames = await _asyncio.wait_for(
+                        _asyncio.to_thread(
+                            generate_ulaw_greeting, text,
+                            language=session.language,
+                        ),
+                        timeout=_greeting_timeout_s(),
+                    )
+                    if frames:
+                        session.note_greeting_spoken(text)
+                        _note_first_audio("batch", frames)
+                    await _write_frames(t, frames, sent)
+
+                if frames:
+                    greeting_cache_put(cache_key, frames)
+                    logger.info(
+                        f"{t.label}: greeting synthesised and cached "
+                        f"({session.language}/{direction}, {len(frames)} frames)"
+                    )
 
         await _await_playout(session)
         if session.cancel_requested():

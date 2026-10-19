@@ -466,3 +466,45 @@ def test_sarvam_astream_transport_error_keeps_the_shared_client(monkeypatch,
 
     asyncio.run(run())
     assert len(created) == 1
+
+
+def test_greeting_asset_name_tracks_the_voice_identity(monkeypatch):
+    import app.voice_handler as vh
+
+    first = vh.greeting_asset_name("hi", "outbound", "नमस्ते")
+    assert vh.greeting_asset_name("hi", "outbound", "नमस्ते") == first
+    assert vh.greeting_asset_name("hi", "inbound", "नमस्ते") != first
+    assert vh.greeting_asset_name("hi", "outbound", "नमस्ते!") != first
+    # A voice change must produce a different asset, never stale audio.
+    monkeypatch.setattr(vh, "_tts_voice_for", lambda code: "hf_beta")
+    assert vh.greeting_asset_name("hi", "outbound", "नमस्ते") != first
+
+
+def test_greeting_asset_frames_loads_a_carrier_wav(monkeypatch, tmp_path):
+    import wave
+
+    import app.admission as admission
+    import app.voice_handler as vh
+
+    text = "asset probe greeting"
+    name = vh.greeting_asset_name("hi", "outbound", text)
+    with wave.open(str(tmp_path / name), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 1600)
+
+    monkeypatch.setattr(admission, "asset_path", lambda asset: tmp_path / asset)
+    frames = vh.greeting_asset_frames("hi", "outbound", text)
+
+    assert frames is not None
+    assert len(frames) == 10          # 1600 samples / 160 per 20 ms frame
+    assert all(isinstance(frame, bytes) for frame in frames)
+
+
+def test_greeting_asset_frames_is_none_when_missing(monkeypatch, tmp_path):
+    import app.admission as admission
+    import app.voice_handler as vh
+
+    monkeypatch.setattr(admission, "asset_path", lambda asset: tmp_path / asset)
+    assert vh.greeting_asset_frames("hi", "outbound", "no such asset") is None
