@@ -346,3 +346,123 @@ def test_streaming_indic_yields_one_chunk(monkeypatch):
     audio, sr = chunks[0]
     assert audio.shape == (320,)
     assert sr == 24000
+
+
+def test_sarvam_async_client_is_reused(monkeypatch):
+    import app.tts_sarvam as tts
+
+    created = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            self.is_closed = False
+            self.closed = False
+            created.append(self)
+
+        async def aclose(self):
+            self.closed = True
+            self.is_closed = True
+
+    monkeypatch.setattr(tts.httpx, "AsyncClient", _Client)
+    tts._ASYNC_CLIENT = None
+    tts._ASYNC_CLIENT_LOOP = None
+
+    async def use():
+        first = tts._async_client()
+        assert tts._async_client() is first
+        await tts.aclose()
+        assert first.closed
+        second = tts._async_client()
+        assert second is not first
+        await tts.aclose()
+
+    asyncio.run(use())
+    assert len(created) == 2
+
+
+def test_sarvam_async_client_follows_the_event_loop(monkeypatch):
+    import app.tts_sarvam as tts
+
+    created = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            self.is_closed = False
+            created.append(self)
+
+        async def aclose(self):
+            self.is_closed = True
+
+    monkeypatch.setattr(tts.httpx, "AsyncClient", _Client)
+    tts._ASYNC_CLIENT = None
+    tts._ASYNC_CLIENT_LOOP = None
+
+    async def one():
+        return tts._async_client()
+
+    first = asyncio.run(one())
+    second = asyncio.run(one())
+    try:
+        assert second is not first, "a client from a closed loop was reused"
+        assert len(created) == 2
+    finally:
+        tts._ASYNC_CLIENT = None
+        tts._ASYNC_CLIENT_LOOP = None
+
+
+def test_greeting_cache_roundtrip_and_copy():
+    import app.voice_handler as vh
+
+    vh.clear_greeting_cache()
+    try:
+        key = vh.greeting_cache_key("hi", "outbound", "नमस्ते")
+        assert vh.greeting_cache_get(key) is None
+        frames = [b"a", b"b"]
+        vh.greeting_cache_put(key, frames)
+        cached = vh.greeting_cache_get(key)
+        assert cached == frames
+        cached.append(b"c")
+        assert vh.greeting_cache_get(key) == frames, "the cache handed out its list"
+        assert vh.greeting_cache_key("hi", "inbound", "नमस्ते") != key
+        assert vh.greeting_cache_key("hi", "outbound", "नमस्ते!") != key
+    finally:
+        vh.clear_greeting_cache()
+
+
+def test_sarvam_astream_transport_error_keeps_the_shared_client(monkeypatch,
+                                                                override_settings):
+    """A failed request must not close the pool another caller is streaming on."""
+    import httpx
+
+    import app.tts_sarvam as tts
+
+    created = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            self.is_closed = False
+            self.closed = False
+            created.append(self)
+
+        def stream(self, *args, **kwargs):
+            raise httpx.ConnectError("connection dropped")
+
+        async def aclose(self):
+            self.closed = True
+            self.is_closed = True
+
+    monkeypatch.setattr(tts.httpx, "AsyncClient", _Client)
+    tts._ASYNC_CLIENT = None
+    tts._ASYNC_CLIENT_LOOP = None
+    override_settings(SARVAM_API_KEY="test-key")
+
+    async def run():
+        client = tts._async_client()
+        with pytest.raises(tts.TTSError, match="request failed"):
+            async for _chunk in tts.astream("નમસ્તે", "gu"):
+                pass
+        assert not client.closed, "the shared pool was closed under another caller"
+        await tts.aclose()
+
+    asyncio.run(run())
+    assert len(created) == 1

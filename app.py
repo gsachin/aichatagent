@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from app.streamlit_backend import backend_healthy, sync_lead, sync_program
+from app.languages import configured_foreign_languages, normalize_language_code
+from app.localized_text import eligibility_text, greeting_text, streamlit_ui
 from app.offers.service import missing_fields_text
 from app.programs import detect_program, is_explicit_program_choice
 
@@ -91,12 +93,50 @@ def _resolve_public_backend() -> str:
 
 def _with_answer_language(text: str) -> str:
     """Append the selected answer-language rule to the chain input."""
-    code = st.session_state.get("answer_language", "en")
+    code = normalize_language_code(st.session_state.get("answer_language", "en"))
     if not code or code == "en":
         return text
     from app.voice_system_prompt import language_instruction
 
     return f"{text}\n\n{language_instruction(code)}"
+
+
+def _ui(key: str, default: str, **kwargs) -> str:
+    """A Streamlit prompt in the selected language.
+
+    English gets the exact literal it had before; every language the selector
+    offers (Hindi and Gujarati included) has an entry in ``STREAMLIT_UI``.
+    """
+    return streamlit_ui(
+        key,
+        st.session_state.get("answer_language", "en"),
+        default,
+        **kwargs,
+    )
+
+
+def _greeting_text() -> str:
+    """The opening message for this session, in the selected language."""
+    return greeting_text(
+        st.session_state.get("answer_language", "en"),
+        bool(st.session_state.get("lead_collected")),
+    )
+
+
+def _program_requirements(prog: str) -> str:
+    """The eligibility prompt for *prog*, with the requirement translated."""
+    requirement = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
+    return _ui(
+        "program_requirements",
+        "**{prog}** — great choice! 🎓\n\n"
+        "Before we proceed, here are the requirements:\n"
+        "📋 Eligibility: {reqs}\n\n"
+        "Do you meet these requirements? (yes/no)",
+        prog=prog,
+        reqs=eligibility_text(
+            requirement, st.session_state.get("answer_language", "en")
+        ),
+    )
 
 
 def _log_and_score_async(phone: str, transcript: str, channel: str,
@@ -152,15 +192,27 @@ with st.sidebar:
     )
     st.markdown("---")
     st.markdown("### Answer Language")
+    # The first three labels are the original options in the original order.
+    # The six foreign languages are appended only when the feature is enabled.
+    _language_labels = {
+        "English": "en", "Hindi": "hi", "Gujarati": "gu",
+    }
+    if configured_foreign_languages():
+        _language_labels.update({
+            "Spanish (Español)": "es",
+            "French (Français)": "fr",
+            "Italian (Italiano)": "it",
+            "Japanese (日本語)": "ja",
+            "Portuguese (Português)": "pt",
+            "Chinese (中文)": "zh",
+        })
     _language_name = st.selectbox(
         "The assistant will answer in this language",
-        ["English", "Hindi", "Gujarati"],
+        list(_language_labels),
         index=0,
         key="answer_language_name",
     )
-    st.session_state["answer_language"] = {
-        "English": "en", "Hindi": "hi", "Gujarati": "gu"
-    }[_language_name]
+    st.session_state["answer_language"] = _language_labels[_language_name]
     st.markdown("---")
     st.markdown("### 📄 Upload Documents")
     st.markdown("Upload your transcript, ID proof, or marksheets to apply for admission.")
@@ -330,7 +382,6 @@ if not _backend_reachable():
     )
 
 if "messages" not in st.session_state:
-    greeting = "Hello! I'm your University Admissions Advisor."
     # Check if we have lead info — if not, ask
     st.session_state.setdefault("lead_collected", False)
     st.session_state.setdefault("lead_name", "")
@@ -347,11 +398,23 @@ if "messages" not in st.session_state:
     # app.crm.session, which serves the server-side channels.
     st.session_state.setdefault("conversation_id", str(uuid.uuid4()))
     if not st.session_state.lead_collected:
-        greeting += " Before we start, could you tell me your name?"
         st.session_state.awaiting_field = "name"
     st.session_state.messages = [
-        {"role": "assistant", "content": greeting}
+        {"role": "assistant", "content": _greeting_text()}
     ]
+elif (
+    # The student changed the language before saying anything. Replace the one
+    # greeting on screen instead of leaving the previous language above a
+    # conversation that has not started yet.
+    st.session_state.get("_ui_language")
+    and st.session_state.get("_ui_language")
+    != st.session_state.get("answer_language", "en")
+    and len(st.session_state.messages) == 1
+    and st.session_state.messages[0].get("role") == "assistant"
+    and st.session_state.get("awaiting_field") == "name"
+):
+    st.session_state.messages[0]["content"] = _greeting_text()
+st.session_state["_ui_language"] = st.session_state.get("answer_language", "en")
 
 # ── Display chat history ───────────────────────────────────────────
 for msg in st.session_state.messages:
@@ -377,6 +440,21 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             "i'm ready to take", "apply now", "i want to apply",
             "i am ready", "let's proceed", "go ahead", "i want to join",
             "i am interested in joining", "admission",
+            # Hindi. Specific phrases, not "प्रवेश" alone: a knowledge
+            # question ("प्रवेश की आवश्यकताएँ क्या हैं?") must still reach RAG.
+            "प्रवेश लेना", "प्रवेश लेना है", "प्रवेश चाहिए", "एडमिशन लेना",
+            "एडमिशन चाहिए", "दाखिला लेना", "दाखिला चाहिए", "आवेदन करना है",
+            # Gujarati
+            "પ્રવેશ લેવો", "પ્રવેશ જોઈએ", "એડમિશન લેવું", "એડમિશન જોઈએ",
+            "દાખલો લેવો", "અરજી કરવી છે",
+            # Spanish, French, Italian, Japanese, Portuguese, Chinese
+            "quiero tomar la admisión", "quiero inscribirme", "quiero aplicar",
+            "je veux prendre l'admission", "je veux m'inscrire",
+            "je souhaite m'inscrire",
+            "voglio prendere l'ammissione", "voglio iscrivermi",
+            "入学を申し込みたい", "出願したい",
+            "quero me inscrever", "quero fazer a inscrição",
+            "我想申请入学", "我想申请",
         ]
 
         def has_admission_intent(text):
@@ -390,7 +468,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
         def _looks_like_question(text: str) -> bool:
             """A knowledge question should reach the chain, not the name gate."""
             lowered = (text or "").lower()
-            if "?" in text:
+            if "?" in text or "？" in text:
                 return True
             if re.search(
                 r"\b(list|programmes?|programs?|fees?|tuition|deadline|eligib"
@@ -401,10 +479,54 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             return any(
                 marker in text for marker in
                 ("क्या", "सूची", "कितनी", "फीस", "प्रवेश", "कार्यक्रम",
-                 "શું", "યાદી", "કેટલી", "ફી", "પ્રવેશ", "કાર્યક્રમ")
+                 "શું", "યાદી", "કેટલી", "ફી", "પ્રવેશ", "કાર્યક્રમ",
+                 # Spanish, French, Italian, Japanese, Portuguese, Chinese
+                 "qué", "cuánto", "cuánta", "programa", "matrícula", "cómo",
+                 "quel", "quelle", "combien", "frais", "programme", "comment",
+                 "quale", "quanto", "tassa", "programma", "come",
+                 "何", "いくら", "授業料", "プログラム", "方法",
+                 "qual", "quanto", "mensalidade", "programa", "como",
+                 "什么", "多少", "学费", "课程", "怎么")
             )
 
-        _SKIP_WORDS = {"skip", "later", "no", "not now", "maybe later"}
+        _SKIP_WORDS = {
+            "skip", "later", "no", "not now", "maybe later",
+            # Hindi
+            "छोड़ें", "छोड़ दो", "बाद में", "अभी नहीं", "नहीं अभी",
+            # Gujarati
+            "છોડો", "પછી", "અત્યારે નહીં", "હમણાં નહીં",
+            # Foreign skip aliases
+            "salta", "ahora no", "más tarde", "mas tarde",
+            "passer", "plus tard",
+            "non ora", "più tardi", "piu tardi",
+            "スキップ", "後で", "あとで",
+            "pular", "depois", "mais tarde",
+            "跳过", "以後", "以后", "稍后",
+        }
+
+        # The same answer in every language the selector offers. Keeping the
+        # sets in one place stops the qualification and profile-confirmation
+        # branches from disagreeing about what "yes" means.
+        _YES_WORDS = {
+            "yes", "yeah", "yep", "yes i do", "i do", "i meet", "correct",
+            "right", "ok", "okay",
+            # Hindi
+            "हाँ", "हां", "हाँ जी", "हां जी", "जी हाँ", "जी हां", "ठीक है",
+            "सही है", "बिल्कुल",
+            # Gujarati
+            "હા", "હાં", "હા જી", "બરાબર", "સાચું", "ચોક્કસ",
+            # Spanish, French, Italian, Japanese, Portuguese, Chinese
+            "sí", "si", "oui", "sì", "はい", "sim", "是", "好的",
+        }
+        _NO_WORDS = {
+            "no", "nope", "i don't", "not sure",
+            # Hindi
+            "नहीं", "ना", "नहीं जी", "बिलकुल नहीं",
+            # Gujarati
+            "ના", "નહીં", "નહિ", "બિલકુલ નહીં",
+            # Foreign
+            "non", "não", "nao", "いいえ", "不是", "不",
+        }
 
         def extract_program(text):
             """
@@ -420,7 +542,21 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
 
         # ── Smart name detection: skip if contains admission intent ─
         has_email = "@" in msg and "." in msg.split("@")[-1] if "@" in msg else False
-        is_short_name = len(msg.split()) <= 3 and not has_email and "?" not in msg and len(msg) < 60
+        _answer_language = normalize_language_code(
+            st.session_state.get("answer_language", "en")
+        )
+        if _answer_language in ("ja", "zh"):
+            # CJK does not use spaces; a whole sentence would otherwise pass
+            # the three-word name test.
+            is_short_name = (
+                len(msg) <= 20 and not has_email
+                and not any(ch in msg for ch in "?？。！")
+            )
+        else:
+            is_short_name = (
+                len(msg.split()) <= 3 and not has_email
+                and "?" not in msg and len(msg) < 60
+            )
 
         # ── State: waiting for name ───────────────────────────
         if awaiting == "name":
@@ -428,9 +564,10 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 # Let the visitor use the assistant without giving a profile.
                 st.session_state.lead_collected = True
                 st.session_state.awaiting_field = None
-                answer = (
+                answer = _ui(
+                    "skip_ok",
                     "No problem — ask me anything about programmes, fees, "
-                    "eligibility or applying."
+                    "eligibility or applying.",
                 )
             elif _looks_like_question(msg):
                 # Answer the question now; the name prompt remains pending for
@@ -455,30 +592,53 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 prog = extract_program(msg_lower)
                 if prog:
                     st.session_state.lead_program = prog
-                answer = f"Thanks {st.session_state.lead_name}! And what's your email address?"
+                answer = _ui(
+                    "name_thanks_email",
+                    "Thanks {name}! And what's your email address? I'll use it "
+                    "to send you program details.",
+                    name=st.session_state.lead_name,
+                )
             elif is_short_name and not has_admission_intent(msg_lower):
                 st.session_state.lead_name = msg
                 st.session_state.awaiting_field = "email"
-                answer = f"Thanks {msg}! And what's your email address? I'll use it to send you program details."
+                answer = _ui(
+                    "name_thanks_email",
+                    "Thanks {name}! And what's your email address? I'll use it "
+                    "to send you program details.",
+                    name=msg,
+                )
             else:
                 # Message too long for a name — ask again
-                answer = f"That's a bit long for a name. Could you just tell me your first and last name?"
+                answer = _ui(
+                    "name_too_long",
+                    "That's a bit long for a name. Could you just tell me "
+                    "your first and last name?",
+                )
 
         # ── State: waiting for email ──────────────────────────
         elif awaiting == "email":
             if has_email:
                 st.session_state.lead_email = msg
                 st.session_state.awaiting_field = "phone"
-                answer = "Got it! And your phone number? (So an admissions counselor can follow up with you)"
+                answer = _ui(
+                    "email_ok",
+                    "Got it! And your phone number? (So an admissions "
+                    "counselor can follow up with you)",
+                )
             else:
-                answer = "That doesn't look like an email address. Could you share a valid email? (e.g., name@example.com)"
+                answer = _ui(
+                    "email_bad",
+                    "That doesn't look like an email address. Could you share "
+                    "a valid email? (e.g., name@example.com)",
+                )
 
         # ── State: waiting for phone ──────────────────────────
         elif awaiting == "phone" and msg_lower not in _SKIP_WORDS \
                 and not _looks_like_phone(msg):
-            answer = (
+            answer = _ui(
+                "phone_bad",
                 "That doesn't look like a phone number. Please share a number "
-                "with at least 7 digits, or type 'skip'."
+                "with at least 7 digits, or type 'skip'.",
             )
         elif awaiting == "phone":
             phone_value = (
@@ -505,12 +665,16 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                     f"be reached ({err}). Your offer letter won't generate "
                     f"until it's back — you can still chat, and we'll retry later."
                 )
-            answer = (
-                f"Perfect! I have your info:\n"
-                f"- Name: {st.session_state.lead_name}\n"
-                f"- Email: {st.session_state.lead_email}\n"
-                f"- Phone: {phone_value}\n\n"
-                f"Is this correct? (Type 'yes' or tell me what to change)"
+            answer = _ui(
+                "profile_saved",
+                "Perfect! I have your info:\n"
+                "- Name: {name}\n"
+                "- Email: {email}\n"
+                "- Phone: {phone}\n\n"
+                "Is this correct? (Type 'yes' or tell me what to change)",
+                name=st.session_state.lead_name,
+                email=st.session_state.lead_email,
+                phone=phone_value,
             )
 
         # ── State: awaiting program confirmation ──────────────
@@ -543,19 +707,17 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 # Qualification check — eligibility comes from the knowledge
                 # base, keyed on the canonical program names app.programs
                 # returns (see PROGRAM_ELIGIBILITY at the top of this file).
-                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
-                answer = (
-                    f"**{prog}** — great choice! 🎓\n\n"
-                    f"Before we proceed, here are the requirements:\n"
-                    f"📋 Eligibility: {reqs}\n\n"
-                    f"Do you meet these requirements? (yes/no)"
-                )
+                answer = _program_requirements(prog)
             else:
-                answer = "I didn't catch the program name. Which program? (e.g., B.Tech Computer Science, MBA, M.Tech)"
+                answer = _ui(
+                    "program_unknown",
+                    "I didn't catch the program name. Which program? "
+                    "(e.g., B.Tech Computer Science, MBA, M.Tech)",
+                )
 
         # ── State: awaiting qualification confirmation ─────────
         elif awaiting == "qualification":
-            if msg_lower in ("yes", "yeah", "yep", "yes i do", "i do", "i meet", "correct"):
+            if msg_lower in _YES_WORDS:
                 # Sync program_interest to backend BEFORE transitioning
                 prog = st.session_state.get("lead_program", "")
                 if prog:
@@ -575,22 +737,35 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                             f"will be generated once the server is reachable."
                         )
                 st.session_state.awaiting_field = "awaiting_docs"
-                answer = (
-                    f"Excellent! To process your admission for *{prog or 'the program'}*, please upload:\n\n"
+                answer = _ui(
+                    "docs_prompt",
+                    "Excellent! To process your admission for *{prog}*, "
+                    "please upload:\n\n"
                     "📄 **Transcript / Mark Sheet**\n"
                     "🆔 **ID Proof** (Passport, Aadhaar, etc.)\n\n"
-                    "Use the upload widget **below** ⬇️ to submit your documents. "
-                    "Once uploaded, your offer letter will be generated automatically!"
+                    "Use the upload widget **below** ⬇️ to submit your "
+                    "documents. Once uploaded, your offer letter will be "
+                    "generated automatically!",
+                    prog=prog or _ui("the_program", "the program"),
                 )
                 st.session_state["show_apply_prompt"] = True
-            elif msg_lower in ("no", "nope", "i don't", "not sure"):
-                answer = "No worries! You can still explore our programs. Feel free to ask me about admission requirements, alternative programs, or how to prepare your application."
+            elif msg_lower in _NO_WORDS:
+                answer = _ui(
+                    "qualification_no",
+                    "No worries! You can still explore our programs. Feel free "
+                    "to ask me about admission requirements, alternative "
+                    "programs, or how to prepare your application.",
+                )
                 st.session_state.awaiting_field = None
             else:
-                answer = "Please answer 'yes' or 'no' — do you meet the requirements for this program?"
+                answer = _ui(
+                    "qualification_retry",
+                    "Please answer 'yes' or 'no' — do you meet the requirements "
+                    "for this program?",
+                )
 
         # ── User confirms info ────────────────────────────────
-        elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
+        elif msg_lower in _YES_WORDS:
             if st.session_state.get("lead_collected"):
                 lead_prog = st.session_state.get("lead_program", "")
                 if lead_prog:
@@ -603,21 +778,32 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         lead_id=st.session_state.get("lead_id", ""),
                         conversation_id=st.session_state.get("conversation_id", ""),
                     )
-                    answer = (
-                        f"Your profile is confirmed! You're interested in *{lead_prog}*.\n\n"
-                        f"Would you like to proceed with the application? "
-                        f"Just say: 'I want to take admission'"
+                    answer = _ui(
+                        "profile_confirmed",
+                        "Your profile is confirmed! You're interested in "
+                        "*{prog}*.\n\nWould you like to proceed with the "
+                        "application? Just say: 'I want to take admission'",
+                        prog=lead_prog,
                     )
                 else:
                     answer = (
-                        "Great! Your info is confirmed. Now, which program are you interested in? "
-                        "(e.g., B.Tech Computer Science, MBA, M.Tech)\n\n"
+                        _ui(
+                            "program_ask",
+                            "Great! Your info is confirmed. Now, which program "
+                            "are you interested in? (e.g., B.Tech Computer "
+                            "Science, MBA, M.Tech)",
+                        )
+                        + "\n\n"
                         # The worked example used to be "I want to take admission
                         # in MBA" — the only program ever demoed this way. Real
                         # students copied it verbatim, which is how a lead ends
                         # up stored as MBA before anyone asked for MBA. The
                         # example is now the first program in the list instead.
-                        "Or just say: 'I want to take admission in B.Tech Computer Science'"
+                        + _ui(
+                            "program_example",
+                            "Or just say: 'I want to take admission in "
+                            "B.Tech Computer Science'",
+                        )
                     )
 
         # ── Profile not started yet ───────────────────────────
@@ -628,17 +814,25 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 prog = extract_program(msg_lower)
                 if prog:
                     st.session_state.lead_program = prog
-                answer = "I'd love to help you apply! First, could you tell me your name?"
+                answer = _ui(
+                    "applying_name",
+                    "I'd love to help you apply! First, could you tell me "
+                    "your name?",
+                )
             else:
                 st.session_state.awaiting_field = "name"
-                answer = "Hello! I'm your University Admissions Advisor. Before we start, could you tell me your name?"
+                answer = _greeting_text()
 
         # ── Admission intent with profile complete ────────────
         elif has_admission_intent(msg_lower) and st.session_state.get("lead_collected"):
             prog = extract_program(msg_lower) or st.session_state.get("lead_program", "")
             if not prog:
                 st.session_state.awaiting_field = "program"
-                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech)"
+                answer = _ui(
+                    "program_ask",
+                    "Which program are you interested in? (e.g., B.Tech "
+                    "Computer Science, MBA, M.Tech)",
+                )
             elif st.session_state.get("awaiting_field") != "qualification":
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
@@ -659,12 +853,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         f"the server ({err}). It'll be synced before your "
                         f"documents are processed."
                     )
-                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
-                answer = (
-                    f"**{prog}** — great choice! 🎓\n\n"
-                    f"Here are the requirements:\n📋 Eligibility: {reqs}\n\n"
-                    f"Do you meet these requirements? (yes/no)"
-                )
+                answer = _program_requirements(prog)
             else:
                 # Already in qualification flow
                 pass
@@ -694,12 +883,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                         f"the server ({err}). It'll be synced before your "
                         f"documents are processed."
                     )
-                reqs = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
-                answer = (
-                    f"**{prog}** — great choice! 🎓\n\n"
-                    f"Here are the requirements:\n📋 Eligibility: {reqs}\n\n"
-                    f"Do you meet these requirements? (yes/no)"
-                )
+                answer = _program_requirements(prog)
 
         # ── RAG fallback ──────────────────────────────────────
         if answer is None:
@@ -817,6 +1001,13 @@ col1, col2 = st.columns([1, 4])
 with col1:
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = [
-            {"role": "assistant", "content": "Hello! I'm your University Admissions Advisor. Ask me anything about programmes, fees, eligibility or applying."}
+            {
+                "role": "assistant",
+                "content": _ui(
+                    "restart",
+                    "Hello! I'm your University Admissions Advisor. Ask me "
+                    "anything about programmes, fees, eligibility or applying.",
+                ),
+            }
         ]
         st.rerun()

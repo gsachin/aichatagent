@@ -124,7 +124,11 @@ class Settings:
     # the audio does not belong among them.
 
     # ── Speech-to-text (faster-whisper) ─────────────────────────────
-    WHISPER_MODEL: str = field(default_factory=lambda: _env("WHISPER_MODEL", "small.en"))
+    # Multilingual by default: the six foreign languages (es/fr/it/ja/pt/zh)
+    # need a model that is not English-only. `small.en` still works for an
+    # English-only deployment, but it silently cannot serve those languages,
+    # so the boot check reports it when FOREIGN_LANGUAGES is enabled.
+    WHISPER_MODEL: str = field(default_factory=lambda: _env("WHISPER_MODEL", "small"))
     # Sized per machine by scripts/predeploy.py. Note pipecat's
     # WhisperSTTSettings has no cpu_threads param, so this reaches the
     # voice_handler STT path only.
@@ -529,6 +533,19 @@ class Settings:
     )
     SUPPORTED_LANGUAGES: str = field(
         default_factory=lambda: _env("SUPPORTED_LANGUAGES", "en,hi").strip()
+    )
+    # Non-Indian languages enabled end to end (es,fr,it,ja,pt,zh). An empty
+    # value disables the selectors, commands, Whisper routing and assets in
+    # one place -- the one-line rollback for the whole feature.
+    FOREIGN_LANGUAGES: str = field(
+        default_factory=lambda: _env(
+            "FOREIGN_LANGUAGES", "es,fr,it,ja,pt,zh"
+        ).strip().lower()
+    )
+    # Language pinned on the outbound TwiML URL. Empty keeps the URL exactly
+    # as it was; the outbound worker sends no language parameter today.
+    OUTBOUND_LANGUAGE: str = field(
+        default_factory=lambda: _env("OUTBOUND_LANGUAGE", "").strip().lower()
     )
     GROUNDING_LANGUAGE_MODE: str = field(
         default_factory=lambda: _env(

@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import wave
 from pathlib import Path
@@ -42,7 +43,15 @@ load_dotenv(".env")
 # The wording lives in app/admission.py, because the refusal path also needs it
 # for its carrier-<Say> fallback when the assets are absent. One home for the
 # words means the recording and the fallback cannot drift apart.
-from app.admission import BUSY_TEXT, FIXED_RESPONSE_TEXT  # noqa: E402
+from app.admission import (  # noqa: E402
+    BUSY_TEXT,
+    FIXED_RESPONSE_TEXT,
+    busy_asset,
+    busy_text,
+    fixed_response_asset,
+    fixed_response_text,
+)
+from app.languages import DEFAULT_FOREIGN_LANGUAGES, contains_cjk  # noqa: E402
 
 #: Internal vocabulary that must never reach a caller (AC-5).
 FORBIDDEN_IN_WORDING = (
@@ -68,13 +77,68 @@ def check_wording(name: str, text: str) -> list[str]:
     return problems
 
 
-def synthesise(text: str, out_path: Path) -> dict:
-    """Render one asset at the agent's configured voice, in carrier format."""
+def check_foreign_wording(name: str, text: str) -> list[str]:
+    """Non-empty and short enough for a refusal, without English word rules.
+
+    The English forbidden-vocabulary list is English-specific; applying it to
+    Japanese or Chinese would be meaningless. Translation review owns the
+    wording quality for these six; this check owns the shape.
+    """
+    problems = []
+    if not text.strip():
+        problems.append(f"{name}: empty")
+    limit = 120 if contains_cjk(text) else 240
+    if len(text) > limit:
+        problems.append(f"{name}: {len(text)} characters is too long for a refusal")
+    return problems
+
+
+def synthesise(text: str, out_path: Path, *,
+               language: str | None = None,
+               voice: str | None = None) -> dict:
+    """Render one asset at the agent's voice, in carrier format.
+
+    ``language=None`` is the English path and must stay byte-identical: it
+    calls ``engine.create`` exactly as it did before this language work (no
+    ``lang`` argument). A foreign language selects its Kokoro voice and
+    phoneme set so the output is not English pronunciation.
+    """
     import numpy as np
-    from app.voice_handler import _get_tts_engine, _tts_speed, _tts_voice
+    from app.languages import normalize_language_code
+    from app.voice_handler import (
+        _get_tts_engine, _kokoro_lang_for, _kokoro_render, _tts_speed,
+        _tts_speed_for, _tts_voice, _tts_voice_for,
+    )
 
     engine = _get_tts_engine()
-    audio, sr = engine.create(text, voice=_tts_voice(), speed=_tts_speed())
+    if language is None:
+        audio, sr = engine.create(text, voice=_tts_voice(), speed=_tts_speed())
+        voice, lang = _tts_voice(), None
+    else:
+        voice = voice or _tts_voice_for(language)
+        speed = _tts_speed_for(language)
+        lang = (
+            "misaki"
+            if normalize_language_code(language) in ("ja", "zh")
+            else _kokoro_lang_for(language, voice)
+        )
+        # Kokoro's `create` truncates at 510 phonemes and then indexes the
+        # voice array with the pre-truncation count, which raises IndexError
+        # for a long CJK sentence. Sentence-sized chunks keep every call below
+        # the limit; the concatenated WAV is one asset with natural pauses.
+        parts = [p for p in re.split(r"(?<=[.!?;。！？])\s*", text) if p.strip()]
+        if len(parts) > 1:
+            pieces = []
+            for part in parts:
+                chunk, sr = _kokoro_render(
+                    engine, part, language, voice, speed
+                )
+                pieces.append(np.asarray(chunk, dtype=np.float32))
+            audio = np.concatenate(pieces)
+        else:
+            audio, sr = _kokoro_render(
+                engine, text, language, voice, speed
+            )
     audio = np.asarray(audio, dtype=np.float32)
 
     if sr != TARGET_SR:
@@ -100,6 +164,9 @@ def synthesise(text: str, out_path: Path) -> dict:
         "sample_width": 2,
         "duration_s": round(len(pcm16) / sr, 3),
         "text": text,
+        "language": language or "en",
+        "voice": voice,
+        "phoneme_language": lang,
     }
 
 
@@ -110,13 +177,27 @@ def main() -> int:
     print("US-016 -- building the pre-synthesised call assets")
     print("=" * 74)
 
-    problems = check_wording("busy", BUSY_TEXT) + check_wording("fixed_response", FIXED_RESPONSE_TEXT)
+    jobs = [
+        (BUSY_ASSET, BUSY_TEXT, None),
+        (FIXED_RESPONSE_ASSET, FIXED_RESPONSE_TEXT, None),
+    ]
+    for code in DEFAULT_FOREIGN_LANGUAGES:
+        jobs.append((busy_asset(code), busy_text(code), code))
+        jobs.append((fixed_response_asset(code), fixed_response_text(code), code))
+
+    problems = (
+        check_wording("busy", BUSY_TEXT)
+        + check_wording("fixed_response", FIXED_RESPONSE_TEXT)
+    )
+    for name, text, code in jobs:
+        if code is not None:
+            problems.extend(check_foreign_wording(name, text))
     for p in problems:
         print(f"  REFUSED  {p}")
     if problems:
         print("\n  Fix the wording before building: a caller must never hear this.")
         return 1
-    print("  wording check: no internal vocabulary, both lines within length")
+    print("  wording check: English vocabulary/length and foreign shape pass")
 
     voice = os.environ.get("KOKORO_VOICE", "af_heart")
     speed = float(os.environ.get("KOKORO_SPEED", "1.0") or 1.0)
@@ -129,11 +210,12 @@ def main() -> int:
         "assets": {},
     }
 
-    for name, text in ((BUSY_ASSET, BUSY_TEXT), (FIXED_RESPONSE_ASSET, FIXED_RESPONSE_TEXT)):
-        info = synthesise(text, asset_path(name))
+    for name, text, code in jobs:
+        info = synthesise(text, asset_path(name), language=code)
         manifest["assets"][name] = info
-        print(f"  {name:<20} {info['duration_s']:>6.2f}s  {info['bytes']:>8} bytes  "
-              f"sha256 {info['sha256'][:12]}")
+        print(f"  {name:<24} {info['duration_s']:>6.2f}s  {info['bytes']:>8} bytes  "
+              f"sha256 {info['sha256'][:12]}  lang {info['language']}  "
+              f"voice {info['voice']}")
 
     asset_path(ASSET_MANIFEST).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

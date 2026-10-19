@@ -60,6 +60,7 @@ BUG-07, not against invented examples.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from app.kb_entities import (
     EntityIndex,
@@ -68,6 +69,7 @@ from app.kb_entities import (
     name_slots,
     normalise as _norm,
 )
+from app.languages import normalize_language_code
 
 __all__ = ["ungrounded_claims", "is_grounded", "enforce_grounding", "GROUNDED_REFUSAL"]
 
@@ -178,7 +180,11 @@ def _is_claimable_number(tok: str) -> bool:
 
 
 def _number_claims(text: str) -> list[str]:
-    return [m.group(0).strip() for m in _NUMBER.finditer(text or "")
+    # Japanese/Chinese replies may use full-width digits (１８,５００). NFKC
+    # normalizes them to ASCII for the claim check; the spoken text is never
+    # rewritten.
+    normalized = unicodedata.normalize("NFKC", text or "")
+    return [m.group(0).strip() for m in _NUMBER.finditer(normalized)
             if _is_claimable_number(m.group(0).strip())]
 
 
@@ -347,9 +353,10 @@ def is_grounded(answer: str, context: str,
 
 
 def _sentences(text: str) -> list[str]:
-    # Indic scripts use the danda, not a capitalised next sentence.
+    # Indic scripts use the danda, not a capitalised next sentence. CJK uses
+    # 。！？ with no following space, so its boundary is zero-width.
     return [s for s in re.split(
-        r"(?<=[.!?])\s+|(?<=[।॥])\s*", text or ""
+        r"(?<=[.!?])\s+|(?<=[।॥])\s*|(?<=[。！？])\s*", text or ""
     ) if s.strip()]
 
 
@@ -371,6 +378,7 @@ def enforce_grounding(answer: str, context: str, *,
                       refusal_index: int = 0,
                       subject_denied: int = 0,
                       check_names: bool = True,
+                      language: str | None = None,
                       log=None) -> str:
     """Speak only what is grounded; never return silence.
 
@@ -430,38 +438,71 @@ def enforce_grounding(answer: str, context: str, *,
             survivors=survivors[:120])
 
     subject = _refusal_subject(dropped, unoffered)
-    if subject and subject_denied < len(UNOFFERED_REFUSALS):
+    variants, escalations, unoffered_lines, _markers = _refusal_strings(language)
+    if subject and subject_denied < len(unoffered_lines):
         if log is not None:
             log("GROUNDING_UNOFFERED", subject=subject[:80])
         mid = _mid_sentence(subject)
-        return UNOFFERED_REFUSALS[subject_denied].format(
+        return unoffered_lines[subject_denied].format(
             subject=mid, subject_cap=mid[:1].upper() + mid[1:])
     if log is not None:
         log("GROUNDING_ESCALATED", refusals=refusal_index)
-    return _refusal_for(refusal_index)
+    return _refusal_for(refusal_index, language)
 
 
-def _refusal_for(refusal_index: int) -> str:
+def _refusal_strings(language: str | None = None):
+    """The refusal wording for a language, and its unoffered-line markers.
+
+    English is the default and returns the exact constants above, so every
+    pre-foreign call is byte-identical. The six foreign sets live in
+    app/localized_text.py.
+    """
+    code = normalize_language_code(language)
+    if code:
+        from app.localized_text import GROUNDING_REFUSALS
+
+        entry = GROUNDING_REFUSALS.get(code)
+        if entry:
+            return (
+                entry["variants"],
+                entry["escalations"],
+                entry["unoffered"],
+                entry["unoffered_markers"],
+            )
+    return REFUSAL_VARIANTS, ESCALATION_REFUSALS, UNOFFERED_REFUSALS, ()
+
+
+def _refusal_for(refusal_index: int, language: str | None = None) -> str:
     """The line for the Nth consecutive refusal. Never the same twice running."""
-    if refusal_index < len(REFUSAL_VARIANTS):
-        return REFUSAL_VARIANTS[refusal_index]
-    return ESCALATION_REFUSALS[(refusal_index - len(REFUSAL_VARIANTS))
-                               % len(ESCALATION_REFUSALS)]
+    variants, escalations, _unoffered, _markers = _refusal_strings(language)
+    if refusal_index < len(variants):
+        return variants[refusal_index]
+    return escalations[(refusal_index - len(variants))
+                       % len(escalations)]
 
 
-def is_refusal(text: str) -> bool:
+def is_refusal(text: str, language: str | None = None) -> bool:
     """Did the BOUNDARY produce this line, rather than the model?
 
     The session uses this to count consecutive refusals, which is what bounds
     the loop. It lives here so the set of refusal wordings and the test for
     them cannot drift apart -- a caller that prefix-matched the strings would
     silently stop counting the day a variant was reworded.
+
+    English markers are always checked, because an English refusal can still
+    surface in a foreign-language call. The localized unoffered lines contain
+    the caller's subject, so a stable phrase from each phrasing is the marker.
     """
     if not text:
         return False
     if "Meridian University does not offer" in text:
         return True
     if "isn't one of Meridian University's programmes" in text:
+        return True
+    variants, escalations, _unoffered, markers = _refusal_strings(language)
+    if text in (*variants, *escalations):
+        return True
+    if any(marker in text for marker in markers):
         return True
     return any(text == line for line in
                (*REFUSAL_VARIANTS, *ESCALATION_REFUSALS))

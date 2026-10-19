@@ -54,6 +54,15 @@ os.environ.setdefault("STT_FALLBACK_PROVIDERS", "")
 os.environ.setdefault("TTS_PROVIDER", "kokoro")
 os.environ.setdefault("SARVAM_TTS_LANGUAGES", "")
 
+# The greeting warmup is background work for a live box. Tests must not start
+# it: it would load Kokoro or call Sarvam from a TestClient lifespan.
+os.environ.setdefault("GREETING_WARMUP", "0")
+
+# The six-language feature is on by default; pin it so a developer's .env
+# cannot change what the suite exercises. Tests that need it off override the
+# setting and call `configured_foreign_languages.cache_clear()` if needed.
+os.environ.setdefault("FOREIGN_LANGUAGES", "es,fr,it,ja,pt,zh")
+
 # ...and keep it out of the LIVE CALL LOG. `app.main` calls `_configure_logging()`
 # at import (main.py:110), which attaches a FileHandler to whatever LOG_FILE
 # names -- so simply importing the app in a test made the suite append to the

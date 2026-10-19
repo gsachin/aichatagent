@@ -51,6 +51,7 @@ async def log_interaction(
     call_duration_seconds: int = 0,
     conversation_id: str = "",
     crm_user_id: str = "",
+    language: str = "",
 ) -> dict | None:
     """
     High-level helper:
@@ -99,6 +100,7 @@ async def log_interaction(
         extracted_lead=extracted_lead,
         conversation_id=conversation_id or None,
         crm_user_id=crm_user_id or None,
+        language=language or "",
     )
 
     # 3. If we have extracted data and the lead is missing info, patch it
@@ -314,6 +316,7 @@ async def handle_post_interaction(
     call_duration_seconds: int = 0,
     conversation_id: str = "",
     crm_user_id: str = "",
+    language: str = "",
 ) -> bool:
     """
     Unified handler called after ANY interaction completes.
@@ -363,6 +366,7 @@ async def handle_post_interaction(
         # The Salesforce user this conversation belongs to, when the channel
         # managed to link it. Optional — omitting it leaves the row as it was.
         crm_user_id=crm_user_id,
+        language=language,
     )
 
     # 4. Check for admission intent → send WhatsApp document request

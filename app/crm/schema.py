@@ -32,6 +32,7 @@ ALTER TABLE leads         ADD COLUMN IF NOT EXISTS crm_synced_at TIMESTAMP WITH 
 ALTER_CONVERSATIONS_SQL = """
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(64);
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS crm_user_id     VARCHAR(32);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS language        VARCHAR(8) DEFAULT '';
 """
 
 # Backfill: one conversation per row for everything that predates this migration.

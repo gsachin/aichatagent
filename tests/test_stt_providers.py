@@ -34,7 +34,7 @@ def test_sarvam_request_contract(monkeypatch, override_settings):
             "request_id": "req-1",
         })
 
-    monkeypatch.setattr(sarvam.requests, "post", fake_post)
+    monkeypatch.setattr(sarvam, "_post", fake_post)
     override_settings(
         SARVAM_API_KEY="test-key",
         SARVAM_STT_KEYTERMS="Meridian University,B.Tech,MBA",
@@ -72,12 +72,86 @@ def test_sarvam_http_error_raises(monkeypatch, override_settings):
     from app.stt_types import STTError
 
     monkeypatch.setattr(
-        sarvam.requests, "post",
+        sarvam, "_post",
         lambda *a, **k: _Response({}, status_code=429, text="rate limited"),
     )
     override_settings(SARVAM_API_KEY="test-key")
     with pytest.raises(STTError, match="HTTP 429"):
         sarvam.transcribe(np.zeros(1600, dtype=np.int16))
+
+
+def test_sarvam_reuses_one_session_per_thread(monkeypatch, override_settings):
+    import app.stt_sarvam as sarvam
+
+    created = []
+
+    class _Session:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, *args, **kwargs):
+            self.calls += 1
+            return _Response({
+                "transcript": "नमस्ते",
+                "language_code": "hi-IN",
+                "language_probability": 0.9,
+            })
+
+        def close(self):
+            pass
+
+    def fake_new_session():
+        session = _Session()
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(sarvam, "_new_session", fake_new_session)
+    sarvam._reset_session()
+    override_settings(SARVAM_API_KEY="test-key")
+    try:
+        sarvam.transcribe(np.zeros(1600, dtype=np.int16))
+        sarvam.transcribe(np.zeros(1600, dtype=np.int16))
+    finally:
+        sarvam._reset_session()
+
+    assert len(created) == 1, "a second request opened a second connection pool"
+    assert created[0].calls == 2
+
+
+def test_sarvam_resets_session_after_transport_error(
+        monkeypatch, override_settings):
+    import requests
+
+    import app.stt_sarvam as sarvam
+    from app.stt_types import STTError
+
+    sessions = []
+
+    class _Session:
+        def __init__(self):
+            self.closed = False
+
+        def post(self, *args, **kwargs):
+            raise requests.ConnectionError("stale pooled connection")
+
+        def close(self):
+            self.closed = True
+
+    def fake_new_session():
+        session = _Session()
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(sarvam, "_new_session", fake_new_session)
+    sarvam._reset_session()
+    override_settings(SARVAM_API_KEY="test-key")
+    try:
+        with pytest.raises(STTError, match="Sarvam request failed"):
+            sarvam.transcribe(np.zeros(1600, dtype=np.int16))
+        assert sessions[0].closed, "the dead session was kept for the next turn"
+        assert sarvam._session() is not sessions[0]
+    finally:
+        sarvam._reset_session()
 
 
 def test_indic_conformer_uses_language_model(monkeypatch, override_settings):

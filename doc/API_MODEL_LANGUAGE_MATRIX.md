@@ -18,14 +18,14 @@ This document answers three questions:
 |---|---|
 | **LLM (all text generation)** | OpenAI Chat Completions, `gpt-6-luna` (`LLM_MODEL`), one remote provider only |
 | **Knowledge delivery** | Full document in the system prompt (`CONTEXT_MODE=doc`); **no RAG, no embeddings, no Chroma** |
-| **STT (voice)** | Sarvam Saaras v4 (`codemix`) -> IndicConformer (hi/gu) -> faster-whisper `small` |
-| **TTS (voice)** | Sarvam Bulbul v4 Flash for Gujarati; Kokoro ONNX for English/Hindi and other mapped languages; AI4Bharat Indic-TTS v1 optional |
+| **STT (voice)** | Sarvam Saaras v4 (`codemix`) -> IndicConformer (hi/gu) -> faster-whisper `small`; foreign-language sessions go straight to Whisper |
+| **TTS (voice)** | Sarvam Bulbul v4 Flash for Gujarati; Kokoro ONNX for English/Hindi and the six foreign languages; AI4Bharat Indic-TTS v1 optional |
 | **Voice carrier** | Twilio Programmable Voice + Media Streams (8 kHz μ-law) |
 | **WhatsApp** | Twilio WhatsApp webhook; text only; same OpenAI model |
 | **Streamlit chat** | Text only; LangChain `ChatOpenAI`; same OpenAI model |
-| **End-to-end voice languages today** | **English (`en`), Hindi (`hi`), Gujarati (`gu`)** |
+| **End-to-end voice languages today** | **English (`en`), Hindi (`hi`), Gujarati (`gu`) + Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Portuguese (`pt`), Chinese (`zh`)** |
 | **Text-only languages** | Anything the LLM can answer; `LANGUAGE_NAMES` explicitly names 20 codes |
-| **Foreign-language voice today** | **None are end-to-end.** Spanish/French/Italian/Japanese/Portuguese/Chinese have TTS voices and LLM support, but no working STT route, language selection, or localized fixed lines |
+| **Foreign-language voice today** | **End to end for the six**, behind `FOREIGN_LANGUAGES` (empty disables the feature). STT is Whisper; TTS is Kokoro; greetings, ladders, closing, grounding refusals and fallback assets are localized |
 
 Removed in the OpenAI migration: Ollama, MLX, Qwen local models, ChromaDB,
 nomic-embed-text, `langchain-ollama`, `langchain-community`, and the RAG
@@ -199,6 +199,13 @@ Live chain: `STT_PROVIDER=sarvam` -> `STT_FALLBACK_PROVIDERS=indic_conformer,whi
 (`.env` and `app/stt.py`). A provider is only skipped when it raises; a
 wrong-language transcript from Sarvam does **not** trigger a fallback.
 
+Foreign-language sessions (`session.language` in the enabled
+`FOREIGN_LANGUAGES`) bypass that chain entirely: `_transcribe()` calls
+faster-whisper directly, so Sarvam and IndicConformer are never tried. Every
+other session executes the original chain verbatim. `STT_LANGUAGE=auto` makes
+Whisper detect and switch within the enabled foreign set; a pinned
+`STT_LANGUAGE` forces that hint and disables switching.
+
 ### 5.3 TTS
 
 | Provider | Languages mapped in code | Notes |
@@ -222,8 +229,23 @@ Important routing facts:
   personas for `gu`, `hi`, `en`; adding another Bulbul language needs a
   compatible persona ID added to that map (or a per-language override, which
   does not exist yet).
-- Kokoro voices exist for the six foreign languages above, but the product does
-  not currently select them in the IVR/UI.
+- Kokoro voices exist for the six foreign languages above and are used when the
+  feature is enabled; `FOREIGN_LANGUAGES=` (empty) hides them from every
+  selector and routes a pinned foreign code through the pre-foreign fallback.
+
+### 5.4 Foreign-language routing (the six)
+
+| Concern | Behaviour |
+|---|---|
+| Master switch | `FOREIGN_LANGUAGES=es,fr,it,ja,pt,zh`; empty disables IVR/selectors/commands, Whisper routing and foreign assets |
+| Selection | IVR digit 9 -> second-level menu (1 es, 2 fr, 3 it, 4 ja, 5 pt, 6 zh); `?language=` pin; Streamlit selector; WhatsApp whole-message command (`Spanish`, `/es`, ...) persisted on the conversation |
+| STT | faster-whisper `small` only; auto-detect switches within the enabled foreign set, never into en/hi/gu |
+| TTS | Kokoro only; `_use_sarvam_tts`/`_use_indic_tts` return false for the six even if listed |
+| ja/zh G2P | `misaki` (the G2P the Kokoro model was trained with), fed to the ONNX model with `is_phonemes=True`; the espeak-ng path misreads kanji/Han |
+| Speed | Japanese 1.2x and Chinese 1.2x relative to `KOKORO_SPEED`; the other four use the setting unchanged |
+| Fixed lines | Greetings, noise ladders, closing, grounding refusals and fixed/busy WAVs are localized; English fallback if an asset is missing |
+| Boundaries | `。！？` sentence terminators and accented capitals are handled by `_split_sentences`, `ClauseCutter` and `voice_grounding._sentences`; short answers like `sí`, `はい`, `是` pass the noise gate |
+| Delivery | Text splitters and grounding are shared; no per-language retrieval or knowledge base |
 
 ---
 
@@ -239,13 +261,21 @@ greeting, and localized fixed fallback lines.
 | `en` | English | Sarvam / Whisper | Kokoro | English | English | IVR 1, pinned URL, Streamlit |
 | `hi` | Hindi | Sarvam / IndicConformer / Whisper | Kokoro | Hindi | Hindi | IVR 2, pinned URL, Streamlit |
 | `gu` | Gujarati | Sarvam / IndicConformer / Whisper | **Sarvam Bulbul** | Gujarati | Gujarati | IVR 3, pinned URL, Streamlit |
+| `es` | Spanish | Whisper | Kokoro `ef_dora` | Spanish | Spanish | IVR 9->1, pinned URL, Streamlit, WhatsApp command |
+| `fr` | French | Whisper | Kokoro `ff_siwis` | French | French | IVR 9->2, pinned URL, Streamlit, WhatsApp command |
+| `it` | Italian | Whisper | Kokoro `if_sara` | Italian | Italian | IVR 9->3, pinned URL, Streamlit, WhatsApp command |
+| `ja` | Japanese | Whisper | Kokoro `jf_alpha` | Japanese | Japanese | IVR 9->4, pinned URL, Streamlit, WhatsApp command |
+| `pt` | Portuguese | Whisper | Kokoro `pf_dora` | Portuguese | Portuguese | IVR 9->5, pinned URL, Streamlit, WhatsApp command |
+| `zh` | Chinese | Whisper | Kokoro `zf_xiaoxiao` | Chinese | Chinese | IVR 9->6, pinned URL, Streamlit, WhatsApp command |
 
-### 6.2 The 14 languages in `SUPPORTED_LANGUAGES`
+### 6.2 The 20 languages in `SUPPORTED_LANGUAGES`
 
-Live value: `en,hi,as,bn,brx,gu,kn,ml,mni,mr,or,raj,ta,te` (`.env`).
+Live value:
+`en,hi,as,bn,brx,gu,kn,ml,mni,mr,or,raj,ta,te,es,fr,it,ja,pt,zh` (`.env`).
 
 `SUPPORTED_LANGUAGES` only controls **auto language switching** in voice; it does
-not by itself make a language speakable.
+not by itself make a language speakable. The first 14 rows below are the Indic
+set; the six foreign codes use Whisper -> Kokoro and are described in 6.4.
 
 | Code | Language | Sarvam STT | Sarvam TTS map | Kokoro voice | Indic-TTS | Voice today | What is missing |
 |---|---|---|---|---|---|---|---|
@@ -296,28 +326,29 @@ be enabled.
 Foreign languages are the six Kokoro voices plus anything else the LLM/Whisper
 know. The current stack splits them cleanly:
 
-| Language | LLM text | Kokoro TTS | Whisper STT | Voice end to end today | Why not |
+| Language | LLM text | Kokoro TTS | Whisper STT | Voice end to end today | How |
 |---|---|---|---|---|---|
-| Spanish `es` | yes | yes (`ef_dora`) | yes | **no** | Sarvam is tried first and does not support `es`; `SUPPORTED_LANGUAGES` excludes it; no localized greeting/fallback/selection |
-| French `fr` | yes | yes (`ff_siwis`) | yes | **no** | same |
-| Italian `it` | yes | yes (`if_sara`) | yes | **no** | same |
-| Japanese `ja` | yes | yes (`jf_alpha`) | yes | **no** | same |
-| Portuguese `pt` | yes | yes (`pf_dora`, pt-BR phonemes) | yes | **no** | same |
-| Chinese `zh` | yes | yes (`zf_xiaoxiao`, `cmn` phonemes) | yes | **no** | same |
+| Spanish `es` | yes | yes (`ef_dora`) | yes | **yes** | Foreign session -> Whisper -> Kokoro; localized lines; IVR 9->1 |
+| French `fr` | yes | yes (`ff_siwis`) | yes | **yes** | same, IVR 9->2 |
+| Italian `it` | yes | yes (`if_sara`) | yes | **yes** | same, IVR 9->3 |
+| Japanese `ja` | yes | yes (`jf_alpha`) | yes | **yes** | same, IVR 9->4; 1.8x speed |
+| Portuguese `pt` | yes | yes (`pf_dora`, pt-BR phonemes) | yes | **yes** | same, IVR 9->5 |
+| Chinese `zh` | yes | yes (`zf_xiaoxiao`, `cmn` phonemes) | yes | **yes** | same, IVR 9->6; 1.2x speed |
 | German, Russian, Arabic, Korean, etc. | yes (LLM) | **no mapped voice** | yes (Whisper) | **no** | no TTS voice; `_tts_voice_for` would fall back to the English `af_heart` and log a warning |
 
-**Plain answer:** with the current stack, the foreign languages we can support
-**end to end in voice are none**. We can support them in **text** today (the LLM
-answers; WhatsApp can pass a `Language` code; Streamlit needs its selector
-extended). The six languages above are the shortest path to foreign-language
-voice because Kokoro already has voices and phoneme maps for them.
+**Plain answer:** the six above are end to end in voice and text when
+`FOREIGN_LANGUAGES` is enabled. Spanish/French/Italian/Portuguese/Japanese/Chinese
+keep the English knowledge base and grounding rules; only the spoken language
+and the fixed lines change. Other LLM/Whisper languages still have no mapped
+voice and are not selectable. `FOREIGN_LANGUAGES=` disables the whole feature in
+one line.
 
 ### 6.5 Text-only channels
 
 | Channel | Can answer foreign languages? | Constraint |
 |---|---|---|
-| WhatsApp | yes, if Twilio sends `Language` (or the default is set) | no STT/TTS; `language_instruction` names 20 codes and passes unknown codes through |
-| Streamlit | yes, after a one-line selector change | selector currently hard-codes English/Hindi/Gujarati |
+| WhatsApp | yes | whole-message command (`Spanish`, `/es`, …) sets and persists the thread language; RAG answers are localized, profile-collection prompts remain English in v1 |
+| Streamlit | yes | selector lists the six when enabled; RAG answers and the main onboarding prompts are localized |
 | CLI | yes, by prompt only | no language switch |
 
 ---
@@ -390,7 +421,10 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
 | `STT_FALLBACK_PROVIDERS` | `indic_conformer,whisper` | Fallback order |
 | `STT_LANGUAGE` | `auto` | Detect and switch language |
 | `STT_LANGUAGE_MIN_PROB` | `0.5` | Minimum detection probability to switch |
-| `WHISPER_MODEL` | `small` | Multilingual last-resort STT |
+| `WHISPER_MODEL` | `small` | Multilingual STT; foreign languages require a non-`.en` model |
+| `SUPPORTED_LANGUAGES` | `en,hi,as,bn,brx,gu,kn,ml,mni,mr,or,raj,ta,te,es,fr,it,ja,pt,zh` | Auto-switch allow-list |
+| `FOREIGN_LANGUAGES` | `es,fr,it,ja,pt,zh` | Master switch for the six; empty disables selectors, commands, Whisper routing and assets |
+| `OUTBOUND_LANGUAGE` | empty | Optional language pinned on outbound TwiML URLs; empty preserves the old URL |
 | `TTS_PROVIDER` | `sarvam` | Sarvam for `SARVAM_TTS_LANGUAGES`, Kokoro for the rest |
 | `SARVAM_TTS_LANGUAGES` | `gu` | Only Gujarati routes to Bulbul today |
 | `SARVAM_TTS_MODEL` | `bulbul:v4-flash` | Bulbul model |
@@ -407,7 +441,7 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
 
 ## 9. Verification notes and caveats
 
-- Full test suite after the current fix: **742 passed**.
+- Full test suite after the six-language work: **814 passed, 0 skipped**.
 - Live call evidence on 2026-10-17:
   - Sarvam STT Hindi/Gujarati ~420-640 ms per utterance.
   - Sarvam TTS Gujarati first audio ~520-590 ms, 8 kHz streaming.
@@ -419,10 +453,32 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
     `app/leads/service.py` are historical; the call is OpenAI.
 - WhatsApp audio/voice notes are unsupported by design; the bot asks the user to
   type.
-- Outbound calls do not send a language in the call-queue URL; they use
-  `DEFAULT_LANGUAGE=en` unless the TwiML URL is built with `language`.
-- Fixed lines (`_NOISE_LADDERS`, `CLOSING_REPLY`) exist only in `en`, `hi`, `gu`.
-  Any new language will hear English fixed lines until they are localized.
+- Outbound calls send no language unless `OUTBOUND_LANGUAGE` is set; otherwise
+  they use `DEFAULT_LANGUAGE=en`.
+- Fixed lines are now localized for the six foreign languages in
+  `app/localized_text.py`; English is the fallback when a foreign asset is
+  missing. WhatsApp profile-collection prompts remain English in v1.
+- Native-speaker review of the six translation sets
+  (`doc/i18n/foreign_language_strings.md`) is a rollout prerequisite.
+- Kokoro/ONNX CUDA is not bit-reproducible across processes on this box: the
+  English `busy.wav` has been observed with two different SHA-256 values at the
+  same byte length. `asset_drift()` therefore compares voice/speed, not hashes;
+  do not pin asset hashes in tests.
+- Kokoro's Japanese/Chinese G2P is **misaki**, not espeak-ng. The first
+  version used `kokoro-onnx`'s espeak path and the Japanese round-trip harness
+  transcribed it as gibberish (espeak emits `(en)chinese letter` for kanji).
+  `app/voice_handler.py` now passes misaki phonemes with `is_phonemes=True`.
+  `misaki[ja]` needs pyopenjtalk; we install the prebuilt `pyopenjtalk-plus`
+  wheel instead of compiling it. The TTS-only reading map substitutes
+  `Meridian University` and degree abbreviations for ja/zh; the transcript
+  keeps the original text.
+- Kokoro's Japanese/Chinese speed is 1.2x. At 1.4x the Japanese round trip
+  starts to smear; 1.0-1.3 is clean.
+- `scripts/test_foreign_languages.py` is the no-speaker harness: it
+  back-translates a text answer and runs Kokoro → 8 kHz → Whisper on each
+  language. Run it after changing a voice, a prompt or the G2P stack:
+  `.venv/Scripts/python.exe scripts/test_foreign_languages.py`
+  It writes a JSON report and review WAVs to `doc/perf/results/`.
 - The LLM is multilingual, but that is not the same as product support. Voice
   support also requires STT route, TTS voice, selection, greeting and fallback
   coverage.
@@ -447,12 +503,13 @@ foreign-language voices; AI4Bharat Indic-TTS v1 optional.
 - Indic-TTS: 13 Indic codes.
 
 **Which languages work end to end today?**
-Voice: **English, Hindi, Gujarati**.
-Text: any language the LLM can answer; the UI exposes English/Hindi/Gujarati in
-Streamlit, and WhatsApp accepts a `Language` code.
+Voice: **English, Hindi, Gujarati, Spanish, French, Italian, Japanese,
+Portuguese, Chinese** (the last six behind `FOREIGN_LANGUAGES`).
+Text: any language the LLM can answer; the Streamlit selector exposes all nine,
+and WhatsApp accepts a whole-message language command.
 
 **Which foreign languages can we support with the current stack?**
 - Text today: all, including `es, fr, it, ja, pt, zh`.
-- Voice with code/config work: `es, fr, it, ja, pt, zh` (Kokoro TTS + Whisper STT
-  + localized fixed lines + selection).
+- Voice today: `es, fr, it, ja, pt, zh` — Whisper STT, Kokoro TTS, localized
+  lines, selection and fallback assets are implemented.
 - Voice without adding a TTS voice: no other foreign language.

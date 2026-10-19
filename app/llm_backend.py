@@ -27,6 +27,11 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from app.config import ConfigurationError, settings
+from app.languages import (
+    CJK_LANGUAGES,
+    contains_cjk,
+    normalize_language_code,
+)
 
 logger = logging.getLogger("llm_backend")
 
@@ -128,16 +133,27 @@ class ClauseCutter:
     per-sentence TTS stream is never re-split. Clauses shorter than
     MIN_CLAUSE_CHARS are re-merged into the next one rather than spoken alone;
     a trailing partial clause is dropped by flush().
+
+    Japanese and Chinese use ``。！？`` with no following whitespace, so they
+    get their own zero-width boundary and a one-character minimum: a complete
+    answer can be ``はい。``, and the Latin minimum would make flush() drop it
+    and leave the caller in silence. Every other language keeps the existing
+    twelve-character rule and boundaries.
     """
 
     MIN_CLAUSE_CHARS = 12
-    _BOUNDARY = re.compile(r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])")
+    _BOUNDARY = re.compile(
+        r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-ZÀ-ÖØ-ÞŒŸ])"
+    )
     #: Devanagari/Gujarati/Bengali/etc. sentence terminators. These scripts do
     #: not capitalise the next sentence, so the Latin rule above cannot match.
     _BOUNDARY_INDIC = re.compile(r"(?<=[।॥])\s*")
-    _PUNCTUATION = ".!?;।॥"
+    #: CJK terminators: zero-width, because these scripts do not use spaces.
+    _BOUNDARY_CJK = re.compile(r"(?<=[。！？])\s*")
+    _PUNCTUATION = ".!?;।॥。！？"
 
-    def __init__(self) -> None:
+    def __init__(self, language: str | None = None) -> None:
+        self._language = normalize_language_code(language)
         self._buf = ""
         #: First index not yet ruled out as a boundary. A short clause is
         #: merged forward by advancing this past its terminator instead of
@@ -145,6 +161,12 @@ class ClauseCutter:
         #: re-prepending the same text would match the identical danda
         #: forever (and the guard would drop the whole answer).
         self._scan = 0
+
+    def _min_chars(self) -> int:
+        """Minimum clause length for this session's script."""
+        if self._language in CJK_LANGUAGES or contains_cjk(self._buf):
+            return 1
+        return self.MIN_CLAUSE_CHARS
 
     def feed(self, delta: str) -> list[Clause]:
         self._buf += delta
@@ -155,8 +177,13 @@ class ClauseCutter:
             window = self._buf[self._scan:]
             latin = self._BOUNDARY.search(window)
             indic = self._BOUNDARY_INDIC.search(window)
+            cjk = self._BOUNDARY_CJK.search(window)
             m = min(
-                (candidate for candidate in (latin, indic) if candidate is not None),
+                (
+                    candidate
+                    for candidate in (latin, indic, cjk)
+                    if candidate is not None
+                ),
                 key=lambda candidate: candidate.start(),
                 default=None,
             )
@@ -175,7 +202,7 @@ class ClauseCutter:
                 break
             end = self._scan + m.end()
             text = self._buf[:end].strip()
-            if len(text) >= self.MIN_CLAUSE_CHARS:
+            if len(text) >= self._min_chars():
                 self._buf = self._buf[end:]
                 self._scan = 0
                 out.append(Clause(text=text, is_final=False))
@@ -191,7 +218,7 @@ class ClauseCutter:
 
     def flush(self) -> Clause | None:
         text = self._buf.strip()
-        if len(text) >= self.MIN_CLAUSE_CHARS:
+        if len(text) >= self._min_chars():
             self._buf = ""
             return Clause(text=text, is_final=True)
         return None

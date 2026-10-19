@@ -389,6 +389,7 @@ async def create_conversation(
     extracted_lead: dict | None = None,
     conversation_id: str | None = None,
     crm_user_id: str | None = None,
+    language: str = "",
 ) -> dict | None:
     """
     Log a conversation against a lead.
@@ -413,14 +414,16 @@ async def create_conversation(
                     "INSERT INTO conversations (id, lead_id, phone_number, channel, "
                     "transcript, summary, call_duration_seconds, outcome, "
                     "follow_up_needed, follow_up_reason, extracted_lead, "
-                    "conversation_id, crm_user_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "conversation_id, crm_user_id, language) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING id, lead_id, phone_number, channel, transcript, "
                     "summary, call_duration_seconds, outcome, follow_up_needed, "
-                    "follow_up_reason, extracted_lead, created_at, conversation_id",
+                    "follow_up_reason, extracted_lead, created_at, conversation_id, "
+                    "language",
                     (conv_id, lead_id, phone_number, channel, transcript, summary,
                      call_duration_seconds, outcome, follow_up_needed,
-                     follow_up_reason, lead_json, session_id, crm_user_id or None),
+                     follow_up_reason, lead_json, session_id, crm_user_id or None,
+                     language or ""),
                 )
                 row = cur.fetchone()
             logger.info(
@@ -447,7 +450,8 @@ async def get_conversations(
             query = (
                 "SELECT id, lead_id, phone_number, channel, transcript, summary, "
                 "call_duration_seconds, outcome, follow_up_needed, follow_up_reason, "
-                "extracted_lead, created_at, conversation_id FROM conversations"
+                "extracted_lead, created_at, conversation_id, language "
+                "FROM conversations"
             )
             conditions = []
             params: list = []
@@ -727,7 +731,8 @@ async def get_recent_conversation_for_phone(
             query = (
                 "SELECT id, lead_id, phone_number, channel, transcript, summary, "
                 "call_duration_seconds, outcome, follow_up_needed, follow_up_reason, "
-                "extracted_lead, created_at, conversation_id FROM conversations "
+                "extracted_lead, created_at, conversation_id, language "
+                "FROM conversations "
                 "WHERE phone_number = %s "
                 "  AND created_at >= NOW() - (INTERVAL '1 second' * %s) "
             )
@@ -1010,6 +1015,9 @@ def _row_to_conversation_dict(row) -> dict:
     # shape so a query that predates it degrades to the row id rather than
     # raising IndexError.
     result["conversation_id"] = (row[12] if len(row) > 12 and row[12] else result["id"])
+    # language is the newest column; tolerate the shorter row shape exactly as
+    # conversation_id does above.
+    result["language"] = (row[13] if len(row) > 13 and row[13] else "")
     return result
 
 

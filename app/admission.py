@@ -37,6 +37,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import settings
+from app.languages import normalize_language_code
+from app.localized_text import (
+    BUSY_TEXTS as FOREIGN_BUSY_TEXTS,
+    FIXED_RESPONSE_TEXTS as FOREIGN_FIXED_RESPONSE_TEXTS,
+)
 
 logger = logging.getLogger("admission")
 
@@ -66,6 +71,37 @@ FIXED_RESPONSE_TEXT = (
     "I'm sorry, I didn't catch that properly just now. "
     "Could you say that again for me?"
 )
+
+#: Per-language wording. English keeps the constants above byte-for-byte; the
+#: six foreign strings live in app/localized_text.py.
+BUSY_TEXTS = {"en": BUSY_TEXT, **FOREIGN_BUSY_TEXTS}
+FIXED_RESPONSE_TEXTS = {"en": FIXED_RESPONSE_TEXT, **FOREIGN_FIXED_RESPONSE_TEXTS}
+
+
+def fixed_response_asset(language: str = "") -> str:
+    """The pre-recorded fixed-response WAV for a language (English fallback)."""
+    code = normalize_language_code(language)
+    if code in FOREIGN_FIXED_RESPONSE_TEXTS:
+        return f"fixed_response_{code}.wav"
+    return FIXED_RESPONSE_ASSET
+
+
+def busy_asset(language: str = "") -> str:
+    """The pre-recorded busy WAV for a language (English fallback)."""
+    code = normalize_language_code(language)
+    if code in FOREIGN_BUSY_TEXTS:
+        return f"busy_{code}.wav"
+    return BUSY_ASSET
+
+
+def fixed_response_text(language: str = "") -> str:
+    return FIXED_RESPONSE_TEXTS.get(
+        normalize_language_code(language), FIXED_RESPONSE_TEXT
+    )
+
+
+def busy_text(language: str = "") -> str:
+    return BUSY_TEXTS.get(normalize_language_code(language), BUSY_TEXT)
 
 #: The four outcomes (AC-2). Ordered by nothing: they are distinct categories,
 #: and any summary that adds two of them together is wrong.
@@ -249,7 +285,7 @@ class Admission:
         with self._lock:
             self.records.asset_plays.append(
                 {"asset": asset, "caller_ref": _caller_ref(call_sid), "ts": time.time()})
-            if asset == FIXED_RESPONSE_ASSET:
+            if asset.startswith("fixed_response"):
                 self.records.fixed_response_plays += 1
 
     def snapshot(self) -> dict:

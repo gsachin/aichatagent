@@ -47,6 +47,14 @@ from app.voice_handler import VoiceCallSession
 CHUNK = b"\x7f" * 160          # one 20 ms µ-law frame
 
 
+@pytest.fixture(autouse=True)
+def _fresh_greeting_cache():
+    """The greeting cache is process-wide; no test may inherit another's entry."""
+    vh.clear_greeting_cache()
+    yield
+    vh.clear_greeting_cache()
+
+
 def _loud_frame(peak: int = 12000) -> bytes:
     """One 20 ms frame of a loud tone — a caller talking at the microphone."""
     import audioop
@@ -283,24 +291,76 @@ async def test_the_greeting_yields_to_the_caller(monkeypatch):
     its synthesis. It is a task now, under the same rules as a turn.
     """
     session = VoiceCallSession()
-    monkeypatch.setattr(
-        vh, "generate_ulaw_greeting",
-        lambda text, language="": [CHUNK] * 10,
-    )
+
+    async def fake_stream(text, **kwargs):
+        for _ in range(10):
+            yield [0.0] * 160, 8000
+
+    monkeypatch.setattr(session, "synthesise_stream", fake_stream)
     ws = FakeWS(session=session)
     turn = main._VoiceTurn(websocket=ws, session=session, label="test",
                            stream_sid="MZ1", call_sid="CA1")
 
     task = asyncio.create_task(main._run_greeting(turn, "hello"))
-    await _until(lambda: _writes(ws) >= 10)
+    await _until(lambda: _writes(ws) >= 1)
     assert session.state == "SPEAKING"
-    assert session.playout_remaining() > 0, "test premise: the carrier is playing"
+    assert not task.done(), "test premise: the greeting is still being played"
 
     session.request_interruption()
     await task
 
     assert "clear" in kinds(ws), "the caller must stop hearing the greeting too"
     assert session.state == "LISTENING", "the first caller turn must not be gated"
+
+
+@pytest.mark.anyio
+async def test_the_second_greeting_comes_from_the_cache(monkeypatch):
+    """A fixed script must not be synthesised twice for the same voice."""
+    calls = {"n": 0}
+
+    async def fake_stream(self, text, **kwargs):
+        calls["n"] += 1
+        for _ in range(5):
+            yield [0.0] * 160, 8000
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
+
+    for index, call_sid in enumerate(("CA-cache-1", "CA-cache-2")):
+        session = VoiceCallSession()
+        ws = FakeWS(session=session)
+        turn = main._VoiceTurn(
+            websocket=ws, session=session, label="test",
+            stream_sid=f"MZ-cache-{index}", call_sid=call_sid,
+        )
+        await main._run_greeting(turn, "cache probe greeting")
+        assert any(msg.get("event") == "media" for msg in ws.sent)
+
+    assert calls["n"] == 1, "the second greeting was re-synthesised"
+
+
+@pytest.mark.anyio
+async def test_the_greeting_warmup_fills_the_cache(monkeypatch):
+    """Boot-time warmup must leave a cache hit for the first caller."""
+    import app.voice_system_prompt as vsp
+
+    calls = {"n": 0}
+
+    async def fake_stream(self, text, **kwargs):
+        calls["n"] += 1
+        yield [0.0] * 160, 8000
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
+    monkeypatch.setattr(vsp, "call_greeting", lambda language, direction: "warm probe")
+    monkeypatch.setattr(main, "_GREETING_WARMUP_LANGUAGES", ("en",))
+    monkeypatch.setattr(main, "_active_call_sids", {})
+
+    await main._warm_greeting_cache(delay=0)
+
+    assert calls["n"] == 2, "both directions must be warmed"
+    for direction in ("inbound", "outbound"):
+        key = vh.greeting_cache_key("en", direction, "warm probe")
+        frames = vh.greeting_cache_get(key)
+        assert frames and isinstance(frames[0], bytes)
 
 
 def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
@@ -324,10 +384,11 @@ def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
 
     monkeypatch.setattr(crm_session, "start", lambda *a, **k: _FakeSession())
     monkeypatch.setattr(crm_session, "end", lambda *a, **k: _FakeSession())
-    monkeypatch.setattr(
-        vh, "generate_ulaw_greeting",
-        lambda text, language="": [CHUNK] * 8,
-    )
+    async def fake_stream(self, text, **kwargs):
+        for _ in range(8):
+            yield [0.0] * 160, 8000
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
 
     async def _no_hangup(*a, **k):
         return None

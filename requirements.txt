@@ -30,6 +30,18 @@ soundfile==0.14.0
 faster-whisper==1.2.1
 onnx-asr[hub]==0.12.0
 kokoro-onnx==0.5.0
+# Kokoro's ONNX tokenizer phonemizes every language through espeak-ng, which
+# cannot read Japanese kanji or Chinese Han reliably. misaki is the G2P the
+# Kokoro model was trained with; app/voice_handler.py uses it for ja/zh only.
+# `misaki[ja]` pulls pyopenjtalk, which needs a C++ build on Windows, so we
+# install the prebuilt pyopenjtalk-plus wheel and the Japanese helpers
+# explicitly. `misaki[zh]` brings pypinyin/jieba/cn2an.
+misaki[zh]==0.9.4
+pyopenjtalk-plus==0.4.1.post9
+fugashi==1.5.2
+unidic-lite==1.0.8
+jaconv==0.5.0
+mojimoji==0.0.13
 openai-whisper==20250625
 pipecat-ai[whisper,kokoro]==1.6.0
 

@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -70,6 +71,30 @@ SCRIPT_START = {
     "ur": "؀",
 }
 
+#: The six non-Indian languages need a different check. Spanish, French,
+#: Italian and Portuguese all use Latin script, so a block-start test cannot
+#: tell them from English; two distinct function-word hits (or a language-
+#: specific accented character) is the coarse guard. Japanese/Chinese are
+#: separated by kana: Japanese has it, Chinese does not.
+_LATIN_FOREIGN_MARKERS = {
+    "es": {"el", "la", "los", "las", "de", "que", "para", "con", "una", "es",
+           "del", "se", "su", "más", "matrícula", "programa", "año", "dólares"},
+    "fr": {"le", "la", "les", "des", "du", "une", "pour", "avec", "est", "que",
+           "dans", "sur", "frais", "scolarité", "programme", "ans", "montant"},
+    "it": {"il", "la", "gli", "le", "di", "che", "per", "con", "una", "è",
+           "del", "della", "tasse", "programma", "anni", "retta"},
+    "pt": {"o", "a", "os", "as", "de", "que", "para", "com", "uma", "é",
+           "do", "da", "mensalidade", "programa", "anos", "qual"},
+}
+_LATIN_FOREIGN_ACCENTS = {
+    "es": "áéíóúñü¿¡",
+    "fr": "àâæçéèêëîïôœùûüÿ",
+    "it": "àèéìíîòóùú",
+    "pt": "áâãàçéêíóôõú",
+}
+_KANA_RE = re.compile(r"[぀-ヿ]")
+_HAN_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+
 #: Rough per-million-token list prices for the default model (verified docs,
 #: 2026-10-17: gpt-6-luna $0.10 input / $0.50 output; cached input $0.01).
 PRICE_INPUT_PER_MTOK = float(os.environ.get("BENCH_PRICE_INPUT_PER_MTOK", "0.10"))
@@ -98,6 +123,14 @@ def _script_ok(text: str, language: str) -> bool:
         return False
     if language == "en":
         return any("a" <= c.lower() <= "z" for c in text)
+    if language == "ja":
+        return bool(_KANA_RE.search(text) or _HAN_RE.search(text))
+    if language == "zh":
+        return bool(_HAN_RE.search(text)) and not _KANA_RE.search(text)
+    if language in _LATIN_FOREIGN_MARKERS:
+        words = set(re.findall(r"[a-záéíóúñüàâæçèêëîïôœùûÿ]+", text.lower()))
+        accents = any(ch in text for ch in _LATIN_FOREIGN_ACCENTS[language])
+        return len(words & _LATIN_FOREIGN_MARKERS[language]) >= 2 or accents
     start = SCRIPT_START.get(language)
     if not start:
         return True

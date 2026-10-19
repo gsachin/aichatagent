@@ -71,6 +71,12 @@ from fastapi.staticfiles import StaticFiles
 # reads below cannot run before the environment is prepared.
 from app import audio_format
 from app.config import settings
+from app.languages import (
+    configured_foreign_languages,
+    language_from_command,
+    normalize_language_code,
+    resolve_answer_language,
+)
 
 def _configure_logging() -> None:
     """Apply LOG_LEVEL and LOG_FILE from the environment.
@@ -141,6 +147,59 @@ _db_available = False
 _outbound_worker = None
 _follow_up_scheduler = None
 _crm_worker = None
+_greeting_warmup_task = None
+
+#: Fill the fixed-greeting cache after the server is up. Background work: it
+#: never delays binding, and it stops as soon as a real call is active. The
+#: first call in each of these languages otherwise pays the cold TTS path
+#: (measured 3.6-4.0 s for hi/en before the greeting path was streamed).
+_GREETING_WARMUP_ENABLED = os.environ.get(
+    "GREETING_WARMUP", "1"
+).strip().lower() not in ("0", "false", "off", "no")
+_GREETING_WARMUP_LANGUAGES = ("en", "hi", "gu")
+
+
+async def _warm_greeting_cache(delay: float = 2.0) -> None:
+    """Pre-synthesise the fixed greetings while the box is idle."""
+    await _asyncio.sleep(delay)
+    try:
+        from app.voice_handler import (
+            VoiceCallSession,
+            greeting_cache_get,
+            greeting_cache_key,
+            greeting_cache_put,
+        )
+        from app.voice_system_prompt import call_greeting
+    except Exception:                            # noqa: BLE001
+        logger.exception("Greeting warmup imports failed")
+        return
+
+    for language in _GREETING_WARMUP_LANGUAGES:
+        for direction in ("inbound", "outbound"):
+            if _active_call_sids:
+                logger.info("Greeting warmup paused: a call is active")
+                return
+            try:
+                text = call_greeting(language, direction)
+                key = greeting_cache_key(language, direction, text)
+                if greeting_cache_get(key):
+                    continue
+                session = VoiceCallSession(
+                    language=language, direction=direction
+                )
+                frames: list[bytes] = []
+                async for audio, sr in session.synthesise_stream(text):
+                    frames.extend(session._chunk_to_ulaw_frames(audio, sr))
+                if frames:
+                    greeting_cache_put(key, frames)
+                    logger.info(
+                        "Greeting warmup cached %s/%s (%d frames)",
+                        language, direction, len(frames),
+                    )
+            except Exception:                    # noqa: BLE001
+                logger.exception(
+                    "Greeting warmup failed for %s/%s", language, direction
+                )
 
 # AEC workaround: Twilio <Stream> has no echo-cancellation attribute, so the
 # caller's mic re-captures our own speech ("Listen to her again" artifacts) and
@@ -285,6 +344,7 @@ def _reconcile_workers() -> None:
 async def lifespan(app_instance):
     """Initialize and cleanup resources."""
     global _db_available, _outbound_worker, _follow_up_scheduler
+    global _greeting_warmup_task
     # Startup
     _reconcile_workers()
 
@@ -374,10 +434,11 @@ async def lifespan(app_instance):
             # A caller's first answer is the turn they are most likely to be
             # timing, and it was the one paying a model load.
             try:
-                from app.voice_handler import _get_tts_engine
+                from app.voice_handler import _get_tts_engine, warmup_foreign_g2p
 
                 _get_tts_engine()
-                logger.info("Kokoro TTS pre-warmed")
+                warmup_foreign_g2p()
+                logger.info("Kokoro TTS and ja/zh G2P pre-warmed")
             except Exception as tts_exc:                # noqa: BLE001
                 logger.warning(f"Kokoro pre-warm skipped: {tts_exc}")
 
@@ -432,6 +493,10 @@ async def lifespan(app_instance):
 
     _readiness_task = _asyncio.create_task(_assess_readiness_at_boot())
 
+    if _GREETING_WARMUP_ENABLED:
+        _greeting_warmup_task = _asyncio.create_task(_warm_greeting_cache())
+        logger.info("Greeting warmup scheduled")
+
     # Start outbound call worker
     try:
         from app.outbound.caller import OutboundCallWorker
@@ -477,12 +542,20 @@ async def lifespan(app_instance):
     # Shutdown
     if _readiness_task and not _readiness_task.done():
         _readiness_task.cancel()
+    if _greeting_warmup_task and not _greeting_warmup_task.done():
+        _greeting_warmup_task.cancel()
     if _outbound_worker:
         _outbound_worker.stop()
     if _follow_up_scheduler:
         await _follow_up_scheduler.stop()
     if _crm_worker:
         await _crm_worker.stop()
+    try:
+        from app import tts_sarvam
+
+        await tts_sarvam.aclose()
+    except Exception:                            # noqa: BLE001
+        logger.debug("Sarvam TTS client close skipped", exc_info=True)
     logger.info("Server shutting down")
 
 
@@ -523,13 +596,13 @@ def _resolve_tunnel_host() -> str:
 
 def _stream_markup(host: str, phone: str = "", language: str = "") -> str:
     """Build the `<Stream>` element, carrying the caller number and language.
-
     Both values reach the media stream as custom `<Parameter>`s because Media
     Streams does not carry them in the `start` event. Values are XML-escaped
     (R14); an `&` or `<` would otherwise produce TwiML Twilio rejects.
     """
     url = f"wss://{host}/ws/twilio"
     params = []
+    language = normalize_language_code(language)
     if phone:
         params.append(
             f'<Parameter name="phone" value="{escape(phone, {chr(34): "&quot;"})}" />'
@@ -547,10 +620,19 @@ def _stream_markup(host: str, phone: str = "", language: str = "") -> str:
 #: other digit (or no input) keeps DEFAULT_LANGUAGE.
 _LANGUAGE_BY_DIGIT = {"1": "en", "2": "hi", "3": "gu"}
 
+#: Second-level menu, reached by pressing 9 on the first menu. The order is the
+#: order of DEFAULT_FOREIGN_LANGUAGES.
+_FOREIGN_LANGUAGE_BY_DIGIT = {
+    "1": "es", "2": "fr", "3": "it", "4": "ja", "5": "pt", "6": "zh",
+}
+
 
 def _language_for_call(digits: str, default: str = "") -> str:
     """Map the IVR digit to a language code (default when unrecognised)."""
-    return _LANGUAGE_BY_DIGIT.get((digits or "").strip(), default or settings.DEFAULT_LANGUAGE)
+    code = _LANGUAGE_BY_DIGIT.get(
+        (digits or "").strip(), default or settings.DEFAULT_LANGUAGE
+    )
+    return normalize_language_code(code)
 
 
 TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -581,6 +663,56 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
 </Response>"""
 
+#: The same first menu plus the second-level entry. Used only when
+#: FOREIGN_LANGUAGES is non-empty, so the disabled feature restores the
+#: original template byte-for-byte.
+TWIML_IVR_TEMPLATE_FOREIGN = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather numDigits="1" timeout="3" action="{action}" method="GET">
+        <Say voice="Polly.Joanna">
+            Welcome to the Meridian University Admissions helpline.
+            Press 1 for English.
+            Press 2 for Hindi.
+            Press 3 for Gujarati.
+            Press 4 to continue in the default language.
+            For Spanish, French, Italian, Japanese, Portuguese or Chinese, press 9.
+            Or, simply start speaking to ask any question in English.
+        </Say>
+    </Gather>
+    <Say voice="Polly.Joanna">I didn't receive any input. Connecting you to the AI assistant now.</Say>
+    <Connect>
+        {stream}
+    </Connect>
+    <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
+</Response>"""
+
+#: Second-level menu. It is English because no language has been chosen yet;
+#: the AI answers in the language selected by the digit.
+TWIML_FOREIGN_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather numDigits="1" timeout="3" action="{action}" method="GET">
+        <Say voice="Polly.Joanna">
+            Press 1 for Spanish.
+            Press 2 for French.
+            Press 3 for Italian.
+            Press 4 for Japanese.
+            Press 5 for Portuguese.
+            Press 6 for Chinese.
+        </Say>
+    </Gather>
+    <Say voice="Polly.Joanna">I didn't receive any input. Connecting you to the AI assistant now.</Say>
+    <Connect>
+        {stream}
+    </Connect>
+    <Say voice="Polly.Joanna">Sorry, the connection was interrupted. Please call back later.</Say>
+</Response>"""
+
+
+def _foreign_menu_action(language: str = "") -> str:
+    """The second-level Gather action, carrying the stage and any pinned code."""
+    suffix = f"&amp;language={quote(language)}" if language else ""
+    return f"/twilio/voice/connect?stage=foreign{suffix}"
+
 
 # US-016: the refusal. A third caller hears a sentence produced ahead of time
 # and the call ends. There is deliberately NO <Connect> here -- no media stream
@@ -601,8 +733,29 @@ TWIML_BUSY_SAY_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <Hangup/>
 </Response>"""
 
+#: Carrier fallback for the six foreign languages. Twilio's `<Say>` needs a
+#: voice that can pronounce the language; the English template above stays
+#: byte-identical for the English path.
+TWIML_BUSY_SAY_FOREIGN_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{voice}" language="{language}">{text}</Say>
+    <Hangup/>
+</Response>"""
 
-def _busy_twiml(host: str) -> str:
+#: Polly voices Twilio documents for the six languages. The exact voice list is
+#: carrier-side; the language attribute is what makes the fallback audible even
+#: if a voice name is retired.
+_POLLY_FOREIGN_VOICE = {
+    "es": ("Polly.Lupe", "es-MX"),
+    "fr": ("Polly.Celine", "fr-FR"),
+    "it": ("Polly.Bianca", "it-IT"),
+    "ja": ("Polly.Takumi", "ja-JP"),
+    "pt": ("Polly.Camila", "pt-BR"),
+    "zh": ("Polly.Zhiyu", "cmn-CN"),
+}
+
+
+def _busy_twiml(host: str, language: str = "") -> str:
     """TwiML that plays the busy message and connects nothing.
 
     The pre-synthesised asset is the path: it is the assistant's own voice,
@@ -617,15 +770,28 @@ def _busy_twiml(host: str) -> str:
     happens at Twilio, not here. The boot gate reports the missing asset
     separately, so the degraded voice is visible rather than silent.
     """
-    from app.admission import BUSY_ASSET, BUSY_TEXT, asset_available
+    from app.admission import BUSY_ASSET, asset_available, busy_asset, busy_text
 
-    if asset_available(BUSY_ASSET):
+    code = normalize_language_code(language)
+    asset = busy_asset(code)
+    if asset_available(asset):
+        return TWIML_BUSY_TEMPLATE.format(
+            audio_url=f"https://{host}/static/audio/{asset}")
+    if asset != BUSY_ASSET and asset_available(BUSY_ASSET):
+        logger.warning(
+            "/twilio: busy asset %s missing -- using the English asset", asset)
         return TWIML_BUSY_TEMPLATE.format(
             audio_url=f"https://{host}/static/audio/{BUSY_ASSET}")
+
+    text = busy_text(code)
     logger.warning(
         "/twilio: busy asset %s missing -- falling back to carrier <Say>. "
-        "Build it: .venv/Scripts/python.exe scripts/build_call_assets.py", BUSY_ASSET)
-    escaped = (BUSY_TEXT.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        "Build it: .venv/Scripts/python.exe scripts/build_call_assets.py", asset)
+    escaped = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    voice = _POLLY_FOREIGN_VOICE.get(code)
+    if voice:
+        return TWIML_BUSY_SAY_FOREIGN_TEMPLATE.format(
+            voice=voice[0], language=voice[1], text=escaped)
     return TWIML_BUSY_SAY_TEMPLATE.format(text=escaped)
 
 
@@ -735,7 +901,9 @@ async def websocket_voice_text(websocket: WebSocket):
             try:
                 from app.pipeline import build_rag_prompt, test_pipeline_with_text
 
-                language = str(msg.get("language", "") if isinstance(msg, dict) else "").strip().lower()
+                language = normalize_language_code(
+                    str(msg.get("language", "") if isinstance(msg, dict) else "")
+                )
                 answer = await test_pipeline_with_text(query, language=language or None)
 
                 await websocket.send_text(json.dumps({
@@ -1088,7 +1256,13 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         return
 
     try:
-        from app.voice_handler import generate_ulaw_greeting, _use_sarvam_tts
+        from app.voice_handler import (
+            generate_ulaw_greeting,
+            greeting_cache_get,
+            greeting_cache_key,
+            greeting_cache_put,
+            _use_sarvam_tts,
+        )
 
         # US-014: the greeting is agent speech, so the echo gate is armed for it
         # exactly as for a turn, and -- as for a turn -- it stays armed until the
@@ -1096,14 +1270,26 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         session.begin_turn()
         session.mark_speaking()
 
-        if _use_sarvam_tts(session.language):
-            # Bulbul streams over HTTP; writing each chunk as it arrives makes
-            # the first syllable audible in ~0.6 s instead of waiting for the
-            # whole 7 s script. The batch path below remains for Kokoro.
+        direction = (getattr(session, "direction", "") or "inbound").strip().lower()
+        cache_key = greeting_cache_key(session.language, direction, text)
+        cached = greeting_cache_get(cache_key)
+        if cached:
+            logger.info(
+                f"{t.label}: greeting cache hit ({session.language}/"
+                f"{direction}, {len(cached)} frames)"
+            )
+            session.note_greeting_spoken(text)
+            await _write_frames(t, cached, sent)
+        else:
+            frames: list[bytes] = []
             noted = False
 
             async def _stream_greeting() -> None:
                 nonlocal noted
+                # Neither provider needs the whole script before the first
+                # frame: Kokoro streams per sentence and Sarvam streams PCM as
+                # it is generated. The first sentence is what the caller hears
+                # while the rest is still being synthesised.
                 async for audio, sr in session.synthesise_stream(text):
                     if not noted:
                         # The greeting is agent speech, so the transcript of
@@ -1112,29 +1298,42 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
                         # model it already introduced itself.
                         session.note_greeting_spoken(text)
                         noted = True
-                    await _write_frames(
-                        t, session._chunk_to_ulaw_frames(audio, sr), sent
-                    )
+                    chunk_frames = session._chunk_to_ulaw_frames(audio, sr)
+                    frames.extend(chunk_frames)
+                    await _write_frames(t, chunk_frames, sent)
 
-            await _asyncio.wait_for(
-                _stream_greeting(), timeout=_greeting_timeout_s()
-            )
-        else:
-            # US-017 C4 / Class A: `generate_ulaw_greeting` is SYNCHRONOUS and
-            # runs Kokoro on the calling thread -- and it LOADS the model when
-            # cold. Called directly from an async handler it froze the whole
-            # event loop for a model load on the FIRST turn of the FIRST call.
-            # `to_thread` gives it a worker thread instead.
-            chunks = await _asyncio.wait_for(
-                _asyncio.to_thread(
-                    generate_ulaw_greeting, text, language=session.language
-                ),
-                timeout=_greeting_timeout_s(),
-            )
-            logger.info(f"AI greeting: {len(chunks)} chunks")
-            if chunks:
-                session.note_greeting_spoken(text)
-            await _write_frames(t, chunks, sent)
+            try:
+                await _asyncio.wait_for(
+                    _stream_greeting(), timeout=_greeting_timeout_s()
+                )
+            except Exception:
+                # The streaming path is shared with every turn, but the
+                # greeting must not lose its batch fallback on Kokoro. Only
+                # fall back when nothing has been spoken: repeating the start
+                # of the greeting would be worse than the delay.
+                if frames or _use_sarvam_tts(session.language):
+                    raise
+                logger.exception(
+                    "%s: streaming greeting failed before audio; "
+                    "falling back to batch synthesis", t.label,
+                )
+                frames = await _asyncio.wait_for(
+                    _asyncio.to_thread(
+                        generate_ulaw_greeting, text,
+                        language=session.language,
+                    ),
+                    timeout=_greeting_timeout_s(),
+                )
+                if frames:
+                    session.note_greeting_spoken(text)
+                await _write_frames(t, frames, sent)
+
+            if frames:
+                greeting_cache_put(cache_key, frames)
+                logger.info(
+                    f"{t.label}: greeting synthesised and cached "
+                    f"({session.language}/{direction}, {len(frames)} frames)"
+                )
 
         await _await_playout(session)
         if session.cancel_requested():
@@ -1248,15 +1447,16 @@ async def websocket_twilio(websocket: WebSocket):
                 # The requested answer language travels as a TwiML <Parameter>
                 # (same channel as the phone number, which Media Streams does
                 # not carry in the start event). Empty keeps DEFAULT_LANGUAGE.
-                output_language = str(
+                output_language = normalize_language_code(str(
                     (start_payload.get("customParameters") or {}).get("language") or ""
-                ).strip().lower()
+                ))
                 if output_language:
                     session.language = output_language
                 from app.crm import session as crm_session
 
                 inbound_session = crm_session.start(
-                    "inbound_call", stream_sid, phone_number=caller_number
+                    "inbound_call", stream_sid, phone_number=caller_number,
+                    language=session.language,
                 )
                 conversation_id = inbound_session.conversation_id
                 logger.info(
@@ -1403,6 +1603,8 @@ async def websocket_twilio(websocket: WebSocket):
             # Set mid-call by the linker, if it managed to link.
             crm_user_id=(call_linker.crm_user_id if call_linker else "")
             or (ended.crm_user_id if ended else ""),
+            language=getattr(ended, "language", "")
+            or getattr(session, "language", ""),
         )
         try:
             await websocket.close()
@@ -1489,7 +1691,9 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 outbound_params = start_payload.get("customParameters") or {}
                 outbound_lead_id = str(outbound_params.get("leadId") or "")
                 outbound_phone = str(outbound_params.get("phone") or "")
-                outbound_language = str(outbound_params.get("language") or "").strip().lower()
+                outbound_language = normalize_language_code(
+                    str(outbound_params.get("language") or "")
+                )
                 if outbound_language:
                     session.language = outbound_language
                 from app.crm import session as crm_session
@@ -1499,6 +1703,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     stream_sid,
                     phone_number=outbound_phone,
                     lead_id=outbound_lead_id,
+                    language=session.language,
                 )
                 conversation_id = outbound_session.conversation_id
                 _push_transcript_event("call_started", stream_sid, {
@@ -1620,6 +1825,8 @@ async def websocket_twilio_outbound(websocket: WebSocket):
             phone_number=ended.phone_number if ended else "",
             # Set at call start by the outbound linker, if it linked.
             crm_user_id=ended.crm_user_id if ended else "",
+            language=getattr(ended, "language", "")
+            or getattr(session, "language", ""),
         )
 
 
@@ -1762,9 +1969,12 @@ async def twilio_voice_webhook(From: str = Query(""), language: str = Query(""))
     `Form` would silently never bind. It is threaded into the TwiML as a
     `<Parameter>` because the media stream itself never carries it.
     """
-    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+    from app.admission import REGISTRY, busy_asset, enabled as admission_enabled
 
     host = _resolve_tunnel_host()
+    refusal_language = normalize_language_code(
+        language or settings.DEFAULT_LANGUAGE
+    )
 
     # US-016: the admission decision, taken from the live session count at the
     # carrier-facing endpoint (TAC-1). Refusing here rather than at the media
@@ -1773,16 +1983,27 @@ async def twilio_voice_webhook(From: str = Query(""), language: str = Query(""))
     if admission_enabled():
         d = REGISTRY.decide(call_sid=From or "")
         if not d.admitted:
-            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            REGISTRY.note_asset_played(
+                busy_asset(refusal_language), call_sid=From or ""
+            )
             logger.info("/twilio/voice: REFUSED (outcome=refused, live=%d, limit=%d)",
                         d.live, d.limit)
-            return Response(content=_busy_twiml(host), media_type="application/xml")
+            return Response(
+                content=_busy_twiml(host, refusal_language),
+                media_type="application/xml",
+            )
 
-    twiml = TWIML_IVR_TEMPLATE.format(
+    ivr_template = (
+        TWIML_IVR_TEMPLATE_FOREIGN
+        if configured_foreign_languages()
+        else TWIML_IVR_TEMPLATE
+    )
+    twiml = ivr_template.format(
         host=host,
         stream=_stream_markup(host, From, language or settings.DEFAULT_LANGUAGE),
         # A dedicated Twilio number can pin the language with ?language=hi.
-        # Digits 1/2/3 select per call; an unknown digit keeps the default.
+        # Digits 1/2/3 select per call; 9 opens the foreign menu; an unknown
+        # digit keeps the default.
         action=(
             f"/twilio/voice/connect?language={quote(language)}"
             if language else "/twilio/voice/connect"
@@ -1794,7 +2015,8 @@ async def twilio_voice_webhook(From: str = Query(""), language: str = Query(""))
 
 @app.get("/twilio/voice/connect")
 async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
-                               language: str = Query("")):
+                               language: str = Query(""),
+                               stage: str = Query("")):
     """
     Called by Twilio after IVR <Gather> completes.
     Connects the caller to the AI WebSocket stream.
@@ -1803,9 +2025,16 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
     so `From` is still present here — which is why it is declared again rather
     than carried in a session.
     """
-    from app.admission import BUSY_ASSET, REGISTRY, enabled as admission_enabled
+    from app.admission import REGISTRY, busy_asset, enabled as admission_enabled
 
     host = _resolve_tunnel_host()
+
+    # Resolve the chosen language before the admission check: a refused caller
+    # should hear the busy message in the language they are about to use. The
+    # decision itself is unchanged.
+    chosen_language = _language_for_call(
+        Digits, language or settings.DEFAULT_LANGUAGE
+    )
 
     # US-016: the binding decision. This endpoint is where <Connect><Stream>
     # would go out, so it is the last point at which a call can be refused
@@ -1815,14 +2044,37 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
     if admission_enabled():
         d = REGISTRY.decide(call_sid=From or "")
         if not d.admitted:
-            REGISTRY.note_asset_played(BUSY_ASSET, call_sid=From or "")
+            REGISTRY.note_asset_played(
+                busy_asset(chosen_language), call_sid=From or ""
+            )
             logger.info("/twilio/voice/connect: REFUSED (outcome=refused, live=%d, limit=%d)",
                         d.live, d.limit)
-            return Response(content=_busy_twiml(host), media_type="application/xml")
+            return Response(
+                content=_busy_twiml(host, chosen_language),
+                media_type="application/xml",
+            )
 
-    chosen_language = _language_for_call(
-        Digits, language or settings.DEFAULT_LANGUAGE
-    )
+    # ── Foreign-language second level ───────────────────────────────
+    # Digits 1-4 on the first menu keep their exact old meaning. Only 9 opens
+    # the new menu, and only while the feature is enabled; with
+    # FOREIGN_LANGUAGES empty this whole block is dead.
+    foreign = configured_foreign_languages()
+    if foreign and stage != "foreign" and (Digits or "").strip() == "9":
+        menu = TWIML_FOREIGN_IVR_TEMPLATE.format(
+            stream=_stream_markup(host, From, chosen_language),
+            action=_foreign_menu_action(normalize_language_code(language)),
+        )
+        logger.info(
+            "/twilio/voice/connect: foreign menu (pinned language=%s)",
+            language or "none",
+        )
+        return Response(content=menu, media_type="application/xml")
+
+    if foreign and stage == "foreign":
+        chosen_language = _FOREIGN_LANGUAGE_BY_DIGIT.get(
+            (Digits or "").strip(), chosen_language
+        )
+
     logger.info(
         f"/twilio/voice/connect: digit={Digits}, language={chosen_language}, "
         f"host={host}, caller={'set' if From else 'unknown'}"
@@ -1851,6 +2103,7 @@ async def _log_whatsapp_conversation(
     transcript: str,
     conversation_id: str = "",
     crm_user_id: str = "",
+    language: str = "",
 ):
     """
     Log a WhatsApp interaction to the new leads + conversations tables.
@@ -1871,6 +2124,7 @@ async def _log_whatsapp_conversation(
             transcript=transcript,
             conversation_id=conversation_id,
             crm_user_id=crm_user_id,
+            language=language,
         )
     except Exception:
         logger.exception("Failed to log WhatsApp conversation (non-fatal)")
@@ -2496,6 +2750,48 @@ async def twilio_whatsapp_webhook(
 
     logger.info(f"WhatsApp from {From} (WaId={WaId}): {Body[:100]}")
 
+    # ── In-chat language command ─────────────────────────────────
+    # A whole-message command ("Spanish", "/es") sets this thread's answer
+    # language and is confirmed without calling the LLM. It runs before lead
+    # lookup and name capture so "Italian" can never be stored as a name.
+    _thread_language = normalize_language_code(
+        getattr(wa_session, "language", "") if wa_session else ""
+    )
+    _command = language_from_command(Body, _thread_language)
+    if _command:
+        if wa_session is not None:
+            wa_session.language = _command
+        from app.localized_text import WHATSAPP_LANGUAGE_CONFIRMATIONS
+
+        answer = WHATSAPP_LANGUAGE_CONFIRMATIONS.get(
+            _command, WHATSAPP_LANGUAGE_CONFIRMATIONS["en"]
+        )
+        background_tasks.add_task(
+            _log_whatsapp_conversation,
+            phone_number=From,
+            transcript=f"User: {Body}\nAssistant: {answer}",
+            conversation_id=conversation_id,
+            language=_command,
+        )
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
+        return Response(content=twiml, media_type="application/xml")
+
+    if Body.strip().lower() in ("/language", "/languages"):
+        from app.localized_text import WHATSAPP_LANGUAGE_HELP
+
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(
+            answer=escape(WHATSAPP_LANGUAGE_HELP)
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # The persisted thread language wins; the Twilio form field (normally
+    # absent) is the next fallback, then the deployment default.
+    _answer_language = resolve_answer_language(
+        _thread_language,
+        Language if isinstance(Language, str) else "",
+        settings.DEFAULT_LANGUAGE,
+    )
+
     # ── Lead info collection — check if lead has name/email ─────
     from app.leads.models import get_lead_by_phone, upsert_lead_by_phone, update_lead
     lead = await get_lead_by_phone(From)
@@ -2537,10 +2833,7 @@ async def twilio_whatsapp_webhook(
                 "Program of interest": lead_program,
             },
             program=lead_program,
-            language=(
-                (Language.strip().lower() if isinstance(Language, str) else "")
-                or settings.DEFAULT_LANGUAGE
-            ),
+            language=_answer_language,
         )
 
     # An explicit "my name is X" / "call me X" is an instruction, and it has to
@@ -2830,6 +3123,7 @@ async def twilio_whatsapp_webhook(
         transcript=f"User: {Body}\nAssistant: {answer}",
         conversation_id=conversation_id,
         crm_user_id=crm_user_id,
+        language=_answer_language,
     )
 
     # Escape exactly once, here at the XML boundary and after the Markdown
@@ -4247,6 +4541,7 @@ async def _handle_disconnect(
     channel: str = "inbound_call",
     phone_number: str = "",
     crm_user_id: str = "",
+    language: str = "",
 ) -> None:
     """
     Post-call handler: save transcript, extract lead data, link to lead, and run sentiment scoring.
@@ -4367,6 +4662,7 @@ async def _handle_disconnect(
             channel=channel,
             conversation_id=conversation_id,
             crm_user_id=crm_user_id,
+            language=language,
         )
     except Exception:
         logger.exception("New leads-system logging failed (non-fatal)")

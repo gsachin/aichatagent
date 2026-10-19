@@ -266,6 +266,81 @@ def effective_config_rows() -> list[dict]:
 
 # ── The gate ───────────────────────────────────────────────────────────────
 
+def check_foreign_languages(r: Readiness) -> None:
+    """Report the conditions the six-language feature needs, without blocking.
+
+    Everything here is a degraded capability, not a reason to refuse the stack:
+    English/Hindi/Gujarati still work if a foreign asset is missing or the STT
+    model is English-only. The operator sees it at boot rather than on a call.
+    """
+    from app.admission import asset_available, busy_asset, fixed_response_asset
+    from app.languages import configured_foreign_languages, normalize_language_code
+
+    foreign = configured_foreign_languages()
+    if not foreign:
+        return
+
+    supported = {
+        normalize_language_code(part)
+        for part in (settings.SUPPORTED_LANGUAGES or "").split(",")
+        if part.strip()
+    }
+    missing_supported = sorted(foreign - supported)
+    if missing_supported:
+        r.degraded.append(
+            "foreign languages missing from SUPPORTED_LANGUAGES: "
+            + ",".join(missing_supported)
+        )
+
+    if (settings.WHISPER_MODEL or "").strip().lower().endswith(".en"):
+        r.degraded.append(
+            f"WHISPER_MODEL={settings.WHISPER_MODEL!r} is English-only; "
+            "the foreign languages need small/medium"
+        )
+
+    if {"ja", "zh"} & set(foreign):
+        try:
+            from misaki import ja as _misaki_ja  # noqa: F401
+            from misaki import zh as _misaki_zh  # noqa: F401
+        except Exception as exc:                      # noqa: BLE001
+            r.degraded.append(
+                "misaki is not installed for ja/zh "
+                f"({type(exc).__name__}); those voices fall back to espeak-ng "
+                "and are not intelligible -- install the requirements.txt G2P stack"
+            )
+
+    if (settings.STT_LANGUAGE or "auto").strip().lower() not in ("", "auto"):
+        r.degraded.append(
+            f"STT_LANGUAGE={settings.STT_LANGUAGE!r} is pinned; foreign "
+            "auto-switching is disabled"
+        )
+
+    if (settings.TTS_PROVIDER or "").strip().lower() == "sarvam":
+        configured = {
+            normalize_language_code(part)
+            for part in (settings.SARVAM_TTS_LANGUAGES or "").split(",")
+            if part.strip()
+        }
+        overlap = sorted(configured & foreign)
+        if overlap:
+            r.degraded.append(
+                "foreign codes in SARVAM_TTS_LANGUAGES are ignored (Kokoro only): "
+                + ",".join(overlap)
+            )
+
+    missing_assets = []
+    for code in sorted(foreign):
+        for name in (fixed_response_asset(code), busy_asset(code)):
+            if not asset_available(name):
+                missing_assets.append(name)
+    if missing_assets:
+        r.degraded.append(
+            "foreign call assets missing: "
+            + ",".join(missing_assets[:6])
+            + " -- build them: .venv/Scripts/python.exe scripts/build_call_assets.py"
+        )
+
+
 def assess(do_warm: bool = True) -> Readiness:
     """Evaluate all four clauses. Never raises; never assumes success."""
     load_env()
@@ -336,6 +411,13 @@ def assess(do_warm: bool = True) -> Readiness:
             r.degraded.append(f"call assets: {drift}")
     except Exception as exc:                          # noqa: BLE001
         r.degraded.append(f"call assets: check failed ({type(exc).__name__}: {exc})")
+
+    try:
+        check_foreign_languages(r)
+    except Exception as exc:                          # noqa: BLE001
+        r.degraded.append(
+            f"foreign languages: check failed ({type(exc).__name__}: {exc})"
+        )
 
     # RAG/embeddings were removed; the document is passed in full. No embed
     # residency has any meaning here.

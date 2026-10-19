@@ -89,4 +89,14 @@ def health() -> dict:
     except Exception as exc:                    # noqa: BLE001
         payload["indic_conformer"] = {"error": str(exc)}
     payload["whisper"] = {"model": settings.WHISPER_MODEL}
+    try:
+        from app.languages import configured_foreign_languages
+
+        payload["foreign"] = {
+            "languages": sorted(configured_foreign_languages()),
+            "provider": "whisper",
+            "model": settings.WHISPER_MODEL,
+        }
+    except Exception as exc:                    # noqa: BLE001
+        payload["foreign"] = {"error": str(exc)}
     return payload

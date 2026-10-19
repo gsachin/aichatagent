@@ -31,6 +31,7 @@ import io as _io
 import logging
 import re
 import os
+import threading
 import time as _time
 from pathlib import Path
 
@@ -42,6 +43,16 @@ from typing import AsyncIterator, Callable
 # other importer had already loaded .env — this module never did.
 from app import audio_format
 from app.config import settings
+from app.languages import (
+    CJK_LANGUAGES,
+    DEFAULT_FOREIGN_LANGUAGES,
+    LATIN_FOREIGN_LANGUAGES,
+    configured_foreign_languages,
+    contains_cjk,
+    min_transcript_chars,
+    normalize_language_code,
+)
+from app.localized_text import CLOSING_REPLIES, NOISE_LADDERS as FOREIGN_NOISE_LADDERS
 from app.voice_system_prompt import language_instruction
 
 logger = logging.getLogger("voice_handler")
@@ -258,7 +269,7 @@ def _kokoro_lang_for(language: str | None, voice: str = "") -> str:
     English is the only language with two voice families: ``a*`` is American,
     ``b*`` is British. Every other mapped voice has one phoneme set.
     """
-    code = (language or settings.DEFAULT_LANGUAGE or "en").strip().lower()
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE or "en")
     if code == "en" and (voice or "").startswith("b"):
         return "en-gb"
     return _KOKORO_PHONEME_LANG.get(code, "en-us")
@@ -277,7 +288,7 @@ def _tts_voice_for(language: str | None) -> str:
     requested language, so KOKORO_VOICE stays meaningful. English accepts both
     the American (a*) and British (b*) voice families.
     """
-    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
     configured = _tts_voice()
     if code == "en" and configured[:1] in ("a", "b"):
         return configured
@@ -287,9 +298,134 @@ def _tts_voice_for(language: str | None) -> str:
     return mapped or configured
 
 
+#: TTS-only readings for Latin tokens that the Japanese/Chinese G2P leaves as
+#: unknown symbols (the Kokoro ONNX tokenizer filters unknown characters, which
+#: would drop the word from the audio). The transcript and logs keep the
+#: original text; only the synthesiser sees the reading.
+_TTS_READINGS = {
+    "ja": (
+        (r"Meridian University", "メリディアン大学"),
+        (r"\bMBA\b", "経営学修士"),
+        (r"\bB\.?\s?Tech\b", "ビーテック"),
+        (r"\bBCA\b", "ビーシーエー"),
+        (r"\bB\.?\s?Com\b", "ビーコム"),
+    ),
+    "zh": (
+        (r"Meridian University", "梅里迪安大学"),
+        (r"\bMBA\b", "工商管理硕士"),
+        (r"\bB\.?\s?Tech\b", "技术学士"),
+        (r"\bBCA\b", "计算机应用学士"),
+        (r"\bB\.?\s?Com\b", "商学学士"),
+    ),
+}
+
+_MISAKI_G2P: dict[str, object] = {}
+_MISAKI_LOCK = threading.Lock()
+_MISAKI_WARNED = False
+
+
+def _tts_text_for(text: str, language: str | None) -> str:
+    """Replace Latin tokens whose reading the ja/zh G2P cannot produce."""
+    code = normalize_language_code(language)
+    for pattern, replacement in _TTS_READINGS.get(code, ()):
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+def _kokoro_phonemes(text: str, language: str | None) -> str:
+    """Phonemes for Japanese/Chinese via misaki, or "" for every other path.
+
+    ``kokoro-onnx`` 0.5.0 phonemizes every language through espeak-ng. That is
+    fine for the Latin languages and Hindi, but it cannot read Japanese kanji:
+    it inserts English scaffolding ("(en)chinese letter") into the phoneme
+    stream, which is why the round-trip harness heard gibberish. misaki is the
+    G2P the Kokoro model was trained with for ja/zh; its phonemes go straight
+    to the ONNX model with ``is_phonemes=True``.
+
+    A missing package or a G2P failure falls back to the old path rather than
+    breaking a call; boot reports the missing optional dependency.
+    """
+    global _MISAKI_WARNED
+    code = normalize_language_code(language)
+    if code not in ("ja", "zh") or not (text or "").strip():
+        return ""
+    try:
+        from misaki import ja, zh
+    except Exception:                                    # noqa: BLE001
+        if not _MISAKI_WARNED:
+            _MISAKI_WARNED = True
+            logger.warning(
+                "misaki is not installed; ja/zh TTS falls back to espeak-ng, "
+                "which misreads kanji/Han. Install misaki[zh] + "
+                "pyopenjtalk-plus + fugashi + unidic-lite."
+            )
+        return ""
+    try:
+        with _MISAKI_LOCK:
+            g2p = _MISAKI_G2P.get(code)
+            if g2p is None:
+                g2p = ja.JAG2P() if code == "ja" else zh.ZHG2P()
+                _MISAKI_G2P[code] = g2p
+            phonemes, _tokens = g2p(_tts_text_for(text, code))
+        return phonemes or ""
+    except Exception:                                    # noqa: BLE001
+        logger.exception("misaki G2P failed for %s; using the espeak path", code)
+        return ""
+
+
+def warmup_foreign_g2p() -> None:
+    """Load the misaki dictionaries for enabled ja/zh at boot.
+
+    The first Japanese/Chinese synthesis otherwise pays the dictionary load
+    (fugashi/unidic or jieba) on the caller's first turn. Never raises: a
+    missing G2P is a degradation, not a reason to refuse to boot.
+    """
+    for code in sorted(configured_foreign_languages()):
+        if code in ("ja", "zh"):
+            try:
+                _kokoro_phonemes("こんにちは" if code == "ja" else "您好", code)
+            except Exception:                            # noqa: BLE001
+                logger.exception("Foreign G2P warmup failed for %s", code)
+
+
+def _kokoro_render(engine, text: str, language: str | None,
+                   voice: str, speed: float):
+    """Batch Kokoro synthesis, using misaki phonemes for ja/zh."""
+    phonemes = _kokoro_phonemes(text, language)
+    if phonemes:
+        return engine.create(
+            phonemes, voice=voice, speed=speed, is_phonemes=True
+        )
+    return engine.create(
+        text, voice=voice, speed=speed,
+        lang=_kokoro_lang_for(language, voice),
+    )
+
+
+async def _kokoro_stream(engine, text: str, language: str | None,
+                         voice: str, speed: float):
+    """Streaming Kokoro synthesis, using misaki phonemes for ja/zh.
+
+    Phonemization is CPU-bound and can load the misaki dictionaries on first
+    use, so it runs in a worker thread; the event loop keeps serving other
+    calls while it runs.
+    """
+    phonemes = await asyncio.to_thread(_kokoro_phonemes, text, language)
+    if phonemes:
+        return engine.create_stream(
+            phonemes, voice=voice, speed=speed, is_phonemes=True
+        )
+    return engine.create_stream(
+        text, voice=voice, speed=speed,
+        lang=_kokoro_lang_for(language, voice),
+    )
+
+
 def _use_indic_tts(language: str | None) -> bool:
     """Does this turn belong to the Indic-TTS service?"""
-    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
+    if code in DEFAULT_FOREIGN_LANGUAGES:
+        return False
     return TTS_PROVIDER == "indic_tts" and code in _INDIC_TTS_LANGUAGES
 
 
@@ -309,7 +445,9 @@ def _use_sarvam_tts(language: str | None) -> bool:
     the adapter as a TTS failure and the fixed-response path, not silently
     select the English Kokoro voice for Gujarati text.
     """
-    code = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
+    if code in DEFAULT_FOREIGN_LANGUAGES:
+        return False
     return TTS_PROVIDER == "sarvam" and code in _SARVAM_TTS_LANGUAGES
 
 #: BUG-07 boundary (`app/voice_grounding.py`): a spoken number or named thing
@@ -391,6 +529,86 @@ def _tts_voice() -> str:
 
 def _tts_speed() -> float:
     return TTS_SPEED
+
+
+#: Kokoro's Japanese voice is paced differently from the Latin voices. With
+#: misaki phonemes, 1.0-1.3 transcribe cleanly and 1.4+ starts to smear, so
+#: 1.2 is the fast-but-intelligible point. Chinese is stable at 1.2. These
+#: multipliers apply only to the six foreign languages; en/hi/gu keep
+#: KOKORO_SPEED.
+_FOREIGN_KOKORO_SPEED = {"ja": 1.2, "zh": 1.2}
+
+
+def _tts_speed_for(language: str | None = None) -> float:
+    """Kokoro speed for a language (existing languages keep the setting)."""
+    code = normalize_language_code(language)
+    return _tts_speed() * _FOREIGN_KOKORO_SPEED.get(code, 1.0)
+
+
+# ── the fixed greeting cache ──────────────────────────────────────────
+#: The opening script is fixed per language and direction, but the live path
+#: re-synthesised it on every call. Kokoro's batch path bypassed the TTS cache
+#: entirely, and ``TTS_CACHE_SCOPE=per_call`` deliberately discards a session's
+#: cache at hang-up, so a dedicated cache is the only one that survives calls.
+#: Frames are stored already converted to 20 ms µ-law chunks: a hit can go
+#: straight to ``_write_frames``, with no model, no synthesiser and no network.
+_GREETING_CACHE: dict[tuple, list[bytes]] = {}
+_GREETING_CACHE_MAX = 64
+_GREETING_CACHE_LOCK = threading.Lock()
+
+
+def greeting_cache_key(language: str | None, direction: str, text: str) -> tuple:
+    """Identity of a greeting: language, direction, wording and voice setup.
+
+    Any configuration change that would produce different audio changes the
+    key, so a stale entry can never be served for a new voice or pace.
+    """
+    code = normalize_language_code(
+        language or settings.DEFAULT_LANGUAGE or "en"
+    )
+    direction = (direction or "inbound").strip().lower()
+    if _use_sarvam_tts(code):
+        from app import tts_sarvam
+
+        provider = "sarvam_tts"
+        voice = tts_sarvam.speaker_for(code)
+        speed = float(settings.SARVAM_TTS_PACE)
+        variant = (
+            f"{settings.SARVAM_TTS_MODEL}|{settings.SARVAM_TTS_SAMPLE_RATE}"
+        )
+    elif _use_indic_tts(code):
+        provider = "indic_tts"
+        voice = ""
+        speed = _tts_speed_for(code)
+        variant = settings.INDIC_TTS_URL
+    else:
+        provider = "kokoro"
+        voice = _tts_voice_for(code)
+        speed = _tts_speed_for(code)
+        variant = ""
+    return (
+        code, direction, text, provider, voice, round(float(speed), 3), variant,
+    )
+
+
+def greeting_cache_get(key: tuple) -> list[bytes] | None:
+    with _GREETING_CACHE_LOCK:
+        frames = _GREETING_CACHE.get(key)
+        return list(frames) if frames is not None else None
+
+
+def greeting_cache_put(key: tuple, frames: list[bytes]) -> None:
+    if not frames:
+        return
+    with _GREETING_CACHE_LOCK:
+        if key not in _GREETING_CACHE and len(_GREETING_CACHE) >= _GREETING_CACHE_MAX:
+            _GREETING_CACHE.pop(next(iter(_GREETING_CACHE)))
+        _GREETING_CACHE[key] = list(frames)
+
+
+def clear_greeting_cache() -> None:
+    with _GREETING_CACHE_LOCK:
+        _GREETING_CACHE.clear()
 
 
 # ── u-law ↔ PCM conversion (stdlib audioop) ───────────────────────────
@@ -510,7 +728,7 @@ def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
 
     Returns a list of µ-law byte chunks ready for Twilio Media Streams.
     """
-    code = (language or settings.DEFAULT_LANGUAGE or "en").strip().lower()
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE or "en")
     if _use_sarvam_tts(code):
         from app import tts_sarvam
 
@@ -522,10 +740,14 @@ def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
     else:
         kokoro = _get_tts_engine()
         voice = _tts_voice_for(code) if code else _tts_voice()
-        audio, sr = kokoro.create(
-            text, voice=voice, speed=_tts_speed(),
-            lang=_kokoro_lang_for(code, voice) if code else "en-us",
-        )
+        if code:
+            audio, sr = _kokoro_render(
+                kokoro, text, code, voice, _tts_speed_for(code)
+            )
+        else:
+            audio, sr = kokoro.create(
+                text, voice=voice, speed=_tts_speed(), lang="en-us"
+            )
     from scipy.signal import resample
 
     target_len = int(len(audio) * 8000 / sr)
@@ -821,6 +1043,11 @@ _NOISE_LADDERS = {
     "gu": _NOISE_LADDER_GU,
 }
 
+# The six foreign ladders live in app/localized_text.py; the three above stay
+# byte-identical. `_noise_line` already falls back to English for any code
+# without an entry.
+_NOISE_LADDERS.update(FOREIGN_NOISE_LADDERS)
+
 # ── D1 output-boundary scrubber ────────────────────────────────────────
 # Leaked reasoning/meta narration observed in real calls. Sentence-level
 # filter: any sentence containing one of these markers is dropped before
@@ -908,7 +1135,11 @@ def scrub_meta_leak(text: str) -> str | None:
     if not any(m in low for m in _META_MARKERS) and not _PREFIX_STRIP.match(text):
         return text  # clean reply — byte-identical pass-through
 
-    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    sentences = [
+        s
+        for s in re.split(r"(?<=[.!?])\s+|(?<=[。！？])\s*", text)
+        if s.strip()
+    ]
     kept = []
     for s in sentences:
         s2, stripped = _PREFIX_STRIP.subn("", s)
@@ -919,7 +1150,9 @@ def scrub_meta_leak(text: str) -> str | None:
         if s2.strip() and not any(m in s2.lower() for m in _META_MARKERS):
             kept.append(s2)
     out = re.sub(r"\s{2,}", " ", " ".join(kept)).strip(" .\n")
-    if len(out) < 12:
+    # A complete CJK answer can be a few characters; the twelve-character
+    # English minimum would replace it with the noise line.
+    if len(out) < (2 if contains_cjk(out) else 12):
         return None
     return out
 
@@ -932,16 +1165,58 @@ CLOSING_PHRASES_RE = re.compile(
 #: Fixed closing line for the deterministic hangup path.
 CLOSING_REPLY = "Thank you for calling Meridian University Admissions. Have a great day!"
 
+#: Sign-off cues in the six foreign languages. Deliberately narrow: bare
+#: "thanks"/"obrigado"/"salut" are too common mid-conversation to end a call.
+_FOREIGN_CLOSING_RE = {
+    "es": re.compile(
+        r"\b(adiós|adios|hasta luego|chao|eso es todo|nos vemos)\b",
+        re.IGNORECASE,
+    ),
+    "fr": re.compile(
+        r"\b(au revoir|à bientôt|a bientot|c'est tout|c’est tout|bonne journée)\b",
+        re.IGNORECASE,
+    ),
+    "it": re.compile(
+        r"\b(arrivederci|a presto|è tutto|e tutto|buona giornata)\b",
+        re.IGNORECASE,
+    ),
+    "ja": re.compile(r"(さようなら|さよなら|またね|以上です|終わりです|ありがとうございました)"),
+    "pt": re.compile(
+        r"\b(tchau|até logo|ate logo|é tudo|e tudo|até mais)\b",
+        re.IGNORECASE,
+    ),
+    "zh": re.compile(r"(再见|再見|拜拜|没有了|就这些|就這些)"),
+}
 
-def is_closing_phrase(text: str) -> bool:
+
+def is_closing_phrase(text: str, language: str | None = None) -> bool:
     """Hard sign-off cues — handled deterministically, before the LLM."""
-    return bool(CLOSING_PHRASES_RE.search(text))
+    if CLOSING_PHRASES_RE.search(text):
+        return True
+    pattern = _FOREIGN_CLOSING_RE.get(normalize_language_code(language))
+    return bool(pattern and pattern.search(text))
 
 
-def is_noise_fragment(text: str) -> bool:
-    """Ultra-short or single-noise-word transcripts (STT artifacts)."""
-    t = text.strip().strip(".,!?;").lower()
-    if len(t) < STT_MIN_CHARS:
+def closing_reply(language: str | None = None) -> str:
+    """The closing line in the call's language (English fallback)."""
+    return CLOSING_REPLIES.get(normalize_language_code(language), CLOSING_REPLY)
+
+
+def is_noise_fragment(text: str, language: str | None = None) -> bool:
+    """Ultra-short or single-noise-word transcripts (STT artifacts).
+
+    The threshold is language-aware for the six foreign languages: "sí" and
+    "はい" are meaningful answers, while the three-character English gate would
+    discard them. Without a language argument the original rule is unchanged.
+    """
+    code = normalize_language_code(language)
+    if code in configured_foreign_languages():
+        t = text.strip().strip(".,!?;。！？、，").lower()
+        threshold = min_transcript_chars(code, STT_MIN_CHARS)
+    else:
+        t = text.strip().strip(".,!?;").lower()
+        threshold = STT_MIN_CHARS
+    if len(t) < threshold:
         return True
     return len(t.split()) == 1 and t in _NOISE_WORDS
 
@@ -960,25 +1235,41 @@ def looks_like_hallucination(text: str, audio_seconds: float) -> bool:
 
     A caller who genuinely repeats a phrase ("हाँ हाँ हाँ") has a short
     transcript and never hits the coverage test.
+
+    Japanese and Chinese have no whitespace, so a whole transcript is one
+    ``split()`` token and both tests are inert. The CJK branch tokenises each
+    kana/kanji as a unit (plus Latin words in mixed text) and raises the rate
+    limit to 12 units/second, which catches Whisper's 100+ character loops
+    without flagging normal 5-8 character/second speech.
     """
-    words = (text or "").split()
-    if not words:
+    text = text or ""
+    if contains_cjk(text):
+        tokens = re.findall(
+            r"[぀-ヿ㐀-䶿一-鿿豈-﫿]"
+            r"|[^\s　-〿＀-￯]+",
+            text,
+        )
+        rate_limit = 12.0
+    else:
+        tokens = text.split()
+        rate_limit = 6.0
+    if not tokens:
         return False
     # Below half a second the rate is dominated by endpointing noise; the
     # repetition test below still applies to a long transcript.
-    if audio_seconds >= 0.5 and len(words) / audio_seconds > 6.0:
+    if audio_seconds >= 0.5 and len(tokens) / audio_seconds > rate_limit:
         return True
-    if len(words) < 8:
+    if len(tokens) < 8:
         return False
     for n in (2, 3, 4):
         i = 0
-        while i + n <= len(words):
+        while i + n <= len(tokens):
             repeats = 1
             j = i + n
-            while j + n <= len(words) and words[j:j + n] == words[i:i + n]:
+            while j + n <= len(tokens) and tokens[j:j + n] == tokens[i:i + n]:
                 repeats += 1
                 j += n
-            if repeats >= 3 and repeats * n >= len(words) * 0.5:
+            if repeats >= 3 and repeats * n >= len(tokens) * 0.5:
                 return True
             i += 1
     return False
@@ -996,14 +1287,19 @@ def _split_sentences(text: str) -> list[str]:
     sentence's audio exists while later ones are still being synthesised.
 
     Conservative split: Latin sentences only on `.` `!` `?` `;` followed by
-    whitespace and a capital letter, never right after a digit; Indic scripts
-    split on the danda (`।`/`॥`) because they do not capitalise the next
-    sentence. A price like "$1,700. Scholarships" stays intact. (An
-    abbreviation like "Dr. Smith" still splits into two synthesis chunks;
-    that costs a clause boundary of silence, never correctness.)
+    whitespace and a capital letter (including the accented capitals used by
+    Spanish, French, Italian and Portuguese), never right after a digit;
+    Indic scripts split on the danda (`।`/`॥`) because they do not capitalise
+    the next sentence; Japanese and Chinese split on `。` `！` `？` with no
+    whitespace, because those scripts do not use word spaces. A price like
+    "$1,700. Scholarships" stays intact. (An abbreviation like "Dr. Smith"
+    still splits into two synthesis chunks; that costs a clause boundary of
+    silence, never correctness.)
     """
     parts = re.split(
-        r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-Z])|(?<=[।॥])\s*",
+        r"(?<![0-9][.!?;])(?<=[.!?;])\s+(?=[A-ZÀ-ÖØ-ÞŒŸ])"
+        r"|(?<=[।॥])\s*"
+        r"|(?<=[。！？])\s*",
         text.strip(),
     )
     return [p for p in (p.strip() for p in parts) if p]
@@ -1044,7 +1340,9 @@ class VoiceCallSession:
         self._spec_advance_ms = _speculative_advance_ms()
         self._sample_rate = sample_rate
         self.direction = direction
-        self.language = (language or settings.DEFAULT_LANGUAGE).strip().lower()
+        self.language = normalize_language_code(
+            language or settings.DEFAULT_LANGUAGE
+        )
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
 
@@ -1338,13 +1636,14 @@ class VoiceCallSession:
             refusal_index=self._refusals_total,
             subject_denied=sum(self._subject_denied.values()),
             check_names=check_names,
+            language=self.language,
             log=self.log_event,
         )
         # Count a turn the boundary REPLACED with a refusal. The count is
         # call-wide and never resets: a good turn between two refusals must not
         # re-arm the wording, which is how `853548f5` kept hearing the same
         # denial after every answered question.
-        if out != text and is_refusal(out):
+        if out != text and is_refusal(out, self.language):
             self._refusals_total += 1
             subject = (self._live_unoffered() or [""])[0]
             if subject and subject.lower() in out.lower():
@@ -1710,9 +2009,9 @@ class VoiceCallSession:
         if not settings.STT_SPECULATIVE_ENABLED:
             return
         # A speculative pass would send the same utterance to the cloud twice
-        # and bill it twice. Cloud providers get one request after endpointing;
-        # the local providers keep the latency-hiding pass.
-        if (settings.STT_PROVIDER or "").strip().lower() == "sarvam":
+        # and bill it twice. Foreign sessions use local Whisper, so they keep
+        # the latency-hiding pass even when the configured primary is Sarvam.
+        if self._stt_route_is_cloud():
             return
         if self._spec_advance_ms <= 0 or self._spec_started:
             return
@@ -1959,7 +2258,7 @@ class VoiceCallSession:
         # noise-gated turns below, whose "transcript" is an STT artefact rather
         # than a statement -- extracting a name out of one would poison the
         # slot for the rest of the call with no way to notice.
-        if not (low_conf or is_noise_fragment(transcript)):
+        if not (low_conf or is_noise_fragment(transcript, self.language)):
             changed = self.note_facts(transcript)
             if changed:
                 self.log_event("FACTS_LEARNED", slots=",".join(sorted(changed)))
@@ -1969,14 +2268,14 @@ class VoiceCallSession:
         # the call, so the turn where the agent is pressured -- which usually
         # names nothing itself -- still carries the position. Gated on the same
         # noise check as the facts above: an STT artefact is not a request.
-        if not (low_conf or is_noise_fragment(transcript)):
+        if not (low_conf or is_noise_fragment(transcript, self.language)):
             added = self.note_unoffered(transcript)
             if added:
                 self.log_event("UNOFFERED_ENTITY", entities="|".join(added)[:160])
 
         # ── Step 2b: Noise gate — short fragments / low-confidence STT
         #    get a fixed one-line check; the LLM never sees them.
-        if low_conf or is_noise_fragment(transcript):
+        if low_conf or is_noise_fragment(transcript, self.language):
             logger.info(
                 f"VoiceCall: noise-gated \"{transcript[:60]}\" "
                 f"(low_conf={low_conf}) — fixed fallback reply"
@@ -1996,9 +2295,9 @@ class VoiceCallSession:
 
         # ── Step 2c: Deterministic hangup — hard sign-off cues end the
         #    call with a static closing; the LLM never sees them.
-        if is_closing_phrase(transcript):
+        if is_closing_phrase(transcript, self.language):
             logger.info(f"VoiceCall: closing phrase detected: \"{transcript[:60]}\"")
-            reply = CLOSING_REPLY
+            reply = closing_reply(self.language)
             dialogue = f"Caller: {transcript}\nAssistant: {reply}"
             self._conversation_history.append(f"Assistant: {reply}")
             tts_pcm, tts_sr = await self._synthesise_with_rate(reply)
@@ -2139,8 +2438,12 @@ class VoiceCallSession:
 
         The correction table is English-specific (``emma`` -> MBA, ``faze`` ->
         fees). Applying it to Devanagari/Gujarati/Gurmukhi output would corrupt
-        real words, so any non-ASCII transcript is returned unchanged.
+        real words, so any non-ASCII transcript is returned unchanged. A
+        foreign-language session is returned unchanged too: unaccented Spanish
+        or Portuguese text is still full of words this table would rewrite.
         """
+        if self._foreign_stt_language():
+            return text.strip()
         if any(ord(ch) > 127 for ch in text):
             return text.strip()
         result = text
@@ -2155,7 +2458,38 @@ class VoiceCallSession:
     # ── Internal ──────────────────────────────────────────────────
 
     async def _transcribe(self, audio_16k_int16: np.ndarray) -> tuple[str, bool]:
-        """Transcribe one utterance through the configured provider chain.
+        """Transcribe one utterance.
+
+        A session whose language is one of the enabled foreign languages goes
+        straight to local faster-whisper: Sarvam and IndicConformer cannot
+        serve those languages, and a successful wrong-language Sarvam
+        transcript would otherwise short-circuit the chain. Every other
+        session runs the existing provider chain unchanged.
+        """
+        if self._foreign_stt_language():
+            return await self._transcribe_whisper(audio_16k_int16)
+        return await self._transcribe_default_chain(audio_16k_int16)
+
+    def _foreign_stt_language(self) -> str:
+        """The session language when it is an enabled foreign language."""
+        code = normalize_language_code(self.language)
+        return code if code in configured_foreign_languages() else ""
+
+    def _stt_route_is_cloud(self) -> bool:
+        """Does this session's STT route bill a cloud request?
+
+        Foreign sessions always use local Whisper. Every other session keeps
+        the configured-primary rule, so the existing Sarvam double-billing
+        guard is unchanged.
+        """
+        if self._foreign_stt_language():
+            return False
+        return (settings.STT_PROVIDER or "").strip().lower() == "sarvam"
+
+    async def _transcribe_default_chain(
+        self, audio_16k_int16: np.ndarray
+    ) -> tuple[str, bool]:
+        """The pre-foreign provider chain, verbatim.
 
         Sarvam Saaras is the Indic-first primary, IndicConformer is the offline
         fallback, and faster-whisper is the last resort. A provider failure is
@@ -2353,17 +2687,57 @@ class VoiceCallSession:
         Only in ``STT_LANGUAGE=auto``. A low-confidence transcription, a short
         utterance, an unsupported code, or a probability below
         ``STT_LANGUAGE_MIN_PROB`` keeps the session's previous language.
+
+        Foreign policy is deliberately narrower than the Indic one:
+
+        * a call that started in ``en``/``hi``/``gu`` (or any Indic code) can
+          never be switched into one of the six foreign languages; its behaviour
+          stays exactly what it was before this feature;
+        * a call that started in a foreign language may switch to another
+          *enabled* foreign language, but not back to ``en``/``hi``/``gu`` —
+          explicit selection remains authoritative;
+        * a CJK detection needs CJK characters in the transcript, so a short
+          proper noun cannot flip a Spanish call to Japanese.
         """
         if _configured_stt_language() is not None:
             return
-        if low_conf or len(transcript.strip()) < STT_MIN_CHARS:
+        if low_conf:
             return
-        if detected not in _SUPPORTED_LANGUAGES:
+
+        detected = normalize_language_code(detected)
+        current = normalize_language_code(self.language)
+        if not detected:
             return
+
+        foreign = configured_foreign_languages()
+        current_foreign = current in foreign
+        min_chars = (
+            min_transcript_chars(detected, STT_MIN_CHARS)
+            if current_foreign or detected in DEFAULT_FOREIGN_LANGUAGES
+            else STT_MIN_CHARS
+        )
+        if len(transcript.strip()) < min_chars:
+            return
+
+        if current_foreign:
+            if detected not in foreign:
+                return
+        else:
+            # A non-foreign call must not drift into a foreign language.
+            if detected in DEFAULT_FOREIGN_LANGUAGES:
+                return
+            if detected not in _SUPPORTED_LANGUAGES:
+                return
+
         if probability < settings.STT_LANGUAGE_MIN_PROB:
             return
-        if detected == self.language:
+        if detected == current:
             return
+        if detected in CJK_LANGUAGES and not contains_cjk(transcript):
+            return
+        if detected in LATIN_FOREIGN_LANGUAGES and contains_cjk(transcript):
+            return
+
         logger.info(
             "STT: detected language %s (prob=%.2f) -> answer language %s",
             detected, probability, detected,
@@ -2449,7 +2823,7 @@ class VoiceCallSession:
             from app.rag import query_rag_stream
 
             prompt = self._build_llm_prompt(question)
-            cutter = ClauseCutter()
+            cutter = ClauseCutter(language=self.language)
             parts: list[str] = []
             chunks: list[bytes] = []
             any_audio = False
@@ -2679,7 +3053,7 @@ class VoiceCallSession:
                     )
             speed = (
                 float(settings.SARVAM_TTS_PACE)
-                if provider == "sarvam_tts" else _tts_speed()
+                if provider == "sarvam_tts" else _tts_speed_for(language)
             )
             cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
                      else VoiceCallSession._shared_tts_cache)
@@ -2757,8 +3131,7 @@ class VoiceCallSession:
                 # the thread hop is what makes a cold path survivable.
                 kokoro = await asyncio.to_thread(_get_tts_engine)
                 audio, sr = await asyncio.to_thread(
-                    kokoro.create, tts_text, voice=voice, speed=speed,
-                    lang=_kokoro_lang_for(language, voice),
+                    _kokoro_render, kokoro, tts_text, language, voice, speed,
                 )
             # Store in cache. Bound first, FIFO by insertion order (TAC-3):
             # re-inserting an existing key keeps its original position, which is
@@ -2859,7 +3232,7 @@ class VoiceCallSession:
         if provider == "sarvam_tts":
             speed = speed if speed is not None else float(settings.SARVAM_TTS_PACE)
         else:
-            speed = speed if speed is not None else _tts_speed()
+            speed = speed if speed is not None else _tts_speed_for(language)
         cache = (self._session_tts_cache if TTS_CACHE_SCOPE == "per_call"
                  else VoiceCallSession._shared_tts_cache)
         cache_key = (provider, language, tts_text, voice, speed)
@@ -2975,9 +3348,8 @@ class VoiceCallSession:
             # will replace this splitter when it lands; the stream interface
             # here does not change).
             for sentence in _split_sentences(tts_text):
-                async for audio, sr in kokoro.create_stream(
-                        sentence, voice=voice, speed=speed,
-                        lang=_kokoro_lang_for(language, voice)):
+                async for audio, sr in await _kokoro_stream(
+                        kokoro, sentence, language, voice, speed):
                     if first:
                         first = False
                         self.log_event("TTS_FIRST_CHUNK", samples=int(len(audio)))
@@ -3050,9 +3422,21 @@ class VoiceCallSession:
         Returns [] when no asset applies, and the caller then terminates the
         turn cleanly rather than hanging in silence.
         """
-        from app.admission import FIXED_RESPONSE_ASSET, REGISTRY
+        from app.admission import (
+            FIXED_RESPONSE_ASSET,
+            REGISTRY,
+            fixed_response_asset,
+        )
 
-        chunks = load_call_asset_ulaw(FIXED_RESPONSE_ASSET)
+        asset = fixed_response_asset(self.language)
+        chunks = load_call_asset_ulaw(asset)
+        if not chunks and asset != FIXED_RESPONSE_ASSET:
+            logger.warning(
+                "VoiceCall: fixed response %s missing; using the English asset",
+                asset,
+            )
+            asset = FIXED_RESPONSE_ASSET
+            chunks = load_call_asset_ulaw(asset)
         if not chunks:
             logger.error(
                 "VoiceCall: fixed response unavailable (%s) and no asset to play. "
@@ -3063,7 +3447,7 @@ class VoiceCallSession:
             # says which of the two it was.
             REGISTRY.note_failed()
             return []
-        REGISTRY.note_asset_played(FIXED_RESPONSE_ASSET, call_sid=self.call_id)
+        REGISTRY.note_asset_played(asset, call_sid=self.call_id)
         self.log_event("FIXED_RESPONSE", reason=reason, chunks=len(chunks))
         if self._trace is not None:
             # A degraded turn is its own outcome. It is not a failure: the

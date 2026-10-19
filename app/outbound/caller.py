@@ -71,6 +71,21 @@ def _resolve_host() -> str:
     return tunnel_host()
 
 
+def _outbound_language(lead: dict | None) -> str:
+    """The language this call should open in.
+
+    The lead's stored language wins, because the person was enrolled in that
+    language by the chat/voice flow. ``OUTBOUND_LANGUAGE`` remains the campaign
+    default for leads that never chose one. Empty means the session default
+    (English) -- the URL stays byte-identical to the pre-language behaviour.
+    """
+    from app.config import settings
+    from app.languages import normalize_language_code
+
+    raw = (lead or {}).get("language") or settings.OUTBOUND_LANGUAGE or ""
+    return normalize_language_code(raw)
+
+
 class OutboundCallWorker:
     """
     Background worker that polls the ``call_queue`` table and initiates
@@ -186,10 +201,15 @@ class OutboundCallWorker:
             # it on the <Stream> as a <Parameter> — the media stream carries no
             # application data otherwise, and without it the call cannot be
             # linked to the CRM (or to the lead it was placed for).
-            context = urllib.parse.urlencode({
+            context_params = {
                 "leadId": lead_id,
                 "phone": phone_number,
-            })
+            }
+            # Empty keeps the URL byte-identical to the pre-foreign behaviour.
+            outbound_language = _outbound_language(lead)
+            if outbound_language:
+                context_params["language"] = outbound_language
+            context = urllib.parse.urlencode(context_params)
 
             client = Client(
                 settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN

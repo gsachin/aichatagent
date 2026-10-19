@@ -22,6 +22,8 @@ explicit "no information retrieved" marker when retrieval is empty.
 """
 
 from app.config import settings
+from app.languages import normalize_language_code
+from app.localized_text import INBOUND_GREETINGS, OUTBOUND_GREETINGS
 
 COMPANY_NAME = settings.COMPANY_NAME
 AGENT_NAME = settings.AGENT_NAME
@@ -867,13 +869,41 @@ _OUTBOUND_GREETING = {
     ),
 }
 
+# The six foreign greetings live in app/localized_text.py so the English,
+# Hindi and Gujarati text above stays untouched.
+_INBOUND_GREETING.update(INBOUND_GREETINGS)
+_OUTBOUND_GREETING.update(OUTBOUND_GREETINGS)
+
 
 def call_greeting(language: str | None, direction: str = "inbound") -> str:
     """The opening script in the call's language (English fallback)."""
-    code = (language or "en").strip().lower().split("-", 1)[0]
+    code = normalize_language_code(language or "en")
     table = _OUTBOUND_GREETING if direction == "outbound" else _INBOUND_GREETING
     template = table.get(code, table["en"])
     return template.format(agent_name=AGENT_NAME, company_name=COMPANY_NAME)
+
+
+#: Script/register notes for the six non-Indian languages. They are appended
+#: only for those codes; the English/Hindi/Gujarati instruction strings stay
+#: byte-identical (tests hash them).
+_FOREIGN_SCRIPT_NOTES = {
+    "es": "Use neutral Latin American Spanish.",
+    "fr": "Use standard French.",
+    "it": "Use standard Italian.",
+    "pt": "Use Brazilian Portuguese.",
+    "ja": (
+        "Use Japanese script (kanji, hiragana, katakana). Do not insert spaces "
+        "between characters. Use 。！？ punctuation and Arabic numerals. Write "
+        "degree abbreviations in Japanese script (for example, 経営学修士 for "
+        "MBA) so the voice can pronounce them."
+    ),
+    "zh": (
+        "Use Simplified Chinese. Do not insert spaces between characters. "
+        "Use 。！？ punctuation and Arabic numerals. Write degree abbreviations "
+        "in Chinese (for example, 工商管理硕士 for MBA) so the voice can "
+        "pronounce them."
+    ),
+}
 
 
 def language_instruction(language: str | None) -> str:
@@ -885,7 +915,7 @@ def language_instruction(language: str | None) -> str:
     stay in Latin script so the existing grounding boundary can still match
     them against the English knowledge base.
     """
-    code = (language or "en").strip().lower()
+    code = normalize_language_code(language or "en")
     name = LANGUAGE_NAMES.get(code, code or "English")
     # Hindi marks the speaker's gender in first-person verb forms. The voice
     # is female, so a masculine self-reference is audibly the wrong person.
@@ -899,6 +929,8 @@ def language_instruction(language: str | None) -> str:
             "'मैं कहूँगी'); never use masculine forms such as 'सकता हूँ', "
             "'करूँगा', or 'कहूँगा'."
         )
+    script_note = _FOREIGN_SCRIPT_NOTES.get(code, "")
+    note = f" {script_note}" if script_note else ""
     return (
         f"Answer in {name}. Use natural, conversational {name} with simple, "
         f"everyday words. Translate every sentence, heading, label and list item into "
@@ -907,6 +939,6 @@ def language_instruction(language: str | None) -> str:
         "amounts, email addresses and URLs. Translate programme fields and "
         f"research areas into {name}. Do not leave English words, headings or "
         f"sentences in the answer. If the document has no answer, say so in "
-        f"{name}.{gender} This instruction overrides any earlier instruction about "
+        f"{name}.{gender}{note} This instruction overrides any earlier instruction about "
         "language, citations or formatting."
     )

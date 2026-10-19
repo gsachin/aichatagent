@@ -58,6 +58,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from app.languages import normalize_language_code
+
 logger = logging.getLogger("crm.session")
 
 # Channels with an explicit end event. WhatsApp is deliberately absent — it
@@ -84,6 +86,10 @@ class ConversationSession:
     # handlers consult this before acting — a bare "yes" used to be taken as
     # program confirmation no matter what had actually been asked.
     awaiting: str = ""
+    # The answer language for this conversation. WhatsApp sets it from an
+    # in-chat command and it is restored from the conversations row after a
+    # restart; voice calls carry the language selected at call start.
+    language: str = ""
 
     def touch(self) -> None:
         """Mark activity now — resets the idle window for channels without an end event."""
@@ -117,6 +123,7 @@ def start(
     phone_number: str = "",
     lead_id: str = "",
     conversation_id: str | None = None,
+    language: str = "",
 ) -> ConversationSession:
     """
     Begin a conversation, or return the one already running under this key.
@@ -137,6 +144,8 @@ def start(
                 existing.phone_number = phone_number
             if lead_id and not existing.lead_id:
                 existing.lead_id = lead_id
+            if language and not existing.language:
+                existing.language = normalize_language_code(language)
             logger.debug(
                 f"crm.session: resumed {channel}/{key} -> {existing.conversation_id}"
             )
@@ -148,6 +157,7 @@ def start(
             key=key,
             phone_number=phone_number,
             lead_id=lead_id,
+            language=normalize_language_code(language),
         )
         _sessions[(channel, key)] = session
 
@@ -272,9 +282,11 @@ async def resolve_whatsapp_session(
 
     purge_expired(idle_window_seconds)
 
-    resumed_id = await _conversation_id_from_db(phone_number, idle_window_seconds)
+    resumed = await _recent_conversation_from_db(phone_number, idle_window_seconds)
+    resumed_id = (resumed or {}).get("conversation_id") or None
+    resumed_language = (resumed or {}).get("language") or ""
     session = start("whatsapp", phone_number, phone_number=phone_number,
-                    conversation_id=resumed_id)
+                    conversation_id=resumed_id, language=resumed_language)
     if resumed_id:
         logger.info(
             f"crm.session: resumed WhatsApp conversation {resumed_id} for {phone_number} "
@@ -283,10 +295,16 @@ async def resolve_whatsapp_session(
     return session
 
 
-async def _conversation_id_from_db(phone_number: str, idle_window_seconds: float) -> str | None:
+async def _recent_conversation_from_db(
+    phone_number: str, idle_window_seconds: float
+) -> dict | None:
     """
-    Look up the conversation_id of the most recent conversation for this number
-    inside the idle window. Returns None when absent or when the DB is down.
+    The most recent conversation row for this number inside the idle window.
+    Returns None when absent or when the DB is down.
+
+    The row carries both ``conversation_id`` (so a restart does not split the
+    conversation) and ``language`` (so an in-chat Spanish/French/... command
+    survives the restart too).
 
     Never raises: running without Postgres is a supported mode in this app.
     """
@@ -295,10 +313,9 @@ async def _conversation_id_from_db(phone_number: str, idle_window_seconds: float
     try:
         from app.leads.models import get_recent_conversation_for_phone
 
-        row = await get_recent_conversation_for_phone(
+        return await get_recent_conversation_for_phone(
             phone_number, within_seconds=idle_window_seconds
         )
-        return (row or {}).get("conversation_id") or None
     except Exception:
         logger.exception("crm.session: could not resume WhatsApp conversation from DB")
         return None

@@ -16,6 +16,7 @@ voice handler logs it and falls back through the existing TTS failure path.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import AsyncIterator
 
@@ -25,6 +26,14 @@ import numpy as np
 from app.config import settings
 
 logger = logging.getLogger("tts_sarvam")
+
+#: One async client per running event loop. Building an ``AsyncClient`` per
+#: request paid DNS/TCP/TLS every time; measured on the same Gujarati payload,
+#: first chunk 534/525 ms with a new client vs 311/317 ms reused. The client is
+#: loop-bound, so a new loop (tests, a restarted worker) gets a fresh one.
+_ASYNC_CLIENT: httpx.AsyncClient | None = None
+_ASYNC_CLIENT_LOOP = None
+_ASYNC_CLIENT_LOCK = threading.Lock()
 
 
 class TTSError(RuntimeError):
@@ -108,6 +117,32 @@ def _pcm(data: bytes) -> np.ndarray:
     return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
 
 
+def _async_client() -> httpx.AsyncClient:
+    """The loop's shared client, rebuilt if it was closed or the loop changed."""
+    import asyncio
+
+    global _ASYNC_CLIENT, _ASYNC_CLIENT_LOOP
+    loop = asyncio.get_running_loop()
+    with _ASYNC_CLIENT_LOCK:
+        client = _ASYNC_CLIENT
+        if client is None or client.is_closed or _ASYNC_CLIENT_LOOP is not loop:
+            client = httpx.AsyncClient(timeout=_timeout())
+            _ASYNC_CLIENT = client
+            _ASYNC_CLIENT_LOOP = loop
+    return client
+
+
+async def aclose() -> None:
+    """Close the shared client on shutdown (or after a transport failure)."""
+    global _ASYNC_CLIENT, _ASYNC_CLIENT_LOOP
+    with _ASYNC_CLIENT_LOCK:
+        client = _ASYNC_CLIENT
+        _ASYNC_CLIENT = None
+        _ASYNC_CLIENT_LOOP = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
 def _error_body(response: httpx.Response) -> str:
     try:
         body = response.read().decode("utf-8", errors="replace")
@@ -137,40 +172,43 @@ async def astream(
     first = None
     pending = b""
     try:
-        async with httpx.AsyncClient(timeout=_timeout()) as client:
-            async with client.stream(
-                "POST", settings.SARVAM_TTS_URL, headers=headers, json=payload
-            ) as response:
-                if response.status_code >= 400:
-                    body = (await response.aread()).decode(
-                        "utf-8", errors="replace"
-                    ).strip().replace("\n", " ")[:300]
-                    raise TTSError(
-                        f"Sarvam TTS HTTP {response.status_code}: "
-                        f"{body or '(empty body)'}"
+        client = _async_client()
+        async with client.stream(
+            "POST", settings.SARVAM_TTS_URL, headers=headers, json=payload
+        ) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode(
+                    "utf-8", errors="replace"
+                ).strip().replace("\n", " ")[:300]
+                raise TTSError(
+                    f"Sarvam TTS HTTP {response.status_code}: "
+                    f"{body or '(empty body)'}"
+                )
+            async for raw in response.aiter_bytes(chunk_size=3200):
+                if not raw:
+                    continue
+                data = pending + raw
+                if len(data) % 2:
+                    pending = data[-1:]
+                    data = data[:-1]
+                else:
+                    pending = b""
+                if not data:
+                    continue
+                if first is None:
+                    first = time.perf_counter()
+                    logger.info(
+                        "Sarvam TTS first chunk after %.0f ms (%s, %s)",
+                        (first - started) * 1000.0,
+                        payload["language_code"], payload["speaker"],
                     )
-                async for raw in response.aiter_bytes(chunk_size=3200):
-                    if not raw:
-                        continue
-                    data = pending + raw
-                    if len(data) % 2:
-                        pending = data[-1:]
-                        data = data[:-1]
-                    else:
-                        pending = b""
-                    if not data:
-                        continue
-                    if first is None:
-                        first = time.perf_counter()
-                        logger.info(
-                            "Sarvam TTS first chunk after %.0f ms (%s, %s)",
-                            (first - started) * 1000.0,
-                            payload["language_code"], payload["speaker"],
-                        )
-                    yield _pcm(data)
+                yield _pcm(data)
         if first is None:
             raise TTSError("Sarvam TTS returned no audio")
     except httpx.HTTPError as exc:
+        # Do NOT close the shared client here: a second caller may be streaming
+        # on the same pool. httpx discards the failed connection itself, and the
+        # next request gets a fresh one from the pool.
         raise TTSError(f"Sarvam TTS request failed: {exc}") from exc
     finally:
         logger.info(

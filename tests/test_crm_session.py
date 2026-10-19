@@ -325,9 +325,11 @@ async def test_conversation_id_is_written_to_the_insert(monkeypatch):
 
     sql, params = conn.cursor().sql, conn.cursor().params
     assert "conversation_id" in sql
-    assert len(params) == 13, f"expected 13 bound params, got {len(params)}"
+    assert len(params) == 14, f"expected 14 bound params, got {len(params)}"
     assert sql.count("%s") == len(params), "placeholder / param count mismatch"
-    assert params[-2] == "conv-from-session"
+    # Order is (..., extracted_lead, conversation_id, crm_user_id, language).
+    assert params[-3] == "conv-from-session"
+    assert params[-1] == "", "language defaults to empty for legacy callers"
 
 
 @pytest.mark.anyio
@@ -343,11 +345,13 @@ async def test_missing_conversation_id_falls_back_to_the_row_id(monkeypatch):
     await create_conversation(lead_id="lead-1")
 
     params = conn.cursor().params
-    assert len(params) == 13
-    # Column order is (id, ..., extracted_lead, conversation_id, crm_user_id),
-    # so the conversation id sits second from the end and falls back to the id.
-    assert params[-2] == params[0], "without an explicit id the row id must be reused"
-    assert params[-1] is None, "no CRM link yet"
+    assert len(params) == 14
+    # Column order is (id, ..., extracted_lead, conversation_id, crm_user_id,
+    # language), so the conversation id sits third from the end and falls back
+    # to the id.
+    assert params[-3] == params[0], "without an explicit id the row id must be reused"
+    assert params[-2] is None, "no CRM link yet"
+    assert params[-1] == "", "language defaults to empty"
 
 
 @pytest.mark.anyio
