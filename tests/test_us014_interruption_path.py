@@ -481,6 +481,18 @@ async def test_a_barge_in_stops_the_tts_stream_not_just_the_sink(monkeypatch):
     assert chunks, "the frames already produced are still returned"
 
 
+def test_acknowledgment_variants_rotate(monkeypatch):
+    """A repeated slow turn must not hear the same phrase every time."""
+    import app.voice_handler as vh
+
+    monkeypatch.setattr(vh, "_ACK_CACHE", {"hi": [[b"a"], [b"b"]]})
+    monkeypatch.setattr(vh, "_ACK_INDEX", {})
+
+    assert vh.acknowledgment_frames("hi") == [b"a"]
+    assert vh.acknowledgment_frames("hi") == [b"b"]
+    assert vh.acknowledgment_frames("hi") == [b"a"]
+
+
 @pytest.mark.anyio
 async def test_the_short_acknowledgment_fills_a_slow_first_token(monkeypatch):
     """A 0.9 s LLM turn hears the pre-rendered ack before the answer."""

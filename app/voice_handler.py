@@ -908,42 +908,62 @@ def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
 #: Pre-rendered µ-law frames per core language. The turn runner plays one only
 #: if the first answer audio has not arrived within ACK_DELAY_S; it fills the
 #: pause without changing the answer, the transcript, or the voice.
-_ACK_CACHE: dict[str, list[bytes]] = {}
+_ACK_CACHE: dict[str, list[list[bytes]]] = {}
+_ACK_INDEX: dict[str, int] = {}
 _ACK_LANGUAGES = ("en", "hi", "gu")
 
 
 def acknowledgment_frames(language: str | None) -> list[bytes]:
-    """The cached acknowledgment for a call language, or [] when none."""
+    """The next short acknowledgment for a language, or [] when none.
+
+    Variants rotate so a slow first token does not play the same phrase on
+    every turn (the 2026-10-20 call repeated one phrase five times in 83 s).
+    """
     code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
-    return _ACK_CACHE.get(code, [])
+    variants = _ACK_CACHE.get(code, [])
+    if not variants:
+        return []
+    index = _ACK_INDEX.get(code, 0)
+    _ACK_INDEX[code] = (index + 1) % len(variants)
+    return variants[index]
 
 
 def warm_acknowledgments(
     languages: tuple[str, ...] = _ACK_LANGUAGES,
 ) -> None:
-    """Pre-render the short acknowledgment in each core voice.
+    """Pre-render the short acknowledgment variants in each core voice.
 
-    Runs in the boot warm-up thread, never on a call. A missing/failed ack is
-    not fatal: the turn simply has no filler and the answer starts when ready.
+    Runs in the boot warm-up thread, never on a call. A missing/failed variant
+    is not fatal: the turn simply has one fewer phrase (or no filler).
     """
-    from app.voice_system_prompt import call_acknowledgment
+    # Tests must not call the cloud TTS just because the app lifespan starts.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+
+    from app.voice_system_prompt import call_acknowledgments
 
     for code in languages:
         if _ACK_CACHE.get(code):
             continue
-        text = call_acknowledgment(code)
-        if not text:
-            continue
-        try:
-            frames = generate_ulaw_greeting(text, language=code)
-        except Exception:                              # noqa: BLE001
-            logger.exception("Acknowledgment warmup failed for %s", code)
-            continue
-        if frames:
-            _ACK_CACHE[code] = frames
+        variants: list[list[bytes]] = []
+        for text in call_acknowledgments(code):
+            if not text:
+                continue
+            try:
+                frames = generate_ulaw_greeting(text, language=code)
+            except Exception:                          # noqa: BLE001
+                logger.exception(
+                    "Acknowledgment warmup failed for %s (%r)",
+                    code, text[:30],
+                )
+                continue
+            if frames:
+                variants.append(frames)
+        if variants:
+            _ACK_CACHE[code] = variants
             logger.info(
-                "Acknowledgment pre-warmed for %s (%d frames)",
-                code, len(frames),
+                "Acknowledgment pre-warmed for %s (%d variants)",
+                code, len(variants),
             )
 
 

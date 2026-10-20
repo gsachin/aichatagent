@@ -887,17 +887,26 @@ def call_greeting(language: str | None, direction: str = "inbound") -> str:
 #: same voice as the answers and played only when the first answer audio has
 #: not arrived within the acknowledgment delay; it fills the LLM's first-token
 #: silence, and is never part of the transcript or the answer.
+#: Several short variants per language, rotated per turn so a slow first token
+#: does not repeat the same phrase on every turn (the 2026-10-20 call played
+#: "जी, एक क्षण।" five times in 83 s).
 _ACKNOWLEDGMENT = {
-    "en": "Yes, one moment.",
-    "hi": "जी, एक क्षण।",
-    "gu": "હા, એક ક્ષણ.",
+    "en": ("Yes, one moment.", "Let me check.", "One second."),
+    "hi": ("जी, एक क्षण।", "हाँ, देख रही हूँ।", "एक सेकंड।"),
+    "gu": ("હા, એક ક્ષણ.", "હા, જોઈ રહી છું.", "એક સેકન્ડ."),
 }
 
 
-def call_acknowledgment(language: str | None) -> str:
-    """The short acknowledgment for this call language ("" if none)."""
+def call_acknowledgments(language: str | None) -> tuple[str, ...]:
+    """The short acknowledgment variants for this call language."""
     code = normalize_language_code(language or "en")
-    return _ACKNOWLEDGMENT.get(code, "")
+    return _ACKNOWLEDGMENT.get(code, ())
+
+
+def call_acknowledgment(language: str | None) -> str:
+    """The first short acknowledgment for this call language ("" if none)."""
+    variants = call_acknowledgments(language)
+    return variants[0] if variants else ""
 
 
 #: Script/register notes for the six non-Indian languages. They are appended
