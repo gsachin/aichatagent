@@ -252,10 +252,32 @@ _COMMAND_ALIASES = {
     "ja": {"ja", "japanese", "日本語", "にほんご"},
     "pt": {"pt", "portuguese", "português", "portugues"},
     "zh": {"zh", "chinese", "中文", "汉语", "漢語"},
+    # Full/native names only: bare "hi"/"gu" stay greetings, not commands.
+    "hi": {"hindi", "हिंदी", "हिन्दी", "હિન્દી"},
+    "gu": {"gujarati", "गुजराती", "ગુજરાતી"},
 }
 
 _EN_ALIASES = {"en", "english"}
-_SLASH_CODES = {"es", "fr", "it", "ja", "pt", "zh", "en"}
+_SLASH_CODES = {"es", "fr", "it", "ja", "pt", "zh", "hi", "gu", "en"}
+
+#: Labels for the WhatsApp first-contact language menu. The core three are
+#: always offered; the six foreign labels are appended only when
+#: ``FOREIGN_LANGUAGES`` enables them. The parenthesised English name is for
+#: readers of the menu; ``_LANGUAGE_NAMES`` supplies the bare names the reply
+#: parser accepts.
+WHATSAPP_MENU_LABELS = {
+    "en": "English",
+    "hi": "हिंदी (Hindi)",
+    "gu": "ગુજરાતી (Gujarati)",
+    "es": "Español (Spanish)",
+    "fr": "Français (French)",
+    "it": "Italiano (Italian)",
+    "ja": "日本語 (Japanese)",
+    "pt": "Português (Portuguese)",
+    "zh": "中文 (Chinese)",
+}
+
+WHATSAPP_MENU_CORE_LANGUAGES = ("en", "hi", "gu")
 
 
 def language_from_command(text: str, current: str = "") -> str | None:
@@ -296,6 +318,79 @@ def language_from_command(text: str, current: str = "") -> str | None:
     for code, aliases in _COMMAND_ALIASES.items():
         if token in aliases:
             return code
-    if token in _EN_ALIASES and normalize_language_code(current) in DEFAULT_FOREIGN_LANGUAGES:
+    if token in _EN_ALIASES and normalize_language_code(current) not in ("", "en"):
         return "en"
+    return None
+
+
+def whatsapp_language_menu_options() -> list[tuple[str, str, str]]:
+    """The numbered options of the WhatsApp first-contact language menu.
+
+    Returns ``[(digit, code, label), ...]``. English, Hindi and Gujarati are
+    always present, in that order; the six foreign languages follow in
+    ``DEFAULT_FOREIGN_LANGUAGES`` order, filtered by the configured feature
+    gate. Numbering is derived from the resulting list, so it stays contiguous
+    when the feature is partially enabled.
+    """
+    codes = list(WHATSAPP_MENU_CORE_LANGUAGES)
+    enabled = configured_foreign_languages()
+    codes.extend(
+        code for code in DEFAULT_FOREIGN_LANGUAGES if code in enabled
+    )
+    return [
+        (str(digit), code, WHATSAPP_MENU_LABELS[code])
+        for digit, code in enumerate(codes, 1)
+    ]
+
+
+def language_from_menu_reply(
+    text: str | None,
+    options: list[tuple[str, str, str]] | None = None,
+) -> str | None:
+    """The language selected by a reply to the WhatsApp language menu.
+
+    Whole-message only: a leading number (``2``, ``2.``, ``2 - Hindi``), an
+    English/native language name, or a slash code. Bare ``hi``/``gu`` are
+    deliberately rejected -- ``hi`` is the most common WhatsApp greeting -- and
+    bare ``it`` remains an English pronoun. The result is always one of
+    *options*, so a disabled foreign language cannot be chosen by name.
+    """
+    choices = options if options is not None else whatsapp_language_menu_options()
+    by_code = {code for _, code, _ in choices}
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    digit_match = re.match(r"^(\d{1,2})(?:[.)\-:\s]|$)", raw)
+    if digit_match:
+        for digit, code, _ in choices:
+            if digit == digit_match.group(1):
+                return code
+        return None
+
+    token = raw.strip().strip(".,!?;:。！？、，")
+    if not token:
+        return None
+
+    if token.startswith("/"):
+        token = token[1:].strip().lower()
+        if token in by_code:
+            return token
+        for code, aliases in _COMMAND_ALIASES.items():
+            if token in aliases and code in by_code:
+                return code
+        return "en" if token in _EN_ALIASES and "en" in by_code else None
+
+    low = token.lower()
+    for code in by_code:
+        label = WHATSAPP_MENU_LABELS[code]
+        if low == label.lower() or low == label.split(" (", 1)[0].lower():
+            return code
+        if any(low == name.lower() for name in _LANGUAGE_NAMES.get(code, ())):
+            return code
+
+    # A bare code is accepted only when unambiguous; hi/gu are greetings and
+    # "it" is an English word.
+    if low in by_code and low not in ("hi", "gu", "it"):
+        return low
     return None

@@ -110,10 +110,23 @@ def test_command_parser_accepts_whole_message_commands():
     # A command must be the whole message.
     assert language_from_command("I speak Spanish") is None
     assert language_from_command("¿Habla español?") is None
-    # English is only a command when the thread is already foreign.
+    # English is only a command when the thread is already non-English.
     assert language_from_command("English") is None
     assert language_from_command("English", current="es") == "en"
+    assert language_from_command("English", current="hi") == "en"
+    assert language_from_command("English", current="gu") == "en"
     assert language_from_command("/en") == "en"
+
+    # Hindi/Gujarati command additions. Bare forms stay greetings.
+    assert language_from_command("/hi") == "hi"
+    assert language_from_command("/gu") == "gu"
+    assert language_from_command("Hindi") == "hi"
+    assert language_from_command("हिंदी") == "hi"
+    assert language_from_command("Gujarati") == "gu"
+    assert language_from_command("ગુજરાતી") == "gu"
+    assert language_from_command("hi") is None
+    assert language_from_command("gu") is None
+    assert language_from_command("hindi please") is None
 
 
 def test_foreign_codes_never_route_to_sarvam_or_indic_tts(monkeypatch):

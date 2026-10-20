@@ -78,6 +78,7 @@ from app.languages import (
     normalize_language_code,
     resolve_answer_language,
 )
+from app.whatsapp_text import whatsapp_offer_fields, whatsapp_text
 
 def _configure_logging() -> None:
     """Apply LOG_LEVEL and LOG_FILE from the environment.
@@ -2518,6 +2519,7 @@ async def _log_whatsapp_conversation(
     conversation_id: str = "",
     crm_user_id: str = "",
     language: str = "",
+    language_source: str = "",
 ):
     """
     Log a WhatsApp interaction to the new leads + conversations tables.
@@ -2539,6 +2541,7 @@ async def _log_whatsapp_conversation(
             conversation_id=conversation_id,
             crm_user_id=crm_user_id,
             language=language,
+            language_source=language_source,
         )
     except Exception:
         logger.exception("Failed to log WhatsApp conversation (non-fatal)")
@@ -2849,11 +2852,18 @@ async def _whatsapp_chat_rag(
             return answer
     except Exception:
         logger.exception("WhatsApp RAG failed")
-    return "Sorry, I couldn't process your question. Please try again."
+    return whatsapp_text(
+        "rag_failure", language or "",
+        "Sorry, I couldn't process your question. Please try again.",
+    )
 
 
 async def _whatsapp_offer_on_done(
-    lead_id: str, lead_name: str, conversation_id: str = ""
+    lead_id: str,
+    lead_name: str,
+    conversation_id: str = "",
+    *,
+    language: str = "",
 ) -> str:
     """
     Generate + send the offer letter when the student signals that all
@@ -2867,22 +2877,25 @@ async def _whatsapp_offer_on_done(
     from app.offers.service import (
         evaluate_offer_readiness,
         generate_and_send_offer,
-        missing_fields_text,
     )
 
     try:
         readiness = await evaluate_offer_readiness(lead_id)
         if readiness["missing"]:
-            return (
+            return whatsapp_text(
+                "offer_missing_fields", language,
                 "Before I can generate your offer letter, I still need: "
-                f"{missing_fields_text(readiness['missing'])}."
+                "{fields}.",
+                fields=whatsapp_offer_fields(readiness["missing"], language),
             )
 
         docs = await list_documents(lead_id)
         if not docs:
-            return (
-                "I don't see any documents from you yet. Please send clear photos "
-                "or PDFs of your transcript/marksheet and ID proof, then type 'done'."
+            return whatsapp_text(
+                "offer_no_documents", language,
+                "I don't see any documents from you yet. Please send clear "
+                "photos or PDFs of your transcript/marksheet and ID proof, "
+                "then type 'done'.",
             )
 
         offer = await generate_and_send_offer(
@@ -2890,15 +2903,25 @@ async def _whatsapp_offer_on_done(
         )
         if offer:
             program = offer.get("program") or ""
-            return (
-                f"🎓 Great news, {lead_name}! Your offer letter for {program} is ready — "
-                "I've sent it here on WhatsApp and emailed you a copy. "
-                "Reply 'accept' or 'decline' when you're ready."
+            return whatsapp_text(
+                "offer_success", language,
+                "🎓 Great news, {name}! Your offer letter for {program} is "
+                "ready — I've sent it here on WhatsApp and emailed you a copy. "
+                "Reply 'accept' or 'decline' when you're ready.",
+                name=lead_name, program=program,
             )
-        return "Hmm, I couldn't generate your offer letter right now. Please try again in a moment."
+        return whatsapp_text(
+            "offer_failure", language,
+            "Hmm, I couldn't generate your offer letter right now. Please try "
+            "again in a moment.",
+        )
     except Exception:
         logger.exception("WhatsApp offer generation on 'done' failed")
-        return "Hmm, I couldn't generate your offer letter right now. Please try again in a moment."
+        return whatsapp_text(
+            "offer_failure", language,
+            "Hmm, I couldn't generate your offer letter right now. Please try "
+            "again in a moment.",
+        )
 
 
 def _strip_markdown(text: str) -> str:
@@ -3109,15 +3132,29 @@ async def twilio_whatsapp_webhook(
     conversation_id = ""
     wa_session = None
     try:
-        from app.config import settings
+        # Alias the import so it does not shadow the module-level `settings`
+        # used by the rest of this handler; if session resolution fails, the
+        # later language/default lookups still work.
+        from app.config import settings as _settings
         from app.crm import session as crm_session
 
         wa_session = await crm_session.resolve_whatsapp_session(
-            From, idle_window_hours=settings.CRM_IDLE_WINDOW_HOURS
+            From, idle_window_hours=_settings.CRM_IDLE_WINDOW_HOURS
         )
         conversation_id = wa_session.conversation_id
     except Exception:
         logger.exception("WhatsApp conversation session resolution failed (non-fatal)")
+
+    # The early media/empty acknowledgements return before the full answer
+    # language is resolved. Use the guarded form field / saved session language
+    # so a returning user hears their language; a first-contact user has no
+    # language and still gets the exact English bytes.
+    _form_language = Language if isinstance(Language, str) else ""
+    _early_language = resolve_answer_language(
+        getattr(wa_session, "language", "") if wa_session else "",
+        _form_language,
+        settings.DEFAULT_LANGUAGE,
+    )
 
     # ── Handle media messages ────────────────────────────────────
     num_media = int(NumMedia or "0")
@@ -3128,7 +3165,11 @@ async def twilio_whatsapp_webhook(
             # Voice notes are intentionally unsupported — WhatsApp is chat-only.
             logger.info(f"WhatsApp voice note from {From} — asking to type instead")
             twiml = WHATSAPP_TWIML_TEMPLATE.format(
-                answer="I can't listen to voice notes. Please type your question here in the chat and I'll answer right away!"
+                answer=escape(whatsapp_text(
+                    "media_audio_unsupported", _early_language,
+                    "I can't listen to voice notes. Please type your question "
+                    "here in the chat and I'll answer right away!",
+                ))
             )
             return Response(content=twiml, media_type="application/xml")
 
@@ -3143,7 +3184,12 @@ async def twilio_whatsapp_webhook(
                 body_text=Body.strip(),
             )
             twiml = WHATSAPP_TWIML_TEMPLATE.format(
-                answer="📄 Got your document! I'm processing it now. If you have more documents, send them too, or type 'done' when you're finished."
+                answer=escape(whatsapp_text(
+                    "media_document_received", _early_language,
+                    "📄 Got your document! I'm processing it now. If you have "
+                    "more documents, send them too, or type 'done' when "
+                    "you're finished.",
+                ))
             )
             return Response(content=twiml, media_type="application/xml")
 
@@ -3151,14 +3197,22 @@ async def twilio_whatsapp_webhook(
             # Unknown media type
             logger.info(f"WhatsApp unknown media from {From} ({MediaContentType0})")
             twiml = WHATSAPP_TWIML_TEMPLATE.format(
-                answer="I received your file but I can only accept photos (transcripts, IDs) and PDFs. Please try sending it as an image or PDF."
+                answer=escape(whatsapp_text(
+                    "media_unknown_type", _early_language,
+                    "I received your file but I can only accept photos "
+                    "(transcripts, IDs) and PDFs. Please try sending it as an "
+                    "image or PDF.",
+                ))
             )
             return Response(content=twiml, media_type="application/xml")
 
     # ── Handle text ─────────────────────────────────────────────
     if not Body.strip():
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer="Hello! Send me a question about Meridian admissions."
+            answer=escape(whatsapp_text(
+                "empty_message", _early_language,
+                "Hello! Send me a question about Meridian admissions.",
+            ))
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -3171,40 +3225,57 @@ async def twilio_whatsapp_webhook(
     _thread_language = normalize_language_code(
         getattr(wa_session, "language", "") if wa_session else ""
     )
+    _language_source = (
+        (getattr(wa_session, "language_source", "") if wa_session else "") or ""
+    ).strip().lower()
+    _menu_confirmation = ""
+    _menu_selection = ""
+    _replayed_from_menu = False
+    _pending_language_text = (
+        getattr(wa_session, "pending_language_text", "") if wa_session else ""
+    )
+
     _command = language_from_command(Body, _thread_language)
     if _command:
         if wa_session is not None:
             wa_session.language = _command
+            wa_session.language_source = "selected"
+        _language_source = "selected"
         from app.localized_text import WHATSAPP_LANGUAGE_CONFIRMATIONS
 
         answer = WHATSAPP_LANGUAGE_CONFIRMATIONS.get(
             _command, WHATSAPP_LANGUAGE_CONFIRMATIONS["en"]
         )
-        background_tasks.add_task(
-            _log_whatsapp_conversation,
-            phone_number=From,
-            transcript=f"User: {Body}\nAssistant: {answer}",
-            conversation_id=conversation_id,
-            language=_command,
-        )
-        twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
-        return Response(content=twiml, media_type="application/xml")
+        if _pending_language_text and wa_session is not None:
+            # The menu says a language name is as valid as a number, and a
+            # name is caught here before the menu parser. Replay the held
+            # question instead of returning only a confirmation.
+            _menu_confirmation = answer
+            _menu_selection = Body.strip()
+            Body = _pending_language_text
+            _thread_language = _command
+            _replayed_from_menu = True
+            wa_session.pending_language_text = ""
+            wa_session.language_menu_prompts = 0
+        else:
+            background_tasks.add_task(
+                _log_whatsapp_conversation,
+                phone_number=From,
+                transcript=f"User: {Body}\nAssistant: {answer}",
+                conversation_id=conversation_id,
+                language=_command,
+                language_source="selected",
+            )
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
+            return Response(content=twiml, media_type="application/xml")
 
-    if Body.strip().lower() in ("/language", "/languages"):
+    if not _replayed_from_menu and Body.strip().lower() in ("/language", "/languages"):
         from app.localized_text import WHATSAPP_LANGUAGE_HELP
 
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
             answer=escape(WHATSAPP_LANGUAGE_HELP)
         )
         return Response(content=twiml, media_type="application/xml")
-
-    # The persisted thread language wins; the Twilio form field (normally
-    # absent) is the next fallback, then the deployment default.
-    _answer_language = resolve_answer_language(
-        _thread_language,
-        Language if isinstance(Language, str) else "",
-        settings.DEFAULT_LANGUAGE,
-    )
 
     # ── Lead info collection — check if lead has name/email ─────
     from app.leads.models import get_lead_by_phone, upsert_lead_by_phone, update_lead
@@ -3216,6 +3287,141 @@ async def twilio_whatsapp_webhook(
     lead_name = (lead or {}).get("name", "")
     lead_email = (lead or {}).get("email", "")
     lead_program = (lead or {}).get("program_interest", "")
+
+    # The saved language may be older than the in-process/DB-resumed session
+    # (the 6 h idle window): the lead row derives it from the latest non-empty
+    # conversation, so a returning number resumes in its chosen language even
+    # after the window. With the menu feature off, today's session-only
+    # precedence is preserved.
+    _lead_language = normalize_language_code((lead or {}).get("language") or "")
+    if (
+        settings.WHATSAPP_LANGUAGE_MENU
+        and not _language_source
+        and (_thread_language or _lead_language)
+    ):
+        # Legacy rows predate explicit-choice tracking and carry language="en"
+        # from the default. Read the latest row's source (no time window) so a
+        # language chosen once is not asked again after the idle window, while
+        # an old implicit English still gets the one-time menu.
+        from app.leads.models import get_recent_conversation_for_phone
+
+        _stored_language = await get_recent_conversation_for_phone(
+            From, within_seconds=None
+        ) or {}
+        _language_source = (
+            str(_stored_language.get("language_source") or "").strip().lower()
+        )
+        if not _thread_language and _lead_language:
+            _thread_language = _lead_language
+            if wa_session is not None:
+                wa_session.language = _lead_language
+        if wa_session is not None:
+            wa_session.language_source = _language_source
+
+    _saved_language_explicit = bool(_thread_language) and _language_source in (
+        "selected", "command",
+    )
+
+    # ── WhatsApp first-contact language menu ────────────────────
+    # No explicit choice yet: hold this first message, ask which language to
+    # continue in, and replay the message through the state machine once the
+    # choice arrives. A legacy saved language (typically the implicit English
+    # default) is still worth asking about once. The branch is after the
+    # command/help paths (an explicit language action wins) and before every
+    # name/question branch (so the held text can never be stored as a name).
+    if (
+        settings.WHATSAPP_LANGUAGE_MENU
+        and not _replayed_from_menu
+        and not _saved_language_explicit
+        and wa_session is not None
+    ):
+        from app.languages import (
+            language_from_menu_reply,
+            whatsapp_language_menu_options,
+        )
+        from app.localized_text import (
+            WHATSAPP_LANGUAGE_CONFIRMATIONS,
+            WHATSAPP_LANGUAGE_RESEND,
+            whatsapp_language_menu,
+        )
+
+        _menu_options = whatsapp_language_menu_options()
+        _choice = language_from_menu_reply(Body, _menu_options)
+        if _choice:
+            _menu_confirmation = WHATSAPP_LANGUAGE_CONFIRMATIONS.get(
+                _choice, WHATSAPP_LANGUAGE_CONFIRMATIONS["en"]
+            )
+            _menu_selection = Body.strip()
+            wa_session.language = _choice
+            wa_session.language_source = "selected"
+            _language_source = "selected"
+            _thread_language = _choice
+            if _pending_language_text:
+                Body = _pending_language_text
+                _replayed_from_menu = True
+                wa_session.pending_language_text = ""
+                wa_session.language_menu_prompts = 0
+            else:
+                # A valid choice after a restart: the held question is gone,
+                # so confirm and ask for it again rather than guessing.
+                answer = (
+                    f"{_menu_confirmation}\n"
+                    f"{WHATSAPP_LANGUAGE_RESEND.get(_choice, WHATSAPP_LANGUAGE_RESEND['en'])}"
+                )
+                background_tasks.add_task(
+                    _log_whatsapp_conversation,
+                    phone_number=From,
+                    transcript=f"User: {Body}\nAssistant: {answer}",
+                    conversation_id=conversation_id,
+                    language=_choice,
+                    language_source="selected",
+                )
+                twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
+                return Response(content=twiml, media_type="application/xml")
+        else:
+            # Not a choice: hold the first message and ask. A reply that is
+            # clearly a new question replaces the held text; a stray token
+            # does not.
+            _is_question = "?" in Body or any(
+                k in Body.lower() for k in _KB_QUESTION_KEYWORDS
+            )
+            if not _pending_language_text or _is_question:
+                _pending_language_text = Body.strip()
+            _prompts = (wa_session.language_menu_prompts or 0) + 1
+            wa_session.language_menu_prompts = _prompts
+            if _prompts > 2:
+                # Two invalid replies: do not trap the student in the menu.
+                # Answer the held question in the saved (or deployment
+                # default) language; nothing was explicitly chosen.
+                _fallback_language = _thread_language or normalize_language_code(
+                    settings.DEFAULT_LANGUAGE or "en"
+                )
+                _thread_language = _fallback_language
+                wa_session.language = _fallback_language
+                wa_session.language_source = ""
+                _language_source = ""
+                Body = _pending_language_text or Body
+                _pending_language_text = ""
+                wa_session.pending_language_text = ""
+                wa_session.language_menu_prompts = 0
+                _replayed_from_menu = True
+            else:
+                wa_session.pending_language_text = _pending_language_text
+                menu = whatsapp_language_menu(_menu_options)
+                logger.info(
+                    f"WhatsApp language menu from {From} "
+                    f"(prompt {_prompts}, options {len(_menu_options)})"
+                )
+                twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(menu))
+                return Response(content=twiml, media_type="application/xml")
+
+    # The persisted thread language wins; the Twilio form field (normally
+    # absent) is the next fallback, then the deployment default.
+    _answer_language = resolve_answer_language(
+        _thread_language,
+        _form_language,
+        settings.DEFAULT_LANGUAGE,
+    )
 
     # Detect if message looks like providing info
     msg_lower = Body.strip().lower()
@@ -3289,31 +3495,42 @@ async def twilio_whatsapp_webhook(
         lead_name = name_given
         if not lead_email:
             awaiting_next = "email"
-            answer = (
-                f"Thanks — I've corrected your name to {name_given}. "
-                "What's your email address?"
+            answer = whatsapp_text(
+                "name_corrected_ask_email", _answer_language,
+                "Thanks — I've corrected your name to {name}. What's your "
+                "email address?",
+                name=name_given,
             )
         else:
-            answer = (
-                f"Thanks — I've corrected your name to {name_given}. "
-                "How can I help with your admission?"
+            answer = whatsapp_text(
+                "name_corrected_help", _answer_language,
+                "Thanks — I've corrected your name to {name}. How can I help "
+                "with your admission?",
+                name=name_given,
             )
     elif wants_name_change and not name_given:
         awaiting_next = "name"
-        answer = (
-            "Of course — what should I change your name to? "
-            "(You can just reply with the name.)"
+        answer = whatsapp_text(
+            "name_change_prompt", _answer_language,
+            "Of course — what should I change your name to? (You can just "
+            "reply with the name.)",
         )
     elif msg_lower in ("hi", "hello", "hey", "hii", "hi there", "namaste"):
         # Greet a known student by name instead of asking for a name that is
         # already on file and that no branch would accept an answer to.
         if lead_name:
-            answer = (
-                f"Hello {lead_name}! 👋 I'm the Meridian University admissions "
-                "assistant. What would you like to know?"
+            answer = whatsapp_text(
+                "greeting_known_name", _answer_language,
+                "Hello {name}! 👋 I'm the Meridian University admissions "
+                "assistant. What would you like to know?",
+                name=lead_name,
             )
         else:
-            answer = "Hello! 👋 I'm the Meridian University admissions assistant. What's your name?"
+            answer = whatsapp_text(
+                "greeting_unknown_name", _answer_language,
+                "Hello! 👋 I'm the Meridian University admissions assistant. "
+                "What's your name?",
+            )
     elif "?" in Body or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
         answer = await _chat(Body)
     # ── Replies to a question the bot actually asked (see `awaiting`) ────
@@ -3323,52 +3540,91 @@ async def twilio_whatsapp_webhook(
             if lead_id:
                 await update_lead(lead_id, name=candidate)
             lead_name = candidate
-            answer = f"Thanks — your name is now {candidate}. How can I help with your admission?"
+            answer = whatsapp_text(
+                "name_saved_help", _answer_language,
+                "Thanks — your name is now {name}. How can I help with your "
+                "admission?",
+                name=candidate,
+            )
         else:
             awaiting_next = "name"
-            answer = "Sorry, I didn't catch a name there. What should I change it to?"
+            answer = whatsapp_text(
+                "name_not_caught", _answer_language,
+                "Sorry, I didn't catch a name there. What should I change it "
+                "to?",
+            )
     elif awaiting == "email" and has_email:
         if lead_id:
             await update_lead(lead_id, email=Body.strip())
         lead_email = Body.strip()
         answer = (
-            f"Thanks {lead_name}! I've saved your email."
+            whatsapp_text(
+                "email_saved_with_name", _answer_language,
+                "Thanks {name}! I've saved your email.",
+                name=lead_name,
+            )
             if lead_name
-            else "Thanks — I've saved your email."
+            else whatsapp_text(
+                "email_saved_no_name", _answer_language,
+                "Thanks — I've saved your email.",
+            )
         )
     elif awaiting == "program":
         detected = _detect_meridian_program(msg_lower)
         if detected:
             lead_program = await _apply_program_choice(lead_id, lead_program, detected)
-            answer = (
-                f"**{detected}** — got it! 🎓\n\n"
-                "To proceed with your admission, say: 'I want to take admission' "
-                "and I'll guide you through the document upload process."
+            answer = whatsapp_text(
+                "program_detected", _answer_language,
+                "**{program}** — got it! 🎓\n\nTo proceed with your admission, "
+                "say: 'I want to take admission' and I'll guide you through "
+                "the document upload process.",
+                program=detected,
             )
         else:
             awaiting_next = "program"
-            answer = "Which program would you like? (e.g. B.Tech Computer Science, MBA, M.Tech, BCA)"
+            answer = whatsapp_text(
+                "program_ask_awaiting", _answer_language,
+                "Which program would you like? (e.g. B.Tech Computer Science, "
+                "MBA, M.Tech, BCA)",
+            )
     elif awaiting == "update_field":
         # The "No problem! What would you like to update?" prompt used to be a
         # dead end: nothing consumed the reply, so it fell through to RAG.
         if "name" in msg_lower:
             awaiting_next = "name"
-            answer = "Sure — what should I change your name to?"
+            answer = whatsapp_text(
+                "update_name_prompt", _answer_language,
+                "Sure — what should I change your name to?",
+            )
         elif "email" in msg_lower or has_email:
             if has_email:
                 if lead_id:
                     await update_lead(lead_id, email=Body.strip())
                 lead_email = Body.strip()
-                answer = "Thanks — I've updated your email address."
+                answer = whatsapp_text(
+                    "update_email_saved", _answer_language,
+                    "Thanks — I've updated your email address.",
+                )
             else:
                 awaiting_next = "email"
-                answer = "Sure — what's the correct email address?"
+                answer = whatsapp_text(
+                    "update_email_prompt", _answer_language,
+                    "Sure — what's the correct email address?",
+                )
         elif "program" in msg_lower or "course" in msg_lower:
             awaiting_next = "program"
-            answer = "Sure — which program would you like instead? (e.g. B.Tech Computer Science, MBA, M.Tech, BCA)"
+            answer = whatsapp_text(
+                "program_ask_update", _answer_language,
+                "Sure — which program would you like instead? (e.g. B.Tech "
+                "Computer Science, MBA, M.Tech, BCA)",
+            )
         else:
             awaiting_next = "update_field"
-            answer = "You can update your name, email, or program interest — which one?"
+            answer = whatsapp_text(
+                "update_field_unknown_choice", _answer_language,
+                "You can update your name, email, or program interest — which "
+                "one?",
+            )
     # State machine for collecting missing info
     elif (
         not lead_name
@@ -3385,26 +3641,51 @@ async def twilio_whatsapp_webhook(
         lead_name = Body.strip()  # Refresh local
         if not lead_email:
             awaiting_next = "email"
-            answer = f"Thanks {Body.strip()}! What's your email address? I'll use it to send you program details and follow up."
+            answer = whatsapp_text(
+                "name_captured_ask_email", _answer_language,
+                "Thanks {name}! What's your email address? I'll use it to send "
+                "you program details and follow up.",
+                name=Body.strip(),
+            )
         else:
-            answer = f"Thanks {Body.strip()}! I've updated your profile. How can I help you with Meridian admissions?"
+            answer = whatsapp_text(
+                "name_captured_profile_updated", _answer_language,
+                "Thanks {name}! I've updated your profile. How can I help you "
+                "with Meridian admissions?",
+                name=Body.strip(),
+            )
     elif not lead_email and has_email:
         # User provided their email
         if lead_id:
             await update_lead(lead_id, email=Body.strip())
         lead_email = Body.strip()  # Refresh local
         if not lead_name:
-            answer = f"Got your email! And what's your name?"
+            answer = whatsapp_text(
+                "email_captured_ask_name", _answer_language,
+                "Got your email! And what's your name?",
+            )
         else:
-            answer = f"Thanks! I've saved your email. How can I help you with admissions today?"
+            answer = whatsapp_text(
+                "email_captured_help", _answer_language,
+                "Thanks! I've saved your email. How can I help you with "
+                "admissions today?",
+            )
     elif not lead_name:
         # Missing name — ask for it
         awaiting_next = "name"
-        answer = "Hi! Before I help you, could you tell me your name?"
+        answer = whatsapp_text(
+            "ask_name_missing", _answer_language,
+            "Hi! Before I help you, could you tell me your name?",
+        )
     elif not lead_email:
         # Missing email — ask for it
         awaiting_next = "email"
-        answer = f"Hi {lead_name}! Could you share your email address? I'll use it to send you program details and follow up later."
+        answer = whatsapp_text(
+            "email_missing_ask", _answer_language,
+            "Hi {name}! Could you share your email address? I'll use it to "
+            "send you program details and follow up later.",
+            name=lead_name,
+        )
     else:
         # All info present — check admission intent first, then ACCEPT/DECLINE
 
@@ -3417,30 +3698,55 @@ async def twilio_whatsapp_webhook(
                 lead_program = await _apply_program_choice(lead_id, lead_program, detected_prog)
             if not lead_program:
                 awaiting_next = "program"
-                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech, BCA)"
+                answer = whatsapp_text(
+                    "program_ask_interested", _answer_language,
+                    "Which program are you interested in? (e.g., B.Tech "
+                    "Computer Science, MBA, M.Tech, BCA)",
+                )
             else:
-                answer = (
-                    f"Great! To process your admission for *{lead_program}*, "
-                    "please upload the following documents:\n\n"
-                    "📄 Transcript / Mark Sheet\n"
-                    "🆔 ID Proof (Passport, Aadhaar, or Driver's License)\n"
-                    "📝 Any additional certificates (optional)\n\n"
+                answer = whatsapp_text(
+                    "admission_docs_prompt", _answer_language,
+                    "Great! To process your admission for *{program}*, please "
+                    "upload the following documents:\n\n📄 Transcript / Mark "
+                    "Sheet\n🆔 ID Proof (Passport, Aadhaar, or Driver's "
+                    "License)\n📝 Any additional certificates (optional)\n\n"
                     "Just send clear photos or PDFs right here in WhatsApp. "
-                    "Type 'done' when you've sent everything."
+                    "Type 'done' when you've sent everything.",
+                    program=lead_program,
                 )
         # ── ACCEPT/DECLINE offer handling ───────────────────────
         elif msg_lower in ("accept", "accepted", "i accept"):
             result = await _handle_offer_response(lead_id, "accepted")
             if result:
-                answer = f"🎉 Congratulations {lead_name}! Your offer for *{result['program']}* has been accepted. You'll receive a payment link shortly to confirm your seat."
+                answer = whatsapp_text(
+                    "offer_accepted", _answer_language,
+                    "🎉 Congratulations {name}! Your offer for *{program}* has "
+                    "been accepted. You'll receive a payment link shortly to "
+                    "confirm your seat.",
+                    name=lead_name, program=result["program"],
+                )
             else:
-                answer = "I couldn't find a recent offer letter for you. How can I help with your admission?"
+                answer = whatsapp_text(
+                    "offer_not_found", _answer_language,
+                    "I couldn't find a recent offer letter for you. How can I "
+                    "help with your admission?",
+                )
         elif msg_lower in ("decline", "declined", "reject", "rejected", "i decline", "no thanks"):
             result = await _handle_offer_response(lead_id, "rejected")
             if result:
-                answer = f"Understood, {lead_name}. Your offer for *{result['program']}* has been declined. If you change your mind or want to explore other programs, just let me know!"
+                answer = whatsapp_text(
+                    "offer_declined", _answer_language,
+                    "Understood, {name}. Your offer for *{program}* has been "
+                    "declined. If you change your mind or want to explore "
+                    "other programs, just let me know!",
+                    name=lead_name, program=result["program"],
+                )
             else:
-                answer = "I couldn't find a recent offer letter for you. How can I help with your admission?"
+                answer = whatsapp_text(
+                    "offer_not_found", _answer_language,
+                    "I couldn't find a recent offer letter for you. How can I "
+                    "help with your admission?",
+                )
 
         # Only do RAG if user isn't confirming/changing their info
         elif msg_lower in ("yes", "yeah", "yep", "correct", "right", "ok", "okay"):
@@ -3453,22 +3759,35 @@ async def twilio_whatsapp_webhook(
             # really asked and goes to RAG with the conversation attached.
             offered = _detect_meridian_program(last_asked.lower()) if last_asked else ""
             if offered and offered == lead_program:
-                answer = (
-                    f"Great {lead_name}! You're confirmed for *{lead_program}*. "
-                    f"To proceed with admission, say: 'I want to take admission'"
+                answer = whatsapp_text(
+                    "yes_confirmed_program", _answer_language,
+                    "Great {name}! You're confirmed for *{program}*. To "
+                    "proceed with admission, say: 'I want to take admission'",
+                    name=lead_name, program=lead_program,
                 )
             else:
                 answer = await _chat(Body)
         elif msg_lower in ("no", "nope", "wrong", "change"):
             awaiting_next = "update_field"
-            answer = "No problem! What would you like to update? Your name, email, or program interest?"
+            answer = whatsapp_text(
+                "update_field_prompt", _answer_language,
+                "No problem! What would you like to update? Your name, email, "
+                "or program interest?",
+            )
         elif msg_lower in ("done", "finish", "finished"):
             # All documents uploaded — generate the offer letter now.
             if not lead_program:
                 awaiting_next = "program"
-                answer = "Which program are you interested in? (e.g., B.Tech Computer Science, MBA, M.Tech, BCA)"
+                answer = whatsapp_text(
+                    "program_ask_interested", _answer_language,
+                    "Which program are you interested in? (e.g., B.Tech "
+                    "Computer Science, MBA, M.Tech, BCA)",
+                )
             else:
-                answer = await _whatsapp_offer_on_done(lead_id, lead_name, conversation_id)
+                answer = await _whatsapp_offer_on_done(
+                    lead_id, lead_name, conversation_id,
+                    language=_answer_language,
+                )
         # ── Capture program name from short replies ──────────────────────────
         elif lead_name and lead_email and len(msg_lower.split()) <= 3:
             detected = _detect_meridian_program(msg_lower)
@@ -3477,10 +3796,12 @@ async def twilio_whatsapp_webhook(
             # and must not silently enrol the student in it.
             if detected and _is_explicit_program_choice(msg_lower, detected):
                 lead_program = await _apply_program_choice(lead_id, lead_program, detected)
-                answer = (
-                    f"**{detected}** — great choice! 🎓\n\n"
-                    f"To proceed with your admission, say: 'I want to take admission' "
-                    f"and I'll guide you through the document upload process."
+                answer = whatsapp_text(
+                    "program_choice", _answer_language,
+                    "**{program}** — great choice! 🎓\n\nTo proceed with your "
+                    "admission, say: 'I want to take admission' and I'll guide "
+                    "you through the document upload process.",
+                    program=detected,
                 )
             else:
                 # Short message that isn't a program — treat it as a question.
@@ -3498,7 +3819,16 @@ async def twilio_whatsapp_webhook(
     try:
         _ = answer
     except NameError:
-        answer = f"I have you as {lead_name or 'there'}. How can I help with Meridian admissions?"
+        answer = whatsapp_text(
+            "safety_fallback", _answer_language,
+            "I have you as {name}. How can I help with Meridian admissions?",
+            name=lead_name or "there",
+        )
+
+    # The language menu held this turn's question; confirm the choice in the
+    # chosen language and then answer the question in that same language.
+    if _menu_confirmation:
+        answer = f"{_menu_confirmation}\n\n{answer}"
 
     # WhatsApp renders plain text — strip LLM Markdown before sending.
     answer = _strip_markdown(answer)
@@ -3530,14 +3860,21 @@ async def twilio_whatsapp_webhook(
     except Exception:
         logger.exception("CRM link failed (non-fatal)")
 
-    # Log conversation
+    # Log conversation. When the turn replayed a question held by the language
+    # menu, keep both the question and the choice in the transcript.
+    _logged_body = (
+        f"{Body}\nUser: {_menu_selection}"
+        if _menu_selection and _menu_selection != Body.strip()
+        else Body
+    )
     background_tasks.add_task(
         _log_whatsapp_conversation,
         phone_number=From,
-        transcript=f"User: {Body}\nAssistant: {answer}",
+        transcript=f"User: {_logged_body}\nAssistant: {answer}",
         conversation_id=conversation_id,
         crm_user_id=crm_user_id,
         language=_answer_language,
+        language_source=_language_source,
     )
 
     # Escape exactly once, here at the XML boundary and after the Markdown

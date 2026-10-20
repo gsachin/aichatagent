@@ -87,9 +87,21 @@ class ConversationSession:
     # program confirmation no matter what had actually been asked.
     awaiting: str = ""
     # The answer language for this conversation. WhatsApp sets it from an
-    # in-chat command and it is restored from the conversations row after a
-    # restart; voice calls carry the language selected at call start.
+    # in-chat command or the first-contact menu and it is restored from the
+    # conversations row after a restart; voice calls carry the language
+    # selected at call start.
     language: str = ""
+    # Why the language is what it is. "selected" means the student explicitly
+    # chose it (WhatsApp menu or command); empty means it is a legacy/default
+    # value. Restored with the language so an explicit choice is not re-asked.
+    language_source: str = ""
+    # WhatsApp first-contact menu state. The first message is held here while
+    # the student picks a language, then replayed through the normal state
+    # machine in that language. Both fields are process-local and deliberately
+    # not persisted: a restart loses only the held message, and a valid menu
+    # reply is still recognized by its content.
+    pending_language_text: str = ""
+    language_menu_prompts: int = 0
 
     def touch(self) -> None:
         """Mark activity now — resets the idle window for channels without an end event."""
@@ -124,6 +136,7 @@ def start(
     lead_id: str = "",
     conversation_id: str | None = None,
     language: str = "",
+    language_source: str = "",
 ) -> ConversationSession:
     """
     Begin a conversation, or return the one already running under this key.
@@ -146,6 +159,8 @@ def start(
                 existing.lead_id = lead_id
             if language and not existing.language:
                 existing.language = normalize_language_code(language)
+            if language_source and not existing.language_source:
+                existing.language_source = language_source
             logger.debug(
                 f"crm.session: resumed {channel}/{key} -> {existing.conversation_id}"
             )
@@ -158,6 +173,7 @@ def start(
             phone_number=phone_number,
             lead_id=lead_id,
             language=normalize_language_code(language),
+            language_source=(language_source or "").strip().lower(),
         )
         _sessions[(channel, key)] = session
 
@@ -285,8 +301,10 @@ async def resolve_whatsapp_session(
     resumed = await _recent_conversation_from_db(phone_number, idle_window_seconds)
     resumed_id = (resumed or {}).get("conversation_id") or None
     resumed_language = (resumed or {}).get("language") or ""
+    resumed_source = (resumed or {}).get("language_source") or ""
     session = start("whatsapp", phone_number, phone_number=phone_number,
-                    conversation_id=resumed_id, language=resumed_language)
+                    conversation_id=resumed_id, language=resumed_language,
+                    language_source=resumed_source)
     if resumed_id:
         logger.info(
             f"crm.session: resumed WhatsApp conversation {resumed_id} for {phone_number} "

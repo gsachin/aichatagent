@@ -18,12 +18,28 @@ from app.languages import normalize_language_code
 #: ``app.languages.language_from_command``; this is only the confirmation.
 WHATSAPP_LANGUAGE_CONFIRMATIONS = {
     "en": "Got it — I'll continue in English.",
+    "hi": "ठीक है — मैं हिंदी में जारी रखूँगी।",
+    "gu": "ઠીક છે — હું ગુજરાતીમાં ચાલુ રાખીશ.",
     "es": "Perfecto, seguiré en español.",
     "fr": "Parfait, je continue en français.",
     "it": "Perfetto, continuo in italiano.",
     "ja": "日本語で続けます。",
     "pt": "Perfeito, vou continuar em português.",
     "zh": "好的，我会继续用中文。",
+}
+
+#: Sent when a language choice arrives after a restart and the original
+#: question is no longer in memory. The confirmation is followed by this line.
+WHATSAPP_LANGUAGE_RESEND = {
+    "en": "Please send your question again.",
+    "hi": "कृपया अपना सवाल फिर से भेजिए।",
+    "gu": "કૃપા કરીને તમારો પ્રશ્ન ફરી મોકલો.",
+    "es": "Por favor, envía tu pregunta de nuevo.",
+    "fr": "Veuillez renvoyer votre question.",
+    "it": "Per favore, invia di nuovo la tua domanda.",
+    "ja": "もう一度ご質問をお送りください。",
+    "pt": "Por favor, envie sua pergunta novamente.",
+    "zh": "请重新发送您的问题。",
 }
 
 #: Fixed closing line for the deterministic hangup path, in each foreign
@@ -690,11 +706,35 @@ def greeting_text(language: str, lead_collected: bool = False) -> str:
 #: Sent for ``/language`` or ``/languages``.
 WHATSAPP_LANGUAGE_HELP = (
     "You can choose a language with any of these commands:\n"
+    "• English or /en\n"
+    "• Hindi or /hi\n"
+    "• Gujarati or /gu\n"
     "• Spanish or /es\n"
     "• French or /fr\n"
     "• Italian or /it\n"
     "• Japanese or /ja\n"
     "• Portuguese or /pt\n"
-    "• Chinese or /zh\n"
-    "• English or /en"
+    "• Chinese or /zh"
 )
+
+WHATSAPP_LANGUAGE_MENU_HEADER = (
+    "Please choose the language you'd like to continue in:"
+)
+WHATSAPP_LANGUAGE_MENU_FOOTER = (
+    "Reply with the number or the language name. "
+    "You can change this later with /language."
+)
+
+
+def whatsapp_language_menu(options) -> str:
+    """The numbered first-contact menu for the given option tuples.
+
+    ``options`` is ``[(digit, code, label), ...]`` from
+    ``app.languages.whatsapp_language_menu_options``. English is the menu
+    language because no language has been chosen yet; the labels themselves
+    are native so the choice is readable without it.
+    """
+    lines = [WHATSAPP_LANGUAGE_MENU_HEADER, ""]
+    lines.extend(f"{digit}. {label}" for digit, _code, label in options)
+    lines.extend(["", WHATSAPP_LANGUAGE_MENU_FOOTER])
+    return "\n".join(lines)

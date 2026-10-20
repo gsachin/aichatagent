@@ -94,8 +94,8 @@ retrieves chunks.
 |---|---|---|---|---|---|
 | **Inbound Twilio call** | `/twilio/voice` -> IVR -> `/ws/twilio` | Sarvam -> IndicConformer -> Whisper | OpenAI `gpt-6-luna` (`query_rag_stream`) | Sarvam gu,hi / Kokoro en | IVR digits 1=en, 2=hi, 3=gu; `?language=` pins a code |
 | **Outbound Twilio call** | `OutboundCallWorker` -> `/twilio/outbound-voice` -> answered-call menu -> `/ws/twilio-outbound` | same | same | same | `language` + `languageSource` on the TwiML URL are the fallback; with `OUTBOUND_LANGUAGE_MENU=1` the callee presses 1=en, 2=hi, 3=gu, or 9 for the foreign menu (1=es, 2=fr, 3=it, 4=ja, 5=pt, 6=zh); 4/timeout keeps the fallback, and any choice locks as `languageSource=selected`. Operator/campaign fallbacks lock; the lead's stored language stays soft; empty uses `DEFAULT_LANGUAGE=en` |
-| **WhatsApp** | `POST /twilio/whatsapp` | none (voice notes rejected) | OpenAI via `run_rag_query_sync(mode="chat")` | none | Twilio `Language` form field, else `DEFAULT_LANGUAGE` |
-| **Streamlit chat** | `streamlit run app.py` (port 8501) | none | OpenAI via LangChain `ChatOpenAI` | none | Selector: English / Hindi / Gujarati only |
+| **WhatsApp** | `POST /twilio/whatsapp` | none (voice notes rejected) | OpenAI via `run_rag_query_sync(mode="chat")` | none | First-contact numbered menu (English, Hindi, Gujarati + enabled foreign); the choice is saved on the conversation, returning numbers resume, and `/language` commands change it later |
+| **Streamlit chat** | `streamlit run app.py` (port 8501) | none | OpenAI via LangChain `ChatOpenAI` | none | In-chat picker before the first message plus the sidebar selector: English / Hindi / Gujarati + the six enabled foreign languages |
 | **CLI (legacy)** | `python admissions_bot.py` | none | OpenAI via `get_chat_model` | none | none; not a served surface |
 | **Post-call / background** | Twilio disconnect, WhatsApp intent, CRM tasks | none | OpenAI via `backend_chat` | none | follows the transcript language |
 
@@ -132,9 +132,21 @@ retrieves chunks.
   `query_rag` -> OpenAI (`app/main.py:2140`, `app/pipeline.py:309`,
   `app/rag.py:107`).
 - Conversation history and known lead fields are attached per turn.
-- The answer language is `Language` from the Twilio form payload, falling back to
-  `DEFAULT_LANGUAGE`; `language_instruction` then asks the LLM to answer in that
-  language.
+- With `WHATSAPP_LANGUAGE_MENU=1`, a number with no **explicit** language
+  choice is shown a numbered menu before its first message is interpreted.
+  The held message is replayed in the chosen language; the choice is written
+  to `conversations.language` with `language_source='selected'`, so returning
+  numbers (including after the idle window) resume in it. Legacy rows whose
+  language came from the old implicit default are treated as unconfirmed and
+  are asked once. `WHATSAPP_LANGUAGE_MENU=0` restores the old first-message
+  flow.
+- The answer language is the saved thread/lead language, then the Twilio
+  `Language` form field, then `DEFAULT_LANGUAGE`; `language_instruction` then
+  asks the LLM to answer in that language. The menu, confirmations, all
+  synchronous deterministic chat prompts (greeting, name, email, program,
+  documents, offer responses, fallbacks) and RAG answers are localized via
+  `app/whatsapp_text.py`; English remains the call-site default. Proactive
+  offer-PDF and post-voice document messages remain English in this version.
 
 ### 4.3 Streamlit
 
@@ -142,8 +154,11 @@ retrieves chunks.
 - `load_rag_chain()` builds a LangChain `create_retrieval_chain` whose retriever
   is a `RunnableLambda` returning the **whole document**, with
   `get_chat_model(num_ctx=None)` as the LLM (`app.py:255`).
-- The language selector is hard-coded to English / Hindi / Gujarati
-  (`app.py:155`); `_with_answer_language()` appends `language_instruction`.
+- The language selector is the sidebar `answer_language_name` widget plus an
+  in-chat pills picker shown until the first user message; both share the same
+  option map (English / Hindi / Gujarati, plus the six foreign languages when
+  `FOREIGN_LANGUAGES` is enabled). `_with_answer_language()` appends
+  `language_instruction`.
 - No temperature is passed, because `gpt-6-luna` rejects non-default values.
 
 ### 4.4 Background model calls (all OpenAI `gpt-6-luna`)
@@ -363,7 +378,7 @@ one line.
 
 | Channel | Can answer foreign languages? | Constraint |
 |---|---|---|
-| WhatsApp | yes | whole-message command (`Spanish`, `/es`, …) sets and persists the thread language; RAG answers are localized, profile-collection prompts remain English in v1 |
+| WhatsApp | yes | first-contact menu / whole-message commands (`Spanish`, `/es`, …) set and persist the thread language; deterministic chat prompts and RAG answers are localized (`app/whatsapp_text.py`); proactive offer-PDF/voice-path messages remain English in v1 |
 | Streamlit | yes | selector lists the six when enabled; RAG answers and the main onboarding prompts are localized |
 | CLI | yes, by prompt only | no language switch |
 
@@ -473,7 +488,9 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
   they use `DEFAULT_LANGUAGE=en`.
 - Fixed lines are now localized for the six foreign languages in
   `app/localized_text.py`; English is the fallback when a foreign asset is
-  missing. WhatsApp profile-collection prompts remain English in v1.
+  missing. WhatsApp's synchronous deterministic chat prompts are localized in
+  `app/whatsapp_text.py`; proactive offer-PDF and post-voice messages remain
+  English in v1.
 - Native-speaker review of the six translation sets
   (`doc/i18n/foreign_language_strings.md`) is a rollout prerequisite.
 - Kokoro/ONNX CUDA is not bit-reproducible across processes on this box: the

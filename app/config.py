@@ -585,6 +585,17 @@ class Settings:
         .lower()
         in ("1", "true", "yes", "on")
     )
+    # Ask a WhatsApp number with no explicit language choice which language to
+    # continue in before answering its first message. The choice is stored on
+    # the conversation's existing language column with language_source; a
+    # returning number with an explicit choice skips the menu, while a legacy
+    # implicit-default row is asked once. `0` restores the pre-menu behavior.
+    WHATSAPP_LANGUAGE_MENU: bool = field(
+        default_factory=lambda: _env("WHATSAPP_LANGUAGE_MENU", "1")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
     GROUNDING_LANGUAGE_MODE: str = field(
         default_factory=lambda: _env(
             "GROUNDING_LANGUAGE_MODE", "relaxed"

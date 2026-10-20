@@ -63,6 +63,12 @@ os.environ.setdefault("GREETING_WARMUP", "0")
 # setting and call `configured_foreign_languages.cache_clear()` if needed.
 os.environ.setdefault("FOREIGN_LANGUAGES", "es,fr,it,ja,pt,zh")
 
+# The WhatsApp start-of-chat menu changes what a first message does (it asks
+# for a language instead of falling into the name/RAG flow). The existing
+# WhatsApp tests were written against that flow, so keep it off by default;
+# tests for the menu override the setting on.
+os.environ.setdefault("WHATSAPP_LANGUAGE_MENU", "0")
+
 # ...and keep it out of the LIVE CALL LOG. `app.main` calls `_configure_logging()`
 # at import (main.py:110), which attaches a FileHandler to whatever LOG_FILE
 # names -- so simply importing the app in a test made the suite append to the

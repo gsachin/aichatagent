@@ -417,6 +417,7 @@ async def create_conversation(
     conversation_id: str | None = None,
     crm_user_id: str | None = None,
     language: str = "",
+    language_source: str = "",
 ) -> dict | None:
     """
     Log a conversation against a lead.
@@ -426,6 +427,11 @@ async def create_conversation(
     multi-turn conversation (WhatsApp writes one row per message). When it is
     not supplied — the pre-existing call sites — the row falls back to its own
     id, which is correct for a one-row-per-call voice conversation.
+
+    ``language_source`` records *why* the language is what it is. The WhatsApp
+    first-contact menu writes ``"selected"`` only when the student explicitly
+    chose; legacy/default rows stay ``""`` so an older implicit English does
+    not look like an explicit choice.
     """
     with _get_db() as conn:
         if conn is None:
@@ -441,16 +447,16 @@ async def create_conversation(
                     "INSERT INTO conversations (id, lead_id, phone_number, channel, "
                     "transcript, summary, call_duration_seconds, outcome, "
                     "follow_up_needed, follow_up_reason, extracted_lead, "
-                    "conversation_id, crm_user_id, language) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "conversation_id, crm_user_id, language, language_source) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING id, lead_id, phone_number, channel, transcript, "
                     "summary, call_duration_seconds, outcome, follow_up_needed, "
                     "follow_up_reason, extracted_lead, created_at, conversation_id, "
-                    "language",
+                    "language, language_source",
                     (conv_id, lead_id, phone_number, channel, transcript, summary,
                      call_duration_seconds, outcome, follow_up_needed,
                      follow_up_reason, lead_json, session_id, crm_user_id or None,
-                     language or ""),
+                     language or "", language_source or ""),
                 )
                 row = cur.fetchone()
             logger.info(
@@ -733,7 +739,7 @@ async def set_lead_crm_conversation_id(lead_id: str, conversation_id: str) -> bo
 
 async def get_recent_conversation_for_phone(
     phone_number: str,
-    within_seconds: float,
+    within_seconds: float | None,
     channel: str = "whatsapp",
 ) -> dict | None:
     """
@@ -744,6 +750,10 @@ async def get_recent_conversation_for_phone(
     same conversation?" can only be answered by how long ago the last message
     arrived. Reading it from the database rather than the in-process registry
     means a restart mid-conversation does not split one conversation in two.
+
+    ``within_seconds=None`` drops the time window and returns the latest row of
+    any age. The WhatsApp menu uses that to read the *language_source* marker
+    even after the idle window, so an explicit choice is not asked again.
 
     ``channel`` matters: without it, a voice call from the same number an hour
     ago would make the next WhatsApp message resume the *call's* conversation.
@@ -758,12 +768,15 @@ async def get_recent_conversation_for_phone(
             query = (
                 "SELECT id, lead_id, phone_number, channel, transcript, summary, "
                 "call_duration_seconds, outcome, follow_up_needed, follow_up_reason, "
-                "extracted_lead, created_at, conversation_id, language "
+                "extracted_lead, created_at, conversation_id, language, "
+                "language_source "
                 "FROM conversations "
                 "WHERE phone_number = %s "
-                "  AND created_at >= NOW() - (INTERVAL '1 second' * %s) "
             )
-            params: list = [phone_number, within_seconds]
+            params: list = [phone_number]
+            if within_seconds is not None:
+                query += "  AND created_at >= NOW() - (INTERVAL '1 second' * %s) "
+                params.append(within_seconds)
             if channel:
                 query += "  AND channel = %s "
                 params.append(channel)
@@ -1054,6 +1067,10 @@ def _row_to_conversation_dict(row) -> dict:
     # language is the newest column; tolerate the shorter row shape exactly as
     # conversation_id does above.
     result["language"] = (row[13] if len(row) > 13 and row[13] else "")
+    # language_source is newer still; tolerate the shorter row shape too.
+    result["language_source"] = (
+        row[14] if len(row) > 14 and row[14] else ""
+    )
     return result
 
 

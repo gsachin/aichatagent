@@ -52,6 +52,7 @@ async def log_interaction(
     conversation_id: str = "",
     crm_user_id: str = "",
     language: str = "",
+    language_source: str = "",
 ) -> dict | None:
     """
     High-level helper:
@@ -101,6 +102,7 @@ async def log_interaction(
         conversation_id=conversation_id or None,
         crm_user_id=crm_user_id or None,
         language=language or "",
+        language_source=language_source or "",
     )
 
     # 3. If we have extracted data and the lead is missing info, patch it

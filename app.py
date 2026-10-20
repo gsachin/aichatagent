@@ -143,6 +143,51 @@ def _greeting_text() -> str:
     )
 
 
+def _language_options() -> dict[str, str]:
+    """The labels/codes shared by the sidebar selector and the in-chat picker.
+
+    The first three are the original sidebar options in the original order;
+    the six foreign labels are appended only while FOREIGN_LANGUAGES is
+    enabled. Keeping one map is what stops the two controls from drifting.
+    """
+    labels = {"English": "en", "Hindi": "hi", "Gujarati": "gu"}
+    if configured_foreign_languages():
+        labels.update({
+            "Spanish (Español)": "es",
+            "French (Français)": "fr",
+            "Italian (Italiano)": "it",
+            "Japanese (日本語)": "ja",
+            "Portuguese (Português)": "pt",
+            "Chinese (中文)": "zh",
+        })
+    return labels
+
+
+def _sync_language_from_chat() -> None:
+    """Pills -> sidebar. Streamlit runs callbacks before the script body."""
+    label = st.session_state.get("chat_language_pick")
+    labels = _language_options()
+    if label in labels:
+        st.session_state["answer_language_name"] = label
+        st.session_state["answer_language"] = labels[label]
+    else:
+        # Never leave the widget pointing at a label the options no longer
+        # contain (e.g. FOREIGN_LANGUAGES was disabled between runs).
+        fallback = st.session_state.get("answer_language_name", "English")
+        if fallback not in labels:
+            fallback = "English"
+        st.session_state["chat_language_pick"] = fallback
+
+
+def _sync_chat_from_sidebar() -> None:
+    """Sidebar -> pills. Streamlit runs callbacks before the script body."""
+    label = st.session_state.get("answer_language_name")
+    labels = _language_options()
+    if label in labels:
+        st.session_state["chat_language_pick"] = label
+        st.session_state["answer_language"] = labels[label]
+
+
 def _program_requirements(prog: str) -> str:
     """The eligibility prompt for *prog*, with the requirement translated."""
     requirement = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
@@ -204,6 +249,21 @@ st.set_page_config(
 )
 
 # ── Sidebar ────────────────────────────────────────────────────────
+# Initialize the shared language keys before either widget is instantiated.
+# The sidebar keeps its original key; the in-chat pills use a separate key and
+# the two sync through on_change callbacks (never by writing an instantiated
+# widget key in the script body).
+_language_labels = _language_options()
+if st.session_state.get("answer_language_name") not in _language_labels:
+    _initial_code = normalize_language_code(
+        st.session_state.get("answer_language", "en")
+    )
+    st.session_state["answer_language_name"] = next(
+        (label for label, code in _language_labels.items()
+         if code == _initial_code),
+        "English",
+    )
+
 with st.sidebar:
     st.title("🎓 Admissions Advisor")
     st.markdown("---")
@@ -215,25 +275,12 @@ with st.sidebar:
     )
     st.markdown("---")
     st.markdown("### Answer Language")
-    # The first three labels are the original options in the original order.
-    # The six foreign languages are appended only when the feature is enabled.
-    _language_labels = {
-        "English": "en", "Hindi": "hi", "Gujarati": "gu",
-    }
-    if configured_foreign_languages():
-        _language_labels.update({
-            "Spanish (Español)": "es",
-            "French (Français)": "fr",
-            "Italian (Italiano)": "it",
-            "Japanese (日本語)": "ja",
-            "Portuguese (Português)": "pt",
-            "Chinese (中文)": "zh",
-        })
     _language_name = st.selectbox(
         "The assistant will answer in this language",
         list(_language_labels),
         index=0,
         key="answer_language_name",
+        on_change=_sync_chat_from_sidebar,
     )
     st.session_state["answer_language"] = _language_labels[_language_name]
     st.markdown("---")
@@ -439,12 +486,34 @@ elif (
     st.session_state.messages[0]["content"] = _greeting_text()
 st.session_state["_ui_language"] = st.session_state.get("answer_language", "en")
 
+# ── Chat input + start-of-chat language picker ─────────────────────
+# Read the input before rendering the picker: on the run that submits the
+# first message the user turn is appended below, and the picker must not
+# flash for that one run. st.chat_input is pinned to the bottom of the app
+# regardless of where it is called.
+prompt = st.chat_input("Ask about admissions, tuition, programs...")
+
+_has_user_message = any(
+    m.get("role") == "user" for m in st.session_state.messages
+)
+if not prompt and not _has_user_message:
+    if st.session_state.get("chat_language_pick") not in _language_labels:
+        st.session_state["chat_language_pick"] = _language_name
+    st.pills(
+        "The assistant will answer in this language",
+        list(_language_labels),
+        selection_mode="single",
+        required=True,
+        key="chat_language_pick",
+        on_change=_sync_language_from_chat,
+    )
+
 # ── Display chat history ───────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)

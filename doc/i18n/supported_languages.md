@@ -24,15 +24,15 @@ localized fixed lines.
 
 | Code | Language | STT | TTS voice | Greeting / fallbacks | Selection |
 |---|---|---|---|---|---|
-| `en` | English | Sarvam / Whisper | Kokoro `af_heart` | English | IVR 1, pinned URL, Streamlit |
-| `hi` | Hindi | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`aparna_hi_customer`) | Hindi | IVR 2, pinned URL, Streamlit |
-| `gu` | Gujarati | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`pooja_gu_customer`) | Gujarati | IVR 3, pinned URL, Streamlit |
-| `es` | Spanish | Whisper | Kokoro `ef_dora` | Spanish | IVR 9 → 1, pinned URL, Streamlit, WhatsApp `Spanish` / `/es` |
-| `fr` | French | Whisper | Kokoro `ff_siwis` | French | IVR 9 → 2, pinned URL, Streamlit, WhatsApp `French` / `/fr` |
-| `it` | Italian | Whisper | Kokoro `if_sara` | Italian | IVR 9 → 3, pinned URL, Streamlit, WhatsApp `Italian` / `/it` |
-| `ja` | Japanese | Whisper | Kokoro `jf_alpha` | Japanese | IVR 9 → 4, pinned URL, Streamlit, WhatsApp `Japanese` / `/ja` |
-| `pt` | Portuguese | Whisper | Kokoro `pf_dora` | Portuguese | IVR 9 → 5, pinned URL, Streamlit, WhatsApp `Portuguese` / `/pt` |
-| `zh` | Chinese | Whisper | Kokoro `zf_xiaoxiao` | Chinese | IVR 9 → 6, pinned URL, Streamlit, WhatsApp `Chinese` / `/zh` |
+| `en` | English | Sarvam / Whisper | Kokoro `af_heart` | English | IVR 1, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `English` / `/en` |
+| `hi` | Hindi | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`aparna_hi_customer`) | Hindi | IVR 2, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Hindi` / `/hi` |
+| `gu` | Gujarati | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`pooja_gu_customer`) | Gujarati | IVR 3, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Gujarati` / `/gu` |
+| `es` | Spanish | Whisper | Kokoro `ef_dora` | Spanish | IVR 9 → 1, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Spanish` / `/es` |
+| `fr` | French | Whisper | Kokoro `ff_siwis` | French | IVR 9 → 2, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `French` / `/fr` |
+| `it` | Italian | Whisper | Kokoro `if_sara` | Italian | IVR 9 → 3, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Italian` / `/it` |
+| `ja` | Japanese | Whisper | Kokoro `jf_alpha` | Japanese | IVR 9 → 4, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Japanese` / `/ja` |
+| `pt` | Portuguese | Whisper | Kokoro `pf_dora` | Portuguese | IVR 9 → 5, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Portuguese` / `/pt` |
+| `zh` | Chinese | Whisper | Kokoro `zf_xiaoxiao` | Chinese | IVR 9 → 6, pinned URL, Streamlit sidebar/in-chat, WhatsApp menu / `Chinese` / `/zh` |
 
 The six non-Indian languages are gated by `FOREIGN_LANGUAGES`. Setting it to an
 empty string disables the whole feature (IVR second menu, WhatsApp commands,
@@ -77,8 +77,8 @@ speak them today.
 
 | Channel | Foreign languages | Constraint |
 |---|---|---|
-| WhatsApp | yes, for the six | Whole-message command sets and persists the thread language (`Spanish`, `/es`, …). `/languages` lists the options. RAG answers are localized; profile-collection prompts remain English in v1. |
-| Streamlit | yes, for the six | Selector lists the six when enabled; RAG answers and main onboarding prompts are localized. |
+| WhatsApp | yes, for the six | A number without an explicit language choice gets a numbered menu (English, Hindi, Gujarati + the enabled foreign languages); the choice is persisted on the conversation with its source and returning numbers skip the menu. Legacy implicit-default rows are asked once. Whole-message commands (`Spanish`, `/es`, `/hi`, …) change it later; `/languages` lists them. Deterministic chat prompts (greeting, name, email, program, documents, offer responses, fallbacks) and RAG answers are localized (`app/whatsapp_text.py`); proactive offer-PDF/voice-path messages remain English in v1. |
+| Streamlit | yes, for the six | The sidebar selector and the in-chat picker (shown until the first message) both list the six when enabled; RAG answers and main onboarding prompts are localized. |
 | CLI | yes, by prompt only | No language switch. |
 
 ## Where this is enforced
@@ -97,7 +97,8 @@ speak them today.
 2. Add the code to `SUPPORTED_LANGUAGES` (auto-switch) and, for the six-style
    treatment, to `FOREIGN_LANGUAGES`.
 3. Add localized greetings, noise ladder, closing and failure strings.
-4. Add a selection path (IVR digit, WhatsApp alias, Streamlit selector).
+4. Add a selection path (IVR digit, WhatsApp first-contact menu/alias,
+   Streamlit sidebar/in-chat picker).
 5. Build call assets: `.venv/Scripts/python.exe scripts/build_call_assets.py`.
 6. Run the boot readiness check and confirm the language is not reported as
    degraded.
