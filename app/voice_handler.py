@@ -1501,6 +1501,10 @@ class VoiceCallSession:
         #: without this flag the event was logged every 20 ms (10 identical
         #: lines in the 2026-10-20 call).
         self._utterance_closed = False
+        #: Monotonic deadline during which the opening greeting ignores
+        #: barge-in. Pickup noise / the first echo was cancelling "नमस्ते" at
+        #: the 120 ms gate before the word finished. Set by _run_greeting.
+        self._greeting_grace_until = 0.0
 
         # US-014: the turn state, and the reference signal the echo gate
         # measures the caller against. `_playout` is the outbound audio the
@@ -1994,6 +1998,18 @@ class VoiceCallSession:
         if self.state != STATE_SPEAKING:
             self.mark_speaking()
 
+    def begin_greeting_grace(self, seconds: float = 0.8) -> None:
+        """Ignore barge-in for the first syllables of the fixed greeting.
+
+        The pickup click and the first echo of the agent's own voice cleared
+        the 120 ms barge-in gate on the 2026-10-20 calls, cutting "नमस्ते"
+        before the word finished. This grace is applied only by
+        ``_run_greeting``; answer turns have no grace, and the gate is
+        unchanged once the deadline passes. The playout reference still
+        advances during the grace, so the echo gate is correct afterwards.
+        """
+        self._greeting_grace_until = _time.monotonic() + max(0.0, seconds)
+
     # ── the per-turn cancel signal (US-004's producer) ─────────────────
 
     def begin_turn(self) -> None:
@@ -2022,6 +2038,10 @@ class VoiceCallSession:
         """Close the turn. Does NOT clear the caller's audio buffer."""
         self._cancel = None
         self._turn_began_as_interruption = False
+        # A greeting grace never outlives its greeting: if the fixed opening
+        # ends early (a failed asset, a very short fake in tests), the caller's
+        # next frames must reach the normal gate immediately.
+        self._greeting_grace_until = 0.0
         self.mark_listening()
 
     def note_answer_truncated(self) -> None:
@@ -2124,6 +2144,15 @@ class VoiceCallSession:
         threshold = max(BARGE_IN_ABS_FLOOR,
                         self._ref_env * BARGE_IN_ECHO_GAIN * BARGE_IN_MARGIN)
         self._advance_reference()
+
+        if _time.monotonic() < self._greeting_grace_until:
+            # The fixed opening gets its first syllable out before pickup
+            # noise or the agent's own first echo can clear the gate. The
+            # reference still advanced above, so the gate is correct after
+            # the grace. Answer turns have no grace (deadline stays in the
+            # past).
+            self._barge_counts["echo"] += 1
+            return FRAME_ECHO
 
         if rms < threshold:
             self._barge_counts["echo"] += 1
@@ -2275,13 +2304,17 @@ class VoiceCallSession:
         silent = self.is_silent(ulaw_chunk)
 
         if not silent:
-            # Speech — accumulate
+            # Speech — accumulate. Only the START of a new utterance clears
+            # `_utterance_closed`; clearing it on every speech frame made the
+            # stop log repeat every 20 ms when a deferred turn kept the buffer
+            # and the caller spoke again (the storm on the 2026-10-20 overlap
+            # call). The buffer reset is the real "new utterance" boundary.
             if not self._audio_buffer:
                 self.log_event("USER_SPEECH_STARTED")
+                self._utterance_closed = False
             self._audio_buffer.append(ulaw_chunk)
             self._silence_count = 0
             self._total_frames += 1
-            self._utterance_closed = False
             # The caller resumed: whatever was speculated is now the wrong
             # audio, and a later pause in this same utterance may speculate
             # again on the longer buffer.

@@ -1303,6 +1303,9 @@ async def _run_greeting(t: _VoiceTurn, text: str) -> None:
         # caller has heard the last frame rather than until the last write.
         session.begin_turn()
         session.mark_speaking()
+        # Do not let a pickup click / the greeting's own first echo cancel
+        # "नमस्ते" before it is spoken. Answers have no such grace.
+        session.begin_greeting_grace(0.8)
 
         direction = (getattr(session, "direction", "") or "inbound").strip().lower()
         greeting_start = _time.perf_counter()

@@ -385,10 +385,21 @@ def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
     monkeypatch.setattr(crm_session, "start", lambda *a, **k: _FakeSession())
     monkeypatch.setattr(crm_session, "end", lambda *a, **k: _FakeSession())
     async def fake_stream(self, text, **kwargs):
-        for _ in range(8):
+        # 2.4 s of playout, so the greeting is still SPEAKING while the test
+        # sends the caller's frames. The original 8 chunks (0.16 s) ended
+        # before the round-trips and made this test timing-dependent.
+        for _ in range(120):
             yield [0.0] * 160, 8000
 
     monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
+    # This test isolates the old framing question: do the caller's frames reach
+    # the gate at all while the greeting plays? The 0.8 s start grace has its
+    # own unit test; disabling it here keeps this test on the wiring, not on
+    # wall-clock timing around the greeting's queued media.
+    monkeypatch.setattr(
+        VoiceCallSession, "begin_greeting_grace",
+        lambda self, seconds=0.8: None,
+    )
     # A developer box may have the pre-rendered greeting on disk; this test is
     # about the handler wiring, so force the fake stream on every box.
     monkeypatch.setattr(vh, "greeting_asset_frames", lambda *args: None)
@@ -414,7 +425,9 @@ def test_the_inbound_handler_greets_without_owning_the_reader(monkeypatch):
 
         # The caller talks over it. All-loud frames: an utterance never closes,
         # so no pipeline runs and this stays a test of the greeting's window.
-        for _ in range(40):
+        # The `clear` is queued behind the greeting's 120 media frames, so the
+        # receive loop must outlast those as well.
+        for _ in range(200):
             ws.send_text(json.dumps({
                 "event": "media", "streamSid": "MZ-test",
                 "media": {"payload": base64.b64encode(LOUD_FRAME).decode("ascii")},
@@ -640,6 +653,49 @@ def test_user_speech_stopped_is_logged_once_while_deferred(caplog):
     with caplog.at_level(logging.INFO, logger="voice_events"):
         for _ in range(5):
             assert session.feed_audio(silence) is True
+
+    assert caplog.text.count("USER_SPEECH_STOPPED") == 1
+    session.reset_utterance()
+
+
+def test_the_greeting_start_is_not_cancelled_by_pickup_noise():
+    """The first syllable must survive the pickup click / first echo.
+
+    On the 2026-10-20 calls the 120 ms gate admitted a loud first frame and
+    cut "नमस्ते" before it finished. The grace is greeting-only; once it
+    expires the gate is unchanged.
+    """
+    session = VoiceCallSession()
+    session.begin_turn()
+    session.mark_speaking()
+    session.begin_greeting_grace(0.5)
+
+    assert session.admit_inbound_frame(LOUD_FRAME) == vh.FRAME_ECHO
+    assert not session.cancel_requested()
+
+    session._greeting_grace_until = 0.0
+    verdict = None
+    for _ in range(vh.BARGE_IN_MIN_FRAMES):
+        verdict = session.admit_inbound_frame(LOUD_FRAME)
+    assert verdict == vh.FRAME_INTERRUPTION
+    assert session.cancel_requested()
+
+
+def test_user_speech_stopped_is_not_repeated_when_speech_resumes(caplog):
+    """A pause inside a deferred utterance must not re-log the same stop.
+
+    On the 2026-10-20 overlap call the caller spoke, paused, then resumed while
+    the turn was deferred. The old speech branch cleared `_utterance_closed`
+    on every frame, so the stop was re-logged every 20 ms (a 60-line storm).
+    """
+    session = VoiceCallSession(silence_threshold_frames=1)
+    silence = b"\xff" * 160
+
+    with caplog.at_level(logging.INFO, logger="voice_events"):
+        session.feed_audio(LOUD_FRAME)
+        assert session.feed_audio(silence) is True
+        session.feed_audio(LOUD_FRAME)         # caller resumes, same utterance
+        assert session.feed_audio(silence) is True
 
     assert caplog.text.count("USER_SPEECH_STOPPED") == 1
     session.reset_utterance()
