@@ -25,7 +25,7 @@ localized fixed lines.
 | Code | Language | STT | TTS voice | Greeting / fallbacks | Selection |
 |---|---|---|---|---|---|
 | `en` | English | Sarvam / Whisper | Kokoro `af_heart` | English | IVR 1, pinned URL, Streamlit |
-| `hi` | Hindi | Sarvam / IndicConformer / Whisper | Kokoro `hf_alpha` | Hindi | IVR 2, pinned URL, Streamlit |
+| `hi` | Hindi | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`aparna_hi_customer`) | Hindi | IVR 2, pinned URL, Streamlit |
 | `gu` | Gujarati | Sarvam / IndicConformer / Whisper | Sarvam Bulbul (`pooja_gu_customer`) | Gujarati | IVR 3, pinned URL, Streamlit |
 | `es` | Spanish | Whisper | Kokoro `ef_dora` | Spanish | IVR 9 → 1, pinned URL, Streamlit, WhatsApp `Spanish` / `/es` |
 | `fr` | French | Whisper | Kokoro `ff_siwis` | French | IVR 9 → 2, pinned URL, Streamlit, WhatsApp `French` / `/fr` |

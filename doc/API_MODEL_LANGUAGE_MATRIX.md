@@ -19,7 +19,7 @@ This document answers three questions:
 | **LLM (all text generation)** | OpenAI Chat Completions, `gpt-6-luna` (`LLM_MODEL`), one remote provider only |
 | **Knowledge delivery** | Full document in the system prompt (`CONTEXT_MODE=doc`); **no RAG, no embeddings, no Chroma** |
 | **STT (voice)** | Sarvam Saaras v4 (`codemix`) -> IndicConformer (hi/gu) -> faster-whisper `small`; foreign-language sessions go straight to Whisper |
-| **TTS (voice)** | Sarvam Bulbul v4 Flash for Gujarati; Kokoro ONNX for English/Hindi and the six foreign languages; AI4Bharat Indic-TTS v1 optional |
+| **TTS (voice)** | Sarvam Bulbul v4 Flash for Gujarati and Hindi; Kokoro ONNX for English and the six foreign languages; AI4Bharat Indic-TTS v1 optional |
 | **Voice carrier** | Twilio Programmable Voice + Media Streams (8 kHz μ-law) |
 | **WhatsApp** | Twilio WhatsApp webhook; text only; same OpenAI model |
 | **Streamlit chat** | Text only; LangChain `ChatOpenAI`; same OpenAI model |
@@ -41,7 +41,7 @@ embedding models.
 | **OpenAI Chat Completions** | `POST {LLM_BASE_URL}/chat/completions` (default `https://api.openai.com/v1`) | `openai==2.54.0`; `langchain-openai==1.5.1` for Streamlit | Voice, WhatsApp, Streamlit, sentiment, lead extraction, intent classification | Single multilingual remote model; no GPU; full-document prompting; prompt caching |
 | **OpenAI Models** | `GET {LLM_BASE_URL}/models` | stdlib `urllib` | `/ready`, health, CLI | Reachability and model listing |
 | **Sarvam STT (Saaras)** | `POST https://api.sarvam.ai/speech-to-text` (multipart WAV, 16 kHz mono) | `requests` | Live voice STT, primary | Indic-first, code-mixed telephony, 8 kHz native, 49 domain keyterms |
-| **Sarvam TTS (Bulbul)** | `POST https://api.sarvam.ai/text-to-speech/stream` (JSON -> raw linear16 PCM) | `httpx` | Gujarati voice, greeting and answers | Kokoro has no Gujarati voice; Bulbul streams at 8 kHz, the Twilio carrier rate |
+| **Sarvam TTS (Bulbul)** | `POST https://api.sarvam.ai/text-to-speech/stream` (JSON -> raw linear16 PCM) | `httpx` | Gujarati and Hindi voices, greetings and answers | Kokoro has no Gujarati voice and mangles Hindi code-mixed acronyms; Bulbul streams at 8 kHz, the Twilio carrier rate |
 | **Twilio Programmable Voice** | REST `Calls.json` + Media Streams WebSocket (`/ws/twilio`, `/ws/twilio-outbound`) | `twilio==9.10.9`, FastAPI WebSocket | Inbound and outbound calls | Carrier, μ-law audio, DTMF/IVR, call control |
 | **Twilio WhatsApp** | `POST /twilio/whatsapp` webhook | FastAPI form handler | WhatsApp chat | Inbound text/documents; no model of its own |
 | **Salesforce middleware** | `http://127.0.0.1:8098` (local FastAPI) | `httpx` | CRM lead/conversation updates | Not an AI API; keeps CRM writes out of the call path |
@@ -71,8 +71,8 @@ embedding models.
 | **Sarvam Saaras v4** (`saaras:v4`) | Sarvam AI | Primary STT for live voice | Trained on Indian languages and code-mixed speech; accepts 8 kHz telephony; 49 keyterms keep Meridian/B.Tech/MBA names intact |
 | **AI4Bharat IndicConformer-600M** (int8 ONNX) | Local, via `onnx-asr` | STT fallback for **Hindi and Gujarati only** | Offline fallback when Sarvam is unavailable; ~138 MB per language; CPU int8 ~0.25 RTF |
 | **faster-whisper `small`** | Local CTranslate2 | Last-resort STT; broad language coverage | Historical fallback; multilingual `small` (not `small.en`); greedy decoding and VAD tuned for phone audio |
-| **Sarvam Bulbul v4 Flash** (`bulbul:v4-flash`) | Sarvam AI | Gujarati TTS (answers and greeting) | Kokoro has no Gujarati voice; Bulbul has Gujarati personas and streams raw 8 kHz linear16, matching Twilio |
-| **Kokoro ONNX** | Local, `kokoro-onnx==0.5.0` | English and Hindi TTS today; mapped voices for six more languages | Low-latency local TTS; 24 kHz; no per-character cloud cost |
+| **Sarvam Bulbul v4 Flash** (`bulbul:v4-flash`) | Sarvam AI | Gujarati and Hindi TTS (answers and greeting) | Kokoro has no Gujarati voice and mispronounces Hindi code-mixed Latin acronyms; Bulbul has per-language personas and streams raw 8 kHz linear16, matching Twilio |
+| **Kokoro ONNX** | Local, `kokoro-onnx==0.5.0` | English TTS; Hindi fallback when Sarvam is unavailable; mapped voices for six more languages | Low-latency local TTS; 24 kHz; no per-character cloud cost |
 | **AI4Bharat Indic-TTS v1** | Local service at `:8020` (optional) | Not active (`TTS_PROVIDER=sarvam`) | Covers 13 Indic languages, including four Sarvam does not (as, brx, mni, raj) and is the fallback for wider Indic coverage |
 | ~~Embedding model~~ | — | **None** | RAG was removed. The entire `content/meridian/meridian_knowledge_base.md` (~15.6 KB / ~3.2k tokens) is injected every turn |
 
@@ -92,8 +92,8 @@ retrieves chunks.
 
 | Surface | Entry point | STT | LLM | TTS | Language selection |
 |---|---|---|---|---|---|
-| **Inbound Twilio call** | `/twilio/voice` -> IVR -> `/ws/twilio` | Sarvam -> IndicConformer -> Whisper | OpenAI `gpt-6-luna` (`query_rag_stream`) | Sarvam gu / Kokoro en,hi | IVR digits 1=en, 2=hi, 3=gu; `?language=` pins a code |
-| **Outbound Twilio call** | `OutboundCallWorker` -> `/twilio/outbound-voice` -> `/ws/twilio-outbound` | same | same | same | `language` query on the TwiML URL; **the worker does not send one today**, so outbound defaults to `DEFAULT_LANGUAGE=en` |
+| **Inbound Twilio call** | `/twilio/voice` -> IVR -> `/ws/twilio` | Sarvam -> IndicConformer -> Whisper | OpenAI `gpt-6-luna` (`query_rag_stream`) | Sarvam gu,hi / Kokoro en | IVR digits 1=en, 2=hi, 3=gu; `?language=` pins a code |
+| **Outbound Twilio call** | `OutboundCallWorker` -> `/twilio/outbound-voice` -> `/ws/twilio-outbound` | same | same | same | `language` + `languageSource` on the TwiML URL: operator/campaign choices lock, the lead's stored language stays soft, empty uses `DEFAULT_LANGUAGE=en` |
 | **WhatsApp** | `POST /twilio/whatsapp` | none (voice notes rejected) | OpenAI via `run_rag_query_sync(mode="chat")` | none | Twilio `Language` form field, else `DEFAULT_LANGUAGE` |
 | **Streamlit chat** | `streamlit run app.py` (port 8501) | none | OpenAI via LangChain `ChatOpenAI` | none | Selector: English / Hindi / Gujarati only |
 | **CLI (legacy)** | `python admissions_bot.py` | none | OpenAI via `get_chat_model` | none | none; not a served surface |
@@ -217,18 +217,25 @@ Whisper detect and switch within the enabled foreign set; a pinned
 Important routing facts:
 
 - `TTS_PROVIDER=sarvam` routes **only** languages listed in
-  `SARVAM_TTS_LANGUAGES` (currently `gu`) to Bulbul. Every other language goes to
-  Kokoro.
+  `SARVAM_TTS_LANGUAGES` (currently `gu,hi`) to Bulbul. Every other language goes
+  to Kokoro.
 - `TTS_PROVIDER=indic_tts` is the only way to use Indic-TTS, and it applies to
   **all** Indic languages in `_INDIC_TTS_LANGUAGES`; Sarvam and Indic-TTS cannot
   currently be mixed per language without a code change.
-- Kokoro has **no Gujarati voice**. Before Sarvam was wired, Gujarati text was
-  read with an English voice, which is why `gu` is the one Sarvam TTS language.
-- `SARVAM_TTS_SPEAKER=pooja_gu_customer` currently overrides the per-language
-  speaker map for every Sarvam TTS language. `_DEFAULT_SPEAKERS` only has
-  personas for `gu`, `hi`, `en`; adding another Bulbul language needs a
-  compatible persona ID added to that map (or a per-language override, which
-  does not exist yet).
+- Kokoro has **no Gujarati voice**, and its `hf_alpha` Hindi voice mangles
+  code-mixed Latin acronyms ("MBA" -> "ambhee") and vocalises the phonemizer's
+  language-switch flags. Both `gu` and `hi` therefore use Bulbul. Hindi falls
+  back to Kokoro when `SARVAM_API_KEY` is unset; Gujarati has no local fallback.
+- Use `SARVAM_TTS_SPEAKERS` for per-language personas, e.g.
+  `gu:pooja_gu_customer,hi:aparna_hi_customer`. The legacy
+  `SARVAM_TTS_SPEAKER` applies only when its persona's language tag matches the
+  requested language; a Gujarati value is ignored for Hindi (with a warning).
+  `_DEFAULT_SPEAKERS` has personas for `gu`, `hi`, `en`.
+- Hindi synthesis text is normalised before every TTS path: Devanagari degree
+  abbreviations (`एमबीए`, `बी.टेक`, ...) are rewritten to their Latin forms
+  (`MBA`, `B.Tech`, ...), because Bulbul pronounces the Latin form
+  letter-by-letter. The prompt also requires Latin degree abbreviations; the
+  transcript and logs keep the original text.
 - Kokoro voices exist for the six foreign languages above and are used when the
   feature is enabled; `FOREIGN_LANGUAGES=` (empty) hides them from every
   selector and routes a pinned foreign code through the pre-foreign fallback.
@@ -259,7 +266,7 @@ greeting, and localized fixed fallback lines.
 | Code | Language | STT | TTS | Greeting | Noise/closing fallback | Selection |
 |---|---|---|---|---|---|---|
 | `en` | English | Sarvam / Whisper | Kokoro | English | English | IVR 1, pinned URL, Streamlit |
-| `hi` | Hindi | Sarvam / IndicConformer / Whisper | Kokoro | Hindi | Hindi | IVR 2, pinned URL, Streamlit |
+| `hi` | Hindi | Sarvam / IndicConformer / Whisper | **Sarvam Bulbul** (`aparna_hi_customer`) | Hindi | Hindi | IVR 2, pinned URL, Streamlit |
 | `gu` | Gujarati | Sarvam / IndicConformer / Whisper | **Sarvam Bulbul** | Gujarati | Gujarati | IVR 3, pinned URL, Streamlit |
 | `es` | Spanish | Whisper | Kokoro `ef_dora` | Spanish | Spanish | IVR 9->1, pinned URL, Streamlit, WhatsApp command |
 | `fr` | French | Whisper | Kokoro `ff_siwis` | French | French | IVR 9->2, pinned URL, Streamlit, WhatsApp command |
@@ -280,7 +287,7 @@ set; the six foreign codes use Whisper -> Kokoro and are described in 6.4.
 | Code | Language | Sarvam STT | Sarvam TTS map | Kokoro voice | Indic-TTS | Voice today | What is missing |
 |---|---|---|---|---|---|---|---|
 | `en` | English | yes | yes | yes | no | **yes** | — |
-| `hi` | Hindi | yes | yes | yes | yes | **yes** | — |
+| `hi` | Hindi | yes | yes (live) | yes (fallback) | yes | **yes** | — |
 | `gu` | Gujarati | yes | yes (live) | no | yes | **yes** | — |
 | `bn` | Bengali | yes | yes | no | yes | no | speaker persona + `SARVAM_TTS_LANGUAGES` + greeting/fallback/selection |
 | `kn` | Kannada | yes | yes | no | yes | no | same |

@@ -86,7 +86,7 @@ retention/redaction and obtain consent before using either outside a demo.
    └────────────┬─────────────┘
                 ▼
    ┌──────────────────────────┐
-   │ 8. Text-to-Speech        │  Sarvam Bulbul (gu) / Kokoro (en,hi) → PCM → µ-law
+   │ 8. Text-to-Speech        │  Sarvam Bulbul (gu,hi) / Kokoro (en) → PCM → µ-law
    └────────────┬─────────────┘
                 ▼
               audio back to the caller ──▶ (loop back to step 1, listening)
@@ -306,9 +306,10 @@ Two hard-won constraints are encoded here:
 - OpenAI reports token usage but not engine prefill/decode durations;
   `EngineCounters` carries the counts and `None` durations (never fabricated
   zeros). TTFT remains a wall-clock mark in `perf_trace`.
-- Gujarati output uses Sarvam Bulbul v4 Flash (`TTS_PROVIDER=sarvam`,
-  `SARVAM_TTS_LANGUAGES=gu`); English and Hindi stay on Kokoro. The isolated
-  AI4Bharat Indic-TTS service remains an optional local fallback
+- Gujarati and Hindi output use Sarvam Bulbul v4 Flash (`TTS_PROVIDER=sarvam`,
+  `SARVAM_TTS_LANGUAGES=gu,hi`); English stays on Kokoro. Hindi falls back to
+  Kokoro `hf_alpha` when `SARVAM_API_KEY` is unset. The isolated AI4Bharat
+  Indic-TTS service remains an optional local fallback
   (`TTS_PROVIDER=indic_tts`). Qwen3-TTS does not support any Indic language and
   is not used.
 
@@ -419,8 +420,8 @@ machine's GPU.
 | Sarvam Saaras v4 | Speech-to-text (primary in the demo) | Sarvam REST API | `app/stt_sarvam.py` |
 | `IndicConformer-600M` int8 ONNX (hi, gu) | Speech-to-text (offline fallback) | onnx-asr / onnxruntime CPU | `app/stt_indic.py` |
 | `faster-whisper` `small` | Speech-to-text (last resort) | CTranslate2 (CUDA int8 / CPU float32) | `app/voice_handler.py` |
-| Sarvam Bulbul v4 Flash | Gujarati text-to-speech, persona `pooja_gu_customer` | Sarvam HTTP streaming (8 kHz linear16) | `app/tts_sarvam.py` |
-| Kokoro `kokoro-v1.0.onnx` + `voices-v1.0.bin` | Text-to-speech for English/Hindi, voice `af_heart` | onnxruntime (CUDA → CPU fallback) | `app/voice_handler.py` |
+| Sarvam Bulbul v4 Flash | Gujarati and Hindi text-to-speech; per-language personas (`gu: pooja_gu_customer`, `hi: aparna_hi_customer`) | Sarvam HTTP streaming (8 kHz linear16) | `app/tts_sarvam.py` |
+| Kokoro `kokoro-v1.0.onnx` + `voices-v1.0.bin` | Text-to-speech for English, voice `af_heart`; Hindi fallback `hf_alpha` when Sarvam is unavailable | onnxruntime (CUDA → CPU fallback) | `app/voice_handler.py` |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (INT8 ONNX, 22 MiB) | Reranking retrieved chunks | onnxruntime | `enterprise-rag-core` |
 | `mlx-community/Qwen2.5-14B-Instruct-4bit` | **macOS Apple Silicon alternative** to Ollama | `mlx_lm.server` | `app/llm_backend.py` |
 | `nomic-ai/nomic-embed-text-v1.5` | macOS embedding alternative | transformers / sentence-transformers | `app/llm_backend.py` |

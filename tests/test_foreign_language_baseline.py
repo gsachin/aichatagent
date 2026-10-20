@@ -23,10 +23,13 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# Exact strings as of the baseline (commit d674b3e, 2026-10-18).
+# Exact strings as of the baseline (commit d674b3e, 2026-10-18), except hi:
+# the 2026-10-20 Hindi voice fix adds the explicit "degree abbreviations in
+# Latin letters, never Devanagari transliterations" rule. That change is
+# deliberate; the English and Gujarati instructions remain byte-identical.
 _INSTRUCTION_HASHES = {
     "en": "0fb5e8a6a794a5228106d3f1bea34151504ce92740ca3e9a8d0c05126aab7fe7",
-    "hi": "34d98b51335e3eebe6ced0ed97f8e36be43740dfa413e0d2df6946fa92320f78",
+    "hi": "83ec3a118ac191443d7609d95b4490d9fc3c21670c4af9c7ee9a6227faed27b1",
     "gu": "654fd81994d0d073dfd66b3eae3b646c14aec365a7f32f1095f971ba1a30f1c6",
 }
 

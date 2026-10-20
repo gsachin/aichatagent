@@ -238,9 +238,13 @@ class Settings:
     # ── Text-to-speech (Kokoro / Sarvam Bulbul) ─────────────────────
     # kokoro | sarvam | indic_tts. `sarvam` routes only the languages in
     # SARVAM_TTS_LANGUAGES; every other language stays on Kokoro. The demo uses
-    # it for Gujarati, which Kokoro does not have a voice for.
+    # it for Gujarati (Kokoro has no Gujarati voice) and Hindi (Kokoro hf_alpha
+    # mangles English acronyms such as MBA). Hindi falls back to Kokoro when
+    # SARVAM_API_KEY is unset; Gujarati has no local fallback.
     SARVAM_TTS_LANGUAGES: str = field(
-        default_factory=lambda: _env("SARVAM_TTS_LANGUAGES", "gu").strip().lower()
+        default_factory=lambda: _env(
+            "SARVAM_TTS_LANGUAGES", "gu,hi"
+        ).strip().lower()
     )
     SARVAM_TTS_MODEL: str = field(
         default_factory=lambda: _env("SARVAM_TTS_MODEL", "bulbul:v4-flash")
@@ -252,10 +256,18 @@ class Settings:
     )
     # Persona ID, not a short v3 name. Gujarati options:
     #   pooja_gu_customer, pooja_gu_conversational, bhavik_gu_conversation.
+    # This is a LEGACY single-language override: a persona whose language tag
+    # does not match the requested language is ignored (with a warning), so a
+    # Gujarati value here cannot silently become Hindi's voice. Prefer the
+    # per-language map below for a multi-language deployment.
     SARVAM_TTS_SPEAKER: str = field(
-        default_factory=lambda: _env(
-            "SARVAM_TTS_SPEAKER", "pooja_gu_customer"
-        ).strip()
+        default_factory=lambda: _env("SARVAM_TTS_SPEAKER", "").strip()
+    )
+    # Per-language persona overrides, e.g.
+    # "gu:pooja_gu_customer,hi:aparna_hi_customer". Takes precedence over
+    # SARVAM_TTS_SPEAKER for the codes it names.
+    SARVAM_TTS_SPEAKERS: str = field(
+        default_factory=lambda: _env("SARVAM_TTS_SPEAKERS", "").strip()
     )
     SARVAM_TTS_PACE: float = field(
         default_factory=lambda: _env_float("SARVAM_TTS_PACE", 1.1)

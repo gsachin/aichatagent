@@ -6,8 +6,10 @@ Flash carries Gujarati personas and returns raw 8 kHz linear16 PCM from
 `/text-to-speech/stream`, which is the carrier's rate — no resampling between
 Sarvam and Twilio.
 
-Only the languages listed in `SARVAM_TTS_LANGUAGES` route here; the demo sets
-`gu`. English and Hindi stay on Kokoro until the operator adds them.
+Only the languages listed in `SARVAM_TTS_LANGUAGES` route here. The demo sets
+`gu,hi`: Gujarati has no Kokoro voice, and Hindi is on Bulbul because Kokoro's
+`hf_alpha` mangles code-mixed Latin acronyms ("MBA" -> "ambhee") and vocalises
+the phonemizer's language-switch flags. English stays on Kokoro.
 
 No network call happens at import time. A missing key raises `TTSError`; the
 voice handler logs it and falls back through the existing TTS failure path.
@@ -16,6 +18,7 @@ voice handler logs it and falls back through the existing TTS failure path.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import AsyncIterator
@@ -40,8 +43,9 @@ class TTSError(RuntimeError):
     """Sarvam TTS failed; the caller decides whether to degrade or fall back."""
 
 
-#: Bulbul v4 Flash persona IDs. The demo routes Gujarati only; the Hindi entry
-#: is here so adding "hi" to SARVAM_TTS_LANGUAGES does not require a code edit.
+#: Bulbul v4 Flash persona IDs, one per supported language. The map is used
+#: when no per-language override is configured, and it is what makes "add hi
+#: to SARVAM_TTS_LANGUAGES" a configuration change rather than a code edit.
 _DEFAULT_SPEAKERS = {
     "gu": "pooja_gu_customer",
     "hi": "aparna_hi_customer",
@@ -71,13 +75,59 @@ def supported(language: str | None) -> bool:
     return (language or "").strip().lower() in _LANG_TO_BCP
 
 
+#: Persona IDs carry their language: pooja_gu_customer, aparna_hi_customer,
+#: simran_en_customer. Used to reject a global override that belongs to a
+#: different language -- the trap that would give Hindi a Gujarati voice.
+_PERSONA_LANGUAGE = re.compile(r"_([a-z]{2})_")
+
+
+def _persona_language(persona: str) -> str:
+    """The language tag inside a Bulbul persona ID, or "" if it has none."""
+    match = _PERSONA_LANGUAGE.search((persona or "").strip().lower())
+    return match.group(1) if match else ""
+
+
+def _configured_speakers() -> dict[str, str]:
+    """Parse ``SARVAM_TTS_SPEAKERS`` ("gu:pooja_gu_customer,hi:...")."""
+    mapping: dict[str, str] = {}
+    for part in (settings.SARVAM_TTS_SPEAKERS or "").split(","):
+        code, sep, persona = part.partition(":")
+        code, persona = code.strip().lower(), persona.strip()
+        if sep and code and persona:
+            mapping[code] = persona
+    return mapping
+
+
 def speaker_for(language: str | None) -> str:
+    """The Bulbul persona for a language.
+
+    Resolution order:
+      1. ``SARVAM_TTS_SPEAKERS`` ("hi:aparna_hi_customer,gu:..."), the
+         per-language map that a multi-language deployment should use;
+      2. ``SARVAM_TTS_SPEAKER``, but only when its persona belongs to the
+         requested language (legacy single-language override);
+      3. ``_DEFAULT_SPEAKERS``.
+
+    Step 2 is the fix for a live trap: the demo sets
+    ``SARVAM_TTS_SPEAKER=pooja_gu_customer``. Adding Hindi to
+    ``SARVAM_TTS_LANGUAGES`` without this guard would have given Hindi a
+    Gujarati voice -- the caller would hear Gujarati-accented Hindi.
+    """
+    code = (language or "").strip().lower()
+    mapped = _configured_speakers().get(code)
+    if mapped:
+        return mapped
+
     configured = (settings.SARVAM_TTS_SPEAKER or "").strip()
     if configured:
-        return configured
-    return _DEFAULT_SPEAKERS.get(
-        (language or "").strip().lower(), "pooja_gu_customer"
-    )
+        persona_language = _persona_language(configured)
+        if not persona_language or persona_language == code:
+            return configured
+        logger.warning(
+            "SARVAM_TTS_SPEAKER=%r belongs to %s, not %s; using the %s persona",
+            configured, persona_language, code, code,
+        )
+    return _DEFAULT_SPEAKERS.get(code, "pooja_gu_customer")
 
 
 def _payload(text: str, language: str, speaker: str | None,
@@ -281,6 +331,7 @@ def health() -> dict:
             if part.strip()
         ),
         "speaker": settings.SARVAM_TTS_SPEAKER or dict(_DEFAULT_SPEAKERS),
+        "speakers": _configured_speakers() or dict(_DEFAULT_SPEAKERS),
         "sample_rate": settings.SARVAM_TTS_SAMPLE_RATE,
         "endpoint": settings.SARVAM_TTS_URL,
     }

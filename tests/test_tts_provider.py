@@ -60,6 +60,133 @@ def test_sarvam_tts_routing(monkeypatch):
     assert vh._use_sarvam_tts("hi") is False
 
 
+def test_hindi_routes_to_sarvam_when_listed(monkeypatch, override_settings):
+    """Hindi on Bulbul is the quality fix: Kokoro hf_alpha mangles "MBA"."""
+    import app.voice_handler as vh
+
+    monkeypatch.setattr(vh, "TTS_PROVIDER", "sarvam")
+    monkeypatch.setattr(vh, "_SARVAM_TTS_LANGUAGES", frozenset({"gu", "hi"}))
+    override_settings(SARVAM_API_KEY="test-key")
+    assert vh._use_sarvam_tts("hi") is True
+
+
+def test_hindi_without_a_key_falls_back_to_kokoro(monkeypatch, override_settings):
+    """Hindi has a local voice; a keyless deployment must still answer.
+
+    Gujarati deliberately does not fall back: Kokoro has no Gujarati voice, so
+    the adapter's failure path is better than an English voice reading it.
+    """
+    import app.voice_handler as vh
+
+    monkeypatch.setattr(vh, "TTS_PROVIDER", "sarvam")
+    monkeypatch.setattr(vh, "_SARVAM_TTS_LANGUAGES", frozenset({"gu", "hi"}))
+    monkeypatch.setattr(vh, "_SARVAM_KEY_WARNED", True)
+    override_settings(SARVAM_API_KEY="")
+    assert vh._use_sarvam_tts("hi") is False
+    assert vh._use_sarvam_tts("gu") is True
+
+
+def test_hindi_speaker_is_the_hindi_persona(override_settings):
+    import app.tts_sarvam as tts
+
+    override_settings(SARVAM_TTS_SPEAKER="", SARVAM_TTS_SPEAKERS="")
+    assert tts.speaker_for("hi") == "aparna_hi_customer"
+    assert tts.speaker_for("gu") == "pooja_gu_customer"
+
+
+def test_a_gujarati_override_does_not_become_hindi_voice(override_settings):
+    """The live .env used to set SARVAM_TTS_SPEAKER=pooja_gu_customer.
+
+    Enabling Hindi without a language check would have made it speak in the
+    Gujarati persona -- the exact opposite of the quality fix.
+    """
+    import app.tts_sarvam as tts
+
+    override_settings(SARVAM_TTS_SPEAKER="pooja_gu_customer",
+                      SARVAM_TTS_SPEAKERS="")
+    assert tts.speaker_for("hi") == "aparna_hi_customer"
+    assert tts.speaker_for("gu") == "pooja_gu_customer"
+
+
+def test_per_language_speaker_map_wins(override_settings):
+    import app.tts_sarvam as tts
+
+    override_settings(
+        SARVAM_TTS_SPEAKER="pooja_gu_customer",
+        SARVAM_TTS_SPEAKERS=(
+            "gu:pooja_gu_conversational,hi:aparna_hi_customer"
+        ),
+    )
+    assert tts.speaker_for("gu") == "pooja_gu_conversational"
+    assert tts.speaker_for("hi") == "aparna_hi_customer"
+
+
+def test_hindi_tts_text_normalises_devanagari_acronyms():
+    """The model occasionally writes एमबीए; Bulbul reads that as "ambhee".
+
+    The Latin form is pronounced letter-by-letter by Bulbul, so the synthesis
+    input is canonicalised without touching the transcript.
+    """
+    from app.voice_handler import _tts_text_for
+
+    assert "MBA" in _tts_text_for("मुझे एमबीए करना है", "hi")
+    assert "B.Tech" in _tts_text_for("बी.टेक चार साल का है", "hi")
+    assert "B.Sc" in _tts_text_for("बी.एससी", "hi")
+    assert _tts_text_for("MBA", "hi") == "MBA"
+    assert _tts_text_for("एमबीए", "en") == "एमबीए"
+
+
+def test_hindi_sarvam_receives_the_normalised_text(monkeypatch, override_settings):
+    import app.tts_sarvam as tts
+    import app.voice_handler as vh
+
+    captured = {}
+
+    async def fake_stream(text, language, *, speaker=None, pace=None):
+        captured.update(text=text, language=language, speaker=speaker)
+        yield np.full(80, 0.1, dtype=np.float32)
+
+    monkeypatch.setattr(tts, "astream", fake_stream)
+    monkeypatch.setattr(vh, "TTS_PROVIDER", "sarvam")
+    monkeypatch.setattr(vh, "_SARVAM_TTS_LANGUAGES", frozenset({"gu", "hi"}))
+    override_settings(SARVAM_API_KEY="test-key", SARVAM_TTS_PACE=1.1,
+                      SARVAM_TTS_SPEAKER="", SARVAM_TTS_SPEAKERS="")
+
+    session = vh.VoiceCallSession(language="hi")
+
+    async def collect():
+        return [chunk async for chunk in
+                session.synthesise_stream("मुझे एमबीए करना है।")]
+
+    asyncio.run(collect())
+    assert captured["text"] == "मुझे MBA करना है।"
+    assert captured["language"] == "hi"
+    assert captured["speaker"] == "aparna_hi_customer"
+
+
+def test_kokoro_hindi_strips_language_switch_flags():
+    """Kokoro's fallback path must not vocalise (en)/(hi) as "in"/"hi"."""
+    import app.voice_handler as vh
+
+    class _Tokenizer:
+        def phonemize(self, text, lang):
+            assert lang == "hi"
+            return "(en)ˈɛm bˈi ˈeɪ(hi) kˈʌɾnˌaː"
+
+    class _FakeEngine:
+        tokenizer = _Tokenizer()
+
+        def create(self, text, **kwargs):
+            self.seen = (text, kwargs)
+            return np.zeros(80, dtype=np.float32), 24000
+
+    engine = _FakeEngine()
+    vh._kokoro_render(engine, "MBA करना", "hi", "hf_alpha", 1.0)
+    phonemes, kwargs = engine.seen
+    assert "(" not in phonemes and ")" not in phonemes
+    assert kwargs["is_phonemes"] is True
+
+
 def test_greeting_uses_sarvam_for_gujarati(monkeypatch):
     import app.tts_sarvam as tts
     import app.voice_handler as vh

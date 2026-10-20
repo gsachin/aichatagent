@@ -322,16 +322,52 @@ _TTS_READINGS = {
     ),
 }
 
+#: Hindi TTS rewrites. The LLM is instructed to keep degree abbreviations in
+#: Latin script, but it occasionally emits the Devanagari transliteration
+#: ("एमबीए", "बी.टेक"). Bulbul reads the joined Devanagari form as a word
+#: ("ambhee"); the Latin form is pronounced letter-by-letter ("em-bee-ay").
+#: This map makes the synthesis input deterministic regardless of the model.
+#: Longest forms first: B.Sc before B.A, M.Sc before M.A.
+_INDIC_TTS_REWRITES = {
+    "hi": (
+        (r"एम\.?\s?बी\.?\s?ए", "MBA"),
+        (r"बी\.?\s?टेक", "B.Tech"),
+        (r"एम\.?\s?टेक", "M.Tech"),
+        (r"बी\.?\s?बी\.?\s?ए", "BBA"),
+        (r"बी\.?\s?सी\.?\s?ए", "BCA"),
+        (r"बी\.?\s?कॉम", "B.Com"),
+        (r"एम\.?\s?एस\.?\s?सी", "M.Sc"),
+        (r"एम\.?\s?सी\.?\s?ए", "MCA"),
+        (r"पी\.?\s?एच\.?\s?डी", "Ph.D"),
+        (r"बी\.?\s?एस\.?\s?सी", "B.Sc"),
+        (r"एम\.?\s?ए", "M.A"),
+        (r"बी\.?\s?ए", "B.A"),
+    ),
+}
+
 _MISAKI_G2P: dict[str, object] = {}
 _MISAKI_LOCK = threading.Lock()
 _MISAKI_WARNED = False
 
 
 def _tts_text_for(text: str, language: str | None) -> str:
-    """Replace Latin tokens whose reading the ja/zh G2P cannot produce."""
+    """Normalise text the synthesiser would otherwise mispronounce.
+
+    Two kinds of rewrite, both synthesiser-only (the transcript, the logs and
+    the grounding boundary keep the original):
+
+    * ja/zh: Latin tokens their G2P cannot read at all (the tokenizer would
+      drop them);
+    * hi: Devanagari degree abbreviations, which Bulbul reads as a word
+      ("ambhee") when they should be Latin letters ("MBA").
+    """
     code = normalize_language_code(language)
-    for pattern, replacement in _TTS_READINGS.get(code, ()):
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    for table in (
+        _TTS_READINGS.get(code, ()),
+        _INDIC_TTS_REWRITES.get(code, ()),
+    ):
+        for pattern, replacement in table:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text
 
 
@@ -376,6 +412,28 @@ def _kokoro_phonemes(text: str, language: str | None) -> str:
         return ""
 
 
+def _kokoro_hindi_phonemes(engine, text: str) -> str:
+    """Hindi phonemes with the phonemizer's (en)/(hi) switch flags removed.
+
+    kokoro-onnx 0.5.0 keeps the flags that phonemizer inserts around a
+    language switch. The hf_alpha model does not have a token for them, so it
+    vocalises them: on a live Hindi answer "MBA" became "इन आम भी एही" -- the
+    ``(en)``/``(hi)`` flags read as "in"/"hi". The phonemes themselves are
+    correct; only the flags are noise. Removing them is the fallback fix for
+    Kokoro; Bulbul is Hindi's primary provider precisely because it does not
+    need this trick.
+    """
+    tokenizer = getattr(engine, "tokenizer", None)
+    if tokenizer is None:
+        return ""
+    try:
+        phonemes = tokenizer.phonemize(text, "hi")
+    except Exception:                                  # noqa: BLE001
+        logger.exception("Kokoro Hindi phonemization failed; using the text path")
+        return ""
+    return re.sub(r"\([a-z-]+\)", "", phonemes).strip()
+
+
 def warmup_foreign_g2p() -> None:
     """Load the misaki dictionaries for enabled ja/zh at boot.
 
@@ -394,6 +452,12 @@ def warmup_foreign_g2p() -> None:
 def _kokoro_render(engine, text: str, language: str | None,
                    voice: str, speed: float):
     """Batch Kokoro synthesis, using misaki phonemes for ja/zh."""
+    if normalize_language_code(language) == "hi":
+        phonemes = _kokoro_hindi_phonemes(engine, text)
+        if phonemes:
+            return engine.create(
+                phonemes, voice=voice, speed=speed, is_phonemes=True
+            )
     phonemes = _kokoro_phonemes(text, language)
     if phonemes:
         return engine.create(
@@ -413,6 +477,14 @@ async def _kokoro_stream(engine, text: str, language: str | None,
     use, so it runs in a worker thread; the event loop keeps serving other
     calls while it runs.
     """
+    if normalize_language_code(language) == "hi":
+        phonemes = await asyncio.to_thread(
+            _kokoro_hindi_phonemes, engine, text
+        )
+        if phonemes:
+            return engine.create_stream(
+                phonemes, voice=voice, speed=speed, is_phonemes=True
+            )
     phonemes = await asyncio.to_thread(_kokoro_phonemes, text, language)
     if phonemes:
         return engine.create_stream(
@@ -441,17 +513,37 @@ _SARVAM_TTS_LANGUAGES = frozenset(
 )
 
 
+_SARVAM_KEY_WARNED = False
+
+
 def _use_sarvam_tts(language: str | None) -> bool:
     """Does this turn belong to Sarvam Bulbul?
 
-    The key check is deliberately not here: a missing key should flow through
-    the adapter as a TTS failure and the fixed-response path, not silently
-    select the English Kokoro voice for Gujarati text.
+    A missing key flows through the adapter as a TTS failure and the
+    fixed-response path for Gujarati, which has no Kokoro voice. Hindi is the
+    exception: Kokoro has an hf_alpha voice, so a keyless deployment falls back
+    to it (lower quality) rather than losing every Hindi answer.
     """
     code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
     if code in DEFAULT_FOREIGN_LANGUAGES:
         return False
-    return TTS_PROVIDER == "sarvam" and code in _SARVAM_TTS_LANGUAGES
+    if TTS_PROVIDER != "sarvam" or code not in _SARVAM_TTS_LANGUAGES:
+        return False
+    if not (getattr(settings, "SARVAM_API_KEY", "") or "").strip():
+        if code != "hi":
+            # Gujarati has no local voice; let the adapter raise so the caller
+            # hears the fixed response instead of an English voice reading
+            # Gujarati.
+            return True
+        global _SARVAM_KEY_WARNED
+        if not _SARVAM_KEY_WARNED:
+            _SARVAM_KEY_WARNED = True
+            logger.warning(
+                "SARVAM_API_KEY is empty; Hindi falls back to Kokoro hf_alpha "
+                "(lower quality). Set the key to use Bulbul."
+            )
+        return False
+    return True
 
 #: BUG-07 boundary (`app/voice_grounding.py`): a spoken number or named thing
 #: must be traceable to what retrieval returned, or to something the caller
@@ -753,13 +845,14 @@ def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
     """TTS → µ-law chunker for the fixed opening script.
 
     The greeting is spoken through the same provider as the answer: Gujarati
-    via Sarvam Bulbul (8 kHz linear16) and other languages via Kokoro. Passing
-    the call language here is what keeps a Gujarati call from opening in an
-    English voice.
+    and Hindi via Sarvam Bulbul (8 kHz linear16), other languages via Kokoro.
+    Passing the call language here is what keeps an Indian-language call from
+    opening in an English voice.
 
     Returns a list of µ-law byte chunks ready for Twilio Media Streams.
     """
     code = normalize_language_code(language or settings.DEFAULT_LANGUAGE or "en")
+    text = _tts_text_for(text, code)
     if _use_sarvam_tts(code):
         from app import tts_sarvam
 
@@ -3170,14 +3263,19 @@ class VoiceCallSession:
         """
         self.log_event("TTS_STARTED", chars=len(text))
         try:
+            language = (
+                getattr(self, "language", "") or settings.DEFAULT_LANGUAGE
+            ).strip().lower()
+            # Rewrite before the provider branch and before the cache key:
+            # every path (Kokoro, Sarvam, Indic-TTS) then sees the same
+            # synthesis text, and a cache entry cannot pair the wrong audio
+            # with a later request.
             tts_text = text[:500] if len(text) > 500 else text
+            tts_text = _tts_text_for(tts_text, language)
 
             # US-012: shared (DG-06 default) or per-call (the pre-decided
             # fallback). Chosen by configuration only -- AC-4 requires the
             # revert to be a setting, never a code change.
-            language = (
-                getattr(self, "language", "") or settings.DEFAULT_LANGUAGE
-            ).strip().lower()
             if _use_sarvam_tts(language):
                 provider = "sarvam_tts"
             elif _use_indic_tts(language):
@@ -3350,10 +3448,11 @@ class VoiceCallSession:
         beginning, and the turn is logged degraded, never silent).
         """
         self.log_event("TTS_STARTED", chars=len(text))
-        tts_text = text[:500] if len(text) > 500 else text
         language = (
             getattr(self, "language", "") or settings.DEFAULT_LANGUAGE
         ).strip().lower()
+        tts_text = text[:500] if len(text) > 500 else text
+        tts_text = _tts_text_for(tts_text, language)
         if _use_sarvam_tts(language):
             provider = "sarvam_tts"
         elif _use_indic_tts(language):

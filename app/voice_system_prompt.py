@@ -929,6 +929,12 @@ def language_instruction(language: str | None) -> str:
             "'मैं कहूँगी'); never use masculine forms such as 'सकता हूँ', "
             "'करूँगा', or 'कहूँगा'."
         )
+        gender += (
+            " Write degree and programme abbreviations exactly in Latin "
+            "letters — MBA, B.Tech, BBA, BCA, B.Com, M.Sc, M.Tech, MCA, "
+            "Ph.D — never as Devanagari transliterations such as एमबीए or "
+            "बी.टेक; the voice pronounces the Latin form correctly."
+        )
     script_note = _FOREIGN_SCRIPT_NOTES.get(code, "")
     note = f" {script_note}" if script_note else ""
     return (
