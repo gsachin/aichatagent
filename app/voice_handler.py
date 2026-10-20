@@ -904,6 +904,49 @@ def generate_ulaw_greeting(text: str, language: str = "") -> list[bytes]:
     return chunks
 
 
+# ── Short acknowledgment (the LLM's first-token silence) ──────────────
+#: Pre-rendered µ-law frames per core language. The turn runner plays one only
+#: if the first answer audio has not arrived within ACK_DELAY_S; it fills the
+#: pause without changing the answer, the transcript, or the voice.
+_ACK_CACHE: dict[str, list[bytes]] = {}
+_ACK_LANGUAGES = ("en", "hi", "gu")
+
+
+def acknowledgment_frames(language: str | None) -> list[bytes]:
+    """The cached acknowledgment for a call language, or [] when none."""
+    code = normalize_language_code(language or settings.DEFAULT_LANGUAGE)
+    return _ACK_CACHE.get(code, [])
+
+
+def warm_acknowledgments(
+    languages: tuple[str, ...] = _ACK_LANGUAGES,
+) -> None:
+    """Pre-render the short acknowledgment in each core voice.
+
+    Runs in the boot warm-up thread, never on a call. A missing/failed ack is
+    not fatal: the turn simply has no filler and the answer starts when ready.
+    """
+    from app.voice_system_prompt import call_acknowledgment
+
+    for code in languages:
+        if _ACK_CACHE.get(code):
+            continue
+        text = call_acknowledgment(code)
+        if not text:
+            continue
+        try:
+            frames = generate_ulaw_greeting(text, language=code)
+        except Exception:                              # noqa: BLE001
+            logger.exception("Acknowledgment warmup failed for %s", code)
+            continue
+        if frames:
+            _ACK_CACHE[code] = frames
+            logger.info(
+                "Acknowledgment pre-warmed for %s (%d frames)",
+                code, len(frames),
+            )
+
+
 # ── VoiceCallSession — runs the full AI pipeline per utterance ────────
 
 _CLARIFICATION_RE = re.compile(

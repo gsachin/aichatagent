@@ -883,6 +883,23 @@ def call_greeting(language: str | None, direction: str = "inbound") -> str:
     return template.format(agent_name=AGENT_NAME, company_name=COMPANY_NAME)
 
 
+#: A short "one moment" in the caller's language. It is pre-rendered in the
+#: same voice as the answers and played only when the first answer audio has
+#: not arrived within the acknowledgment delay; it fills the LLM's first-token
+#: silence, and is never part of the transcript or the answer.
+_ACKNOWLEDGMENT = {
+    "en": "Yes, one moment.",
+    "hi": "जी, एक क्षण।",
+    "gu": "હા, એક ક્ષણ.",
+}
+
+
+def call_acknowledgment(language: str | None) -> str:
+    """The short acknowledgment for this call language ("" if none)."""
+    code = normalize_language_code(language or "en")
+    return _ACKNOWLEDGMENT.get(code, "")
+
+
 #: Script/register notes for the six non-Indian languages. They are appended
 #: only for those codes; the English/Hindi/Gujarati instruction strings stay
 #: byte-identical (tests hash them).

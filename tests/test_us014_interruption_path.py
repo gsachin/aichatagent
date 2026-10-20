@@ -481,6 +481,49 @@ async def test_a_barge_in_stops_the_tts_stream_not_just_the_sink(monkeypatch):
     assert chunks, "the frames already produced are still returned"
 
 
+@pytest.mark.anyio
+async def test_the_short_acknowledgment_fills_a_slow_first_token(monkeypatch):
+    """A 0.9 s LLM turn hears the pre-rendered ack before the answer."""
+    session = VoiceCallSession()
+
+    async def fake_process(chunk_sink=None):
+        session.begin_turn()
+        await asyncio.sleep(0.9)
+        return [CHUNK] * 10, "Caller: hi\nAssistant: ok", False
+
+    monkeypatch.setattr(session, "process_utterance", fake_process)
+    monkeypatch.setattr(vh, "acknowledgment_frames", lambda language: [CHUNK])
+    ws = FakeWS(session=session)
+    turn = main._VoiceTurn(websocket=ws, session=session, label="test",
+                           stream_sid="MZ1", call_sid="CA1")
+
+    await main._run_voice_turn(turn)
+
+    media = [m for m in ws.sent if m.get("event") == "media"]
+    assert len(media) == 11, "the ack must precede the 10 answer frames"
+
+
+@pytest.mark.anyio
+async def test_a_fast_answer_skips_the_acknowledgment(monkeypatch):
+    """An answer that beats the delay must not be delayed by the ack."""
+    session = VoiceCallSession()
+
+    async def fake_process(chunk_sink=None):
+        session.begin_turn()
+        return [CHUNK] * 10, "Caller: hi\nAssistant: ok", False
+
+    monkeypatch.setattr(session, "process_utterance", fake_process)
+    monkeypatch.setattr(vh, "acknowledgment_frames", lambda language: [CHUNK])
+    ws = FakeWS(session=session)
+    turn = main._VoiceTurn(websocket=ws, session=session, label="test",
+                           stream_sid="MZ1", call_sid="CA1")
+
+    await main._run_voice_turn(turn)
+
+    media = [m for m in ws.sent if m.get("event") == "media"]
+    assert len(media) == 10, "the fast answer alone must reach the carrier"
+
+
 # ── cancellation state ──────────────────────────────────────────────────────
 
 @pytest.mark.anyio

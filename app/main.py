@@ -468,6 +468,16 @@ async def lifespan(app_instance):
             except Exception as resample_exc:           # noqa: BLE001
                 logger.warning(f"Audio resampler warmup skipped: {resample_exc}")
 
+            # Pre-render the short "one moment" phrase in each core voice, so
+            # the first caller's pause is filled without a TTS round-trip.
+            try:
+                from app.voice_handler import warm_acknowledgments
+
+                warm_acknowledgments()
+                logger.info("Acknowledgments pre-warmed")
+            except Exception as ack_exc:                # noqa: BLE001
+                logger.warning(f"Acknowledgment warmup skipped: {ack_exc}")
+
         await _asyncio.to_thread(_warmup)
     except Exception as e:
         logger.warning(f"Warmup skipped: {e}")
@@ -1091,15 +1101,56 @@ async def _await_playout(session) -> int:
     return session.playout_remaining()
 
 
+#: How long a turn waits for the first answer audio before playing the
+#: pre-rendered short acknowledgment. The LLM's first token is p50 ~1.4 s; the
+#: ack fills the silence without delaying an answer that is already ready.
+_ACK_DELAY_S = 0.7
+
+
 async def _run_voice_turn(t: _VoiceTurn) -> None:
     """One caller turn: pipeline, playback, transcript, hangup. Never raises."""
     session = t.session
     sent = {"n": 0}
     marked = {"first": False}
+    # One writer at a time: the short acknowledgment and the answer's streamed
+    # chunks must not interleave in the carrier's buffer.
+    write_lock = _asyncio.Lock()
 
     async def _send_chunks(frames: list[bytes]) -> None:
         """The TTS-stream sink and the batch send loop — see `_write_frames`."""
-        await _write_frames(t, frames, sent, marked)
+        async with write_lock:
+            await _write_frames(t, frames, sent, marked)
+
+    # The LLM's first token is the remaining pause the caller hears. If the
+    # answer has not started by _ACK_DELAY_S, play a short phrase in the same
+    # pre-rendered voice. It never enters the transcript or the answer.
+    ack_task = None
+    try:
+        from app.voice_handler import acknowledgment_frames
+
+        ack_frames = acknowledgment_frames(session.language)
+    except Exception:                                  # noqa: BLE001
+        ack_frames = []
+    if ack_frames:
+        async def _speak_ack() -> None:
+            await _asyncio.sleep(_ACK_DELAY_S)
+            if sent["n"] or session.cancel_requested():
+                return          # the answer (or the caller) already took the floor
+            session.log_event(
+                "ACKNOWLEDGMENT_PLAYED", frames=len(ack_frames)
+            )
+            if getattr(session, "_trace", None) is not None:
+                session._trace.note(acknowledgment=True)
+            # The ack is outside `tts_chunks`: it must NOT advance the turn's
+            # `sent` counter, or `tts_chunks[sent["n"]:]` drops answer frames.
+            # Its own counters still drive the gate, the first-audio mark and
+            # the playout queue.
+            async with write_lock:
+                await _write_frames(
+                    t, ack_frames, {"n": 0}, {"first": False}
+                )
+
+        ack_task = _asyncio.create_task(_speak_ack())
 
     # The gate is armed by `_write_frames` at the first frame that actually
     # reaches the carrier. Arming it here, before STT/LLM/TTS, made caller
@@ -1206,6 +1257,13 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
             session.log_event("AGENT_SPEECH_STOPPED", reason="complete",
                               played_chunks=sent["n"])
     finally:
+        # A fast answer (or a failure) must silence a still-sleeping ack task.
+        if ack_task is not None and not ack_task.done():
+            ack_task.cancel()
+            try:
+                await ack_task
+            except _asyncio.CancelledError:
+                pass
         # Every exit path, or the gate would keep rejecting the caller's
         # ordinary speech as echo for the rest of the call.
         session.end_turn()
