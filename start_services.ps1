@@ -590,6 +590,20 @@ if ((Test-Path $ERCGit) -and $DockerCli -and $dockerRunning) {
     }
 }
 
+# ==== Step 4c: Pre-rendered call assets ====================================
+# The greeting WAVs are generated, not committed (`app/static/audio/` is
+# gitignored). A fresh clone or deploy that skips this step silently falls back
+# to live synthesis on every call -- the greeting latency win is lost with no
+# error anywhere. `--ensure` is a no-op when every asset is present and
+# current, so a restart pays nothing; it renders only what is missing or stale.
+Write-Step "Step 4c: Pre-rendered call assets"
+& $PythonExe (Join-Path $ProjectRoot "scripts\build_call_assets.py") --ensure
+if ($LASTEXITCODE -eq 0) {
+    Write-OK "call assets ready (greetings asset-first on the next call)"
+} else {
+    Write-Warn "call asset build exited $LASTEXITCODE - missing greetings will be synthesised live"
+}
+
 # ==== Step 5: Start FastAPI backend ========================================
 Write-Step "Step 5: Starting FastAPI backend (port $FastAPIPort)"
 

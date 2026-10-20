@@ -120,8 +120,33 @@ async def create_lead(
             return None
 
 
+#: The language the lead last used, from the conversations the chat/voice
+#: flows already write. It is read at outbound-dispatch time because the lead
+#: table has no language of its own: the same person can speak Hindi in one
+#: conversation and Gujarati in the next, and the newest non-empty value is
+#: the best available answer for which language to open the call in.
+_LATEST_CONVERSATION_LANGUAGE_SQL = (
+    "COALESCE(("
+    "SELECT c.language FROM conversations c "
+    "WHERE c.lead_id = l.id AND c.language <> '' "
+    "ORDER BY c.created_at DESC LIMIT 1"
+    "), '')"
+)
+
+
+def _row_to_lead_with_language(row) -> dict:
+    """Map a lead row whose 14th column is the latest conversation language.
+
+    ``_row_to_lead_dict`` maps exactly the original 13 columns; keep it that
+    way so its sentiment-column branch (13-16) stays valid for other callers.
+    """
+    lead = _row_to_lead_dict(row[:13])
+    lead["language"] = (row[13] or "") if len(row) > 13 else ""
+    return lead
+
+
 async def get_lead(lead_id: str) -> dict | None:
-    """Get a single lead by ID."""
+    """Get a single lead by ID, with the language of its latest conversation."""
     with _get_db() as conn:
         if conn is None:
             return None
@@ -129,21 +154,22 @@ async def get_lead(lead_id: str) -> dict | None:
             conn.autocommit = True
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, phone_number, name, email, program_interest, "
-                    "status, source, notes, call_attempts, last_called_at, "
-                    "next_follow_up, created_at, updated_at "
-                    "FROM leads WHERE id = %s",
+                    "SELECT l.id, l.phone_number, l.name, l.email, l.program_interest, "
+                    "l.status, l.source, l.notes, l.call_attempts, l.last_called_at, "
+                    "l.next_follow_up, l.created_at, l.updated_at, "
+                    + _LATEST_CONVERSATION_LANGUAGE_SQL +
+                    " FROM leads l WHERE l.id = %s",
                     (lead_id,),
                 )
                 row = cur.fetchone()
-            return _row_to_lead_dict(row) if row else None
+            return _row_to_lead_with_language(row) if row else None
         except Exception:
             logger.exception("Failed to get lead")
             return None
 
 
 async def get_lead_by_phone(phone_number: str) -> dict | None:
-    """Get a lead by phone number."""
+    """Get a lead by phone number, with its latest conversation language."""
     with _get_db() as conn:
         if conn is None:
             return None
@@ -151,14 +177,15 @@ async def get_lead_by_phone(phone_number: str) -> dict | None:
             conn.autocommit = True
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, phone_number, name, email, program_interest, "
-                    "status, source, notes, call_attempts, last_called_at, "
-                    "next_follow_up, created_at, updated_at "
-                    "FROM leads WHERE phone_number = %s",
+                    "SELECT l.id, l.phone_number, l.name, l.email, l.program_interest, "
+                    "l.status, l.source, l.notes, l.call_attempts, l.last_called_at, "
+                    "l.next_follow_up, l.created_at, l.updated_at, "
+                    + _LATEST_CONVERSATION_LANGUAGE_SQL +
+                    " FROM leads l WHERE l.phone_number = %s",
                     (phone_number,),
                 )
                 row = cur.fetchone()
-            return _row_to_lead_dict(row) if row else None
+            return _row_to_lead_with_language(row) if row else None
         except Exception:
             logger.exception("Failed to get lead by phone")
             return None
@@ -858,8 +885,14 @@ async def update_follow_up_status(
 async def add_to_call_queue(
     lead_id: str,
     scheduled_at: str | None = None,
+    language: str = "",
 ) -> dict | None:
-    """Enqueue a lead for outbound calling."""
+    """Enqueue a lead for outbound calling.
+
+    ``language`` is an explicit per-call choice (the operator's selection on
+    the quick-call request). Empty means "use the lead's stored language, then
+    the campaign default", which is the worker's fallback.
+    """
     with _get_db() as conn:
         if conn is None:
             return None
@@ -871,14 +904,17 @@ async def add_to_call_queue(
             conn.autocommit = True
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO call_queue (id, lead_id, scheduled_at) "
-                    "VALUES (%s, %s, %s) "
+                    "INSERT INTO call_queue (id, lead_id, scheduled_at, language) "
+                    "VALUES (%s, %s, %s, %s) "
                     "RETURNING id, lead_id, status, call_sid, scheduled_at, "
-                    "started_at, completed_at, error_message, created_at",
-                    (entry_id, lead_id, sched),
+                    "started_at, completed_at, error_message, created_at, language",
+                    (entry_id, lead_id, sched, language or ""),
                 )
                 row = cur.fetchone()
-            logger.info(f"Call queued: id={entry_id}, lead={lead_id}")
+            logger.info(
+                f"Call queued: id={entry_id}, lead={lead_id}, "
+                f"language={language or 'default'}"
+            )
             return _row_to_call_queue_dict(row)
         except Exception:
             logger.exception("Failed to add to call queue")
@@ -917,7 +953,7 @@ def _get_next_queued_call_sync() -> dict | None:
                     "  FOR UPDATE SKIP LOCKED"
                     ") "
                     "RETURNING id, lead_id, status, call_sid, scheduled_at, "
-                    "started_at, completed_at, error_message, created_at",
+                    "started_at, completed_at, error_message, created_at, language",
                     (_now_iso(),),
                 )
                 row = cur.fetchone()
@@ -949,7 +985,7 @@ async def update_call_queue_status(
                         "completed_at = %s "
                         "WHERE id = %s "
                         "RETURNING id, lead_id, status, call_sid, scheduled_at, "
-                        "started_at, completed_at, error_message, created_at",
+                        "started_at, completed_at, error_message, created_at, language",
                         (status, call_sid, error_message, now, entry_id),
                     )
                 else:
@@ -959,7 +995,7 @@ async def update_call_queue_status(
                         "error_message = COALESCE(%s, error_message) "
                         "WHERE id = %s "
                         "RETURNING id, lead_id, status, call_sid, scheduled_at, "
-                        "started_at, completed_at, error_message, created_at",
+                        "started_at, completed_at, error_message, created_at, language",
                         (status, call_sid, error_message, entry_id),
                     )
                 row = cur.fetchone()
@@ -1045,6 +1081,9 @@ def _row_to_call_queue_dict(row) -> dict:
         "completed_at": _ts_to_str(row[6]),
         "error_message": row[7] or "",
         "created_at": _ts_to_str(row[8]),
+        # The newest column: older RETURNING shapes are tolerated exactly as
+        # the lead row mapper tolerates its trailing columns.
+        "language": (row[9] if len(row) > 9 and row[9] else ""),
     }
 
 

@@ -132,6 +132,114 @@ def min_clause_chars(language: str | None, default: int = 12) -> int:
     return 1 if normalize_language_code(language) in CJK_LANGUAGES else default
 
 
+# ── Supported languages (one answer for every selector) ─────────────────────
+
+def supported_languages() -> frozenset[str]:
+    """Every language this deployment will speak.
+
+    ``SUPPORTED_LANGUAGES`` is the operative list (it already contains the
+    foreign codes on the live box); the union with ``FOREIGN_LANGUAGES`` keeps
+    a deployment that enabled the feature but forgot to repeat the codes in
+    ``SUPPORTED_LANGUAGES`` working. Both reads are lazy, like every other
+    settings-backed helper here.
+    """
+    from app.config import settings
+
+    configured = frozenset(
+        normalize_language_code(part)
+        for part in (settings.SUPPORTED_LANGUAGES or "").split(",")
+        if part.strip()
+    )
+    return configured | configured_foreign_languages()
+
+
+def is_supported_language(code: str | None) -> bool:
+    """Is this code one this deployment can answer in?
+
+    The six foreign codes are gated by ``FOREIGN_LANGUAGES`` even when they are
+    also named in ``SUPPORTED_LANGUAGES``: listing a code must not re-enable a
+    feature the operator turned off.
+    """
+    normalized = normalize_language_code(code)
+    if normalized in DEFAULT_FOREIGN_LANGUAGES:
+        return normalized in configured_foreign_languages()
+    return normalized in supported_languages()
+
+
+# ── Spoken language requests (voice) ────────────────────────────────────────
+
+#: Names a caller may use when asking, mid-call, for another language. A
+#: request SHAPE is required ("speak in X", "X mein baat", "X में बात", "X
+#: please"), so a caller discussing Hindi as a subject is not misread as asking
+#: to switch to it.
+_LANGUAGE_NAMES: dict[str, tuple[str, ...]] = {
+    "en": ("english", "अंग्रेज़ी", "अंग्रेजी", "અંગ્રેજી"),
+    "hi": ("hindi", "हिंदी", "हिन्दी", "હિન્દી"),
+    "gu": ("gujarati", "गुजराती", "ગુજરાતી"),
+    "es": ("spanish", "español", "espanol"),
+    "fr": ("french", "français", "francais"),
+    "it": ("italian", "italiano"),
+    "ja": ("japanese", "日本語", "にほんご"),
+    "pt": ("portuguese", "português", "portugues"),
+    "zh": ("chinese", "mandarin", "中文", "汉语", "漢語"),
+}
+
+
+def requested_language(text: str) -> str | None:
+    """The language a caller explicitly asked to speak, else ``None``.
+
+    This is the voice equivalent of :func:`language_from_command`: it exists so
+    an explicit request ("मुझे हिंदी में बात करनी है") outranks per-utterance
+    language ID, which on 8 kHz telephony labels a single loanword
+    ("admission") as a different Indian language often enough to have flipped a
+    live call to Gujarati at 0.63 confidence.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+
+    for code, names in _LANGUAGE_NAMES.items():
+        alternation = "|".join(re.escape(name) for name in names)
+        # "speak/talk/answer ... in <name>"
+        if re.search(
+            rf"\b(?:speak|talk|answer|reply|respond|continue)\b"
+            rf"[^.!?।]{{0,24}}(?:{alternation})\b",
+            low,
+        ):
+            return code
+        # "<name> please"
+        if re.search(rf"(?:{alternation})\s*(?:please|pls)\b", low):
+            return code
+        # Hinglish: "<name> mein baat/bol/jawab"
+        if re.search(
+            rf"\b(?:{alternation})\b\s*(?:mein|me)\b"
+            rf"[^.!?।]{{0,24}}\b(?:baat|bol|jawab|answer)\b",
+            low,
+        ):
+            return code
+        # "<name> chahiye"
+        if re.search(rf"\b(?:{alternation})\b\s*(?:chahiye|चाहिए|જોઈએ)", low):
+            return code
+
+    # Native-script request shapes. The language name and the request verb are
+    # both required; "हिंदी फीस" (a Hindi fees question) is not a request.
+    for code, names in _LANGUAGE_NAMES.items():
+        for name in names:
+            if name.isascii():
+                continue
+            escaped = re.escape(name)
+            if re.search(
+                rf"{escaped}\s*(?:में|मे|માં|મા)\s*"
+                rf"(?:बात|बोल|जवाब|उत्तर|વાત|બોલ|જવાબ)",
+                raw,
+            ):
+                return code
+            if re.search(rf"{escaped}\s*(?:बोलो|बोलिए|बोलती|બોલો|બોલીયે)", raw):
+                return code
+    return None
+
+
 # ── WhatsApp / chat language commands ───────────────────────────────────────
 
 #: Whole-message commands. Bare two-letter codes are accepted for the six

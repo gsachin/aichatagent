@@ -72,8 +72,16 @@ CREATE TABLE IF NOT EXISTS call_queue (
     started_at      TIMESTAMP WITH TIME ZONE,
     completed_at    TIMESTAMP WITH TIME ZONE,
     error_message   TEXT DEFAULT '',
+    language        VARCHAR(8) DEFAULT '',
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+"""
+
+# Existing databases predate the per-call language column; CREATE TABLE IF NOT
+# EXISTS does not add it. This is the outbound equivalent of the inbound IVR
+# digit: an explicit answer language for THIS call, chosen when it is queued.
+ALTER_CALL_QUEUE_SQL = """
+ALTER TABLE call_queue ADD COLUMN IF NOT EXISTS language VARCHAR(8) DEFAULT '';
 """
 
 # ── Indexes ──────────────────────────────────────────────────────────
@@ -94,6 +102,7 @@ ALL_TABLES_SQL = "\n".join(
         CREATE_CONVERSATIONS_TABLE,
         CREATE_FOLLOW_UPS_TABLE,
         CREATE_CALL_QUEUE_TABLE,
+        ALTER_CALL_QUEUE_SQL,
         CREATE_INDEXES_SQL,
     ]
 )

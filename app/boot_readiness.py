@@ -65,6 +65,7 @@ class Readiness:
     embed: dict = field(default_factory=dict)
     gpu: dict = field(default_factory=dict)
     config: dict = field(default_factory=dict)
+    assets: dict = field(default_factory=dict)
     missing: list = field(default_factory=list)
     degraded: list = field(default_factory=list)
 
@@ -341,6 +342,60 @@ def check_foreign_languages(r: Readiness) -> None:
         )
 
 
+def check_greeting_assets(r: Readiness) -> None:
+    """Report pre-rendered greeting assets missing for the selectable set.
+
+    A missing greeting does not break a call -- the live path synthesises it --
+    but it costs the first caller the latency the asset exists to remove, and
+    the only other signal is a ``GREETING_FIRST_AUDIO source=stream`` line on a
+    live call. Reported at boot, per language/direction, so a deploy that
+    skipped the build step is visible before the phone rings.
+
+    The greeting filename carries a digest of the live text/voice/provider
+    identity, so a stale asset cannot hide here: a voice or wording change
+    produces a different expected name and the old file is reported missing.
+    """
+    from app.admission import asset_available
+    from app.languages import DEFAULT_FOREIGN_LANGUAGES, configured_foreign_languages
+    from app.voice_handler import greeting_asset_name
+    from app.voice_system_prompt import call_greeting
+
+    # Core languages the IVR always offers, plus whatever FOREIGN_LANGUAGES
+    # enables right now. Intersected with the supported set so an unknown code
+    # in the configuration is reported by check_foreign_languages, not as a
+    # greeting asset the build script never produces. Assets for a disabled
+    # foreign language are not reported: they cost nothing and are rebuilt
+    # when the language is enabled.
+    enabled_foreign = configured_foreign_languages() & set(DEFAULT_FOREIGN_LANGUAGES)
+    languages = list(dict.fromkeys(["en", "hi", "gu", *sorted(enabled_foreign)]))
+    present = 0
+    missing: list[str] = []
+    for code in languages:
+        for direction in ("inbound", "outbound"):
+            text = call_greeting(code, direction)
+            name = greeting_asset_name(code, direction, text)
+            if asset_available(name):
+                present += 1
+            else:
+                missing.append(f"{code}/{direction}")
+
+    expected = len(languages) * 2
+    r.assets = {
+        "greetings": {
+            "expected": expected,
+            "present": present,
+            "missing": missing,
+        }
+    }
+    if missing:
+        shown = ", ".join(missing[:8]) + (" ..." if len(missing) > 8 else "")
+        r.degraded.append(
+            f"greeting assets missing for {len(missing)}/{expected} "
+            f"language/direction pair(s): {shown} -- build them: "
+            ".venv/Scripts/python.exe scripts/build_call_assets.py --ensure"
+        )
+
+
 def assess(do_warm: bool = True) -> Readiness:
     """Evaluate all four clauses. Never raises; never assumes success."""
     load_env()
@@ -413,6 +468,13 @@ def assess(do_warm: bool = True) -> Readiness:
         r.degraded.append(f"call assets: check failed ({type(exc).__name__}: {exc})")
 
     try:
+        check_greeting_assets(r)
+    except Exception as exc:                          # noqa: BLE001
+        r.degraded.append(
+            f"greeting assets: check failed ({type(exc).__name__}: {exc})"
+        )
+
+    try:
         check_foreign_languages(r)
     except Exception as exc:                          # noqa: BLE001
         r.degraded.append(
@@ -480,6 +542,13 @@ def render(r: Readiness) -> str:
                      f"{r.config.get('unread_count', 0)} without a reader, "
                      f"{len(r.config.get('externally_consumed') or [])} read by "
                      f"another process (not a gap)")
+    if r.assets:
+        g = r.assets.get("greetings") or {}
+        missing = g.get("missing") or []
+        lines.append(
+            f"  greeting assets: {g.get('present')}/{g.get('expected')} present"
+            + ("" if not missing else f" (missing {len(missing)})")
+        )
     if r.missing:
         lines.append("")
         lines.append("  NOT READY because:")

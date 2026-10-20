@@ -596,3 +596,50 @@ async def test_the_greeting_warmup_skips_an_existing_asset(monkeypatch):
     monkeypatch.setattr(main, "_active_call_sids", {})
 
     await main._warm_greeting_cache(delay=0)
+
+
+# ── SPEAKING means audible ──────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_speech_during_a_silent_pipeline_does_not_cancel_the_answer(monkeypatch):
+    """The gate may not arm before there is audio.
+
+    On the 2026-10-20 outbound call `mark_speaking()` ran before
+    `process_utterance`. The session was therefore SPEAKING for the ~2-3 s the
+    agent was silent, and every 120 ms of caller speech in that window was
+    admitted as a barge-in: `LLM_CANCELLED` fired and 5 of 7 turns produced no
+    audio at all. SPEAKING now starts at the first frame that reaches the
+    carrier, so pre-audio speech is ordinary listening.
+    """
+    session, ws, turn = make_turn(monkeypatch)
+    seen = {}
+
+    async def fake_process(chunk_sink=None):
+        session.begin_turn()
+        seen["state"] = session.state
+        # This is the reader's decision point, reached while the pipeline is
+        # still silent. It must not be an interruption.
+        assert session.admit_inbound_frame(LOUD_FRAME) == vh.FRAME_LISTENING
+        assert not session.cancel_requested()
+        return [CHUNK] * 10, "Caller: hello\nAssistant: hi", False
+
+    monkeypatch.setattr(session, "process_utterance", fake_process)
+    await main._run_voice_turn(turn)
+
+    assert seen["state"] == "LISTENING"
+    media = [m for m in ws.sent if m.get("event") == "media"]
+    assert len(media) == 10, "pre-audio speech must not cancel the answer"
+
+
+def test_user_speech_stopped_is_logged_once_while_deferred(caplog):
+    """USER_SPEECH_STOPPED is a transition; the deferred turn is not a repeat."""
+    session = VoiceCallSession(silence_threshold_frames=1)
+    session.feed_audio(LOUD_FRAME)             # one frame of caller speech
+    silence = b"\xff" * 160                    # µ-law zero
+
+    with caplog.at_level(logging.INFO, logger="voice_events"):
+        for _ in range(5):
+            assert session.feed_audio(silence) is True
+
+    assert caplog.text.count("USER_SPEECH_STOPPED") == 1
+    session.reset_utterance()

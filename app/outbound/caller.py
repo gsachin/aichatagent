@@ -71,10 +71,12 @@ def _resolve_host() -> str:
     return tunnel_host()
 
 
-def _outbound_language(lead: dict | None) -> str:
+def _outbound_language(lead: dict | None, override: str = "") -> str:
     """The language this call should open in.
 
-    The lead's stored language wins, because the person was enrolled in that
+    The per-call override wins: it is the operator's explicit selection on the
+    quick-call request, the outbound equivalent of an inbound IVR digit. Then
+    the lead's stored language, because the person was enrolled in that
     language by the chat/voice flow. ``OUTBOUND_LANGUAGE`` remains the campaign
     default for leads that never chose one. Empty means the session default
     (English) -- the URL stays byte-identical to the pre-language behaviour.
@@ -82,8 +84,31 @@ def _outbound_language(lead: dict | None) -> str:
     from app.config import settings
     from app.languages import normalize_language_code
 
-    raw = (lead or {}).get("language") or settings.OUTBOUND_LANGUAGE or ""
+    raw = (
+        override
+        or (lead or {}).get("language")
+        or settings.OUTBOUND_LANGUAGE
+        or ""
+    )
     return normalize_language_code(raw)
+
+
+def _outbound_language_source(lead: dict | None, override: str = "") -> str:
+    """Where the opening language came from, for the session's lock policy.
+
+    ``operator`` and ``campaign`` are explicit choices and lock the language;
+    ``lead`` is a stored preference and stays open to strong auto-detection.
+    """
+    from app.config import settings
+    from app.languages import normalize_language_code
+
+    if normalize_language_code(override):
+        return "operator"
+    if normalize_language_code((lead or {}).get("language") or ""):
+        return "lead"
+    if normalize_language_code(settings.OUTBOUND_LANGUAGE or ""):
+        return "campaign"
+    return ""
 
 
 class OutboundCallWorker:
@@ -206,9 +231,13 @@ class OutboundCallWorker:
                 "phone": phone_number,
             }
             # Empty keeps the URL byte-identical to the pre-foreign behaviour.
-            outbound_language = _outbound_language(lead)
+            override_language = str(entry.get("language") or "")
+            outbound_language = _outbound_language(lead, override_language)
+            language_source = _outbound_language_source(lead, override_language)
             if outbound_language:
                 context_params["language"] = outbound_language
+            if language_source:
+                context_params["languageSource"] = language_source
             context = urllib.parse.urlencode(context_params)
 
             client = Client(

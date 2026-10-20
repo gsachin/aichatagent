@@ -39,13 +39,13 @@
     display: block; font-size: 0.8rem; color: #94a3b8;
     margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .form-group input {
+  .form-group input, .form-group select {
     width: 100%; padding: 0.7rem 0.9rem; font-size: 1rem;
     border: 1px solid #334155; border-radius: 8px;
     background: #0f172a; color: #e2e8f0; outline: none;
     transition: border-color 0.2s;
   }
-  .form-group input:focus { border-color: #3b82f6; }
+  .form-group input:focus, .form-group select:focus { border-color: #3b82f6; }
   .form-group input::placeholder { color: #64748b; }
   .btn {
     width: 100%; padding: 0.8rem; font-size: 1rem; font-weight: 600;
@@ -99,6 +99,21 @@
     <label>Name (optional)</label>
     <input type="text" id="nameInput" placeholder="e.g. Rahul">
   </div>
+  <div class="form-group">
+    <label>Language</label>
+    <select id="languageSelect">
+      <option value="">Auto — lead's saved language</option>
+      <option value="en">English</option>
+      <option value="hi">Hindi</option>
+      <option value="gu">Gujarati</option>
+      <option value="es">Spanish</option>
+      <option value="fr">French</option>
+      <option value="it">Italian</option>
+      <option value="ja">Japanese</option>
+      <option value="pt">Portuguese</option>
+      <option value="zh">Chinese</option>
+    </select>
+  </div>
 
   <button class="btn btn-call" id="callBtn" onclick="makeCall()">&#x1F4DE; Call Now</button>
   <div class="error-msg" id="errorMsg"></div>
@@ -118,6 +133,7 @@
 <script>
 var phoneInput = document.getElementById("phoneInput");
 var nameInput  = document.getElementById("nameInput");
+var languageSelect = document.getElementById("languageSelect");
 var callBtn    = document.getElementById("callBtn");
 var dot        = document.getElementById("dot");
 var statusLabel = document.getElementById("statusLabel");
@@ -164,11 +180,13 @@ async function makeCall() {
   errorMsg.style.display = "none";
   setUI("queued");
   log("Creating lead + queuing call for " + phone, "info");
+  var payload = { phone_number: phone, name: nameInput.value.trim() };
+  if (languageSelect.value) { payload.language = languageSelect.value; }
   try {
     var resp = await fetch("/api/quick-call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone_number: phone, name: nameInput.value.trim() }),
+      body: JSON.stringify(payload),
     });
     var data = await resp.json();
     if (data.error) { setUI("failed"); log("Error: " + data.error, "error"); return; }

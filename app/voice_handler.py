@@ -50,8 +50,10 @@ from app.languages import (
     LATIN_FOREIGN_LANGUAGES,
     configured_foreign_languages,
     contains_cjk,
+    is_supported_language,
     min_transcript_chars,
     normalize_language_code,
+    requested_language,
 )
 from app.localized_text import CLOSING_REPLIES, NOISE_LADDERS as FOREIGN_NOISE_LADDERS
 from app.voice_system_prompt import language_instruction
@@ -864,6 +866,15 @@ FRAME_INTERRUPTION = "INTERRUPTION"  # admitted while speaking: stop and listen
 FRAME_ECHO = "ECHO"                  # rejected: our own playback coming back
 FRAME_MUTED = "MUTED"                # BARGE_IN_ENABLED off: the documented discard
 
+#: Language sources that represent an explicit human choice. A session opened
+#: from one of these does not drift on a per-utterance detection; it changes
+#: only on another explicit request (spoken, IVR, operator). "lead" is NOT in
+#: this set: it is a stored preference, so natural code-switching is allowed —
+#: but only through the stricter switch gate in `_apply_detected_language`.
+_LOCKING_LANGUAGE_SOURCES = frozenset(
+    {"ivr", "pinned", "operator", "campaign", "spoken"}
+)
+
 BARGE_IN_ENABLED = settings.BARGE_IN_ENABLED
 BARGE_IN_ECHO_GAIN = settings.BARGE_IN_ECHO_GAIN
 BARGE_IN_MARGIN = settings.BARGE_IN_MARGIN
@@ -1350,6 +1361,7 @@ class VoiceCallSession:
         sample_rate: int = 8000,             # Twilio uses 8 kHz
         direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
         language: str = "",                  # BCP-47-ish code; "" -> DEFAULT_LANGUAGE
+        language_source: str = "default",    # "default" | "ivr" | "lead" | "operator" | "spoken"
     ):
         # BRD-04: one decision, and `None` resolves to the setting rather than
         # to a literal. The parameter used to default to the number 30 while no
@@ -1372,6 +1384,11 @@ class VoiceCallSession:
         self.language = normalize_language_code(
             language or settings.DEFAULT_LANGUAGE
         )
+        #: Where the opening language came from. Explicit sources are
+        #: authoritative and immune to per-utterance drift; see
+        #: `_apply_detected_language` and `_LOCKING_LANGUAGE_SOURCES`.
+        self.language_source = (language_source or "default").strip().lower()
+        self._language_locked = self.language_source in _LOCKING_LANGUAGE_SOURCES
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
 
@@ -1386,6 +1403,11 @@ class VoiceCallSession:
         self._audio_buffer: list[bytes] = []      # raw µ-law chunks
         self._silence_count = 0
         self._total_frames = 0
+        #: USER_SPEECH_STOPPED is a transition, not a per-frame state. The
+        #: utterance stays closed while a running turn defers the next one, so
+        #: without this flag the event was logged every 20 ms (10 identical
+        #: lines in the 2026-10-20 call).
+        self._utterance_closed = False
 
         # US-014: the turn state, and the reference signal the echo gate
         # measures the caller against. `_playout` is the outbound audio the
@@ -1758,6 +1780,18 @@ class VoiceCallSession:
         # First in the transcript, because it is the first thing said.
         self._conversation_history.insert(0, entry)
 
+    def set_language(self, code: str, source: str = "default") -> None:
+        """Set the answer language and remember whether it was a choice.
+
+        ``source`` is the provenance, not a label: an explicit source locks the
+        language against per-utterance drift. Use ``"spoken"`` when the caller
+        asked for the language, ``"ivr"``/``"operator"`` for a selection made
+        before the turn, and ``"detected"`` for an automatic switch.
+        """
+        self.language = normalize_language_code(code) or settings.DEFAULT_LANGUAGE
+        self.language_source = (source or "default").strip().lower()
+        self._language_locked = self.language_source in _LOCKING_LANGUAGE_SOURCES
+
     def log_event(self, name: str, **fields) -> None:
         """Emit one structured event line for the call timeline."""
         extra = " ".join(f"{k}={v}" for k, v in fields.items())
@@ -1770,6 +1804,7 @@ class VoiceCallSession:
         self._audio_buffer.clear()
         self._silence_count = 0
         self._total_frames = 0
+        self._utterance_closed = False
         # Invalidate any in-flight speculation. The epoch, not the snapshot
         # alone, is what makes this safe: the harness loops a four-fixture set,
         # so two turns genuinely can carry byte-identical audio, and a stale
@@ -1853,6 +1888,18 @@ class VoiceCallSession:
         # timestamp would make the first frame of the next window look like a
         # stall of however long the silence lasted.
         self._ref_at = None
+
+    def ensure_speaking(self) -> None:
+        """Arm the gate at the first frame that actually reaches the carrier.
+
+        A turn is armed by `_write_frames`, not before its pipeline: SPEAKING
+        is a claim that the agent is audible, and arming it while STT/LLM/TTS
+        are still silent made every 120 ms of caller speech during that window
+        a barge-in that cancelled the answer before a single frame was sent.
+        Idempotent, so the greeting's earlier arming is preserved.
+        """
+        if self.state != STATE_SPEAKING:
+            self.mark_speaking()
 
     # ── the per-turn cancel signal (US-004's producer) ─────────────────
 
@@ -2141,6 +2188,7 @@ class VoiceCallSession:
             self._audio_buffer.append(ulaw_chunk)
             self._silence_count = 0
             self._total_frames += 1
+            self._utterance_closed = False
             # The caller resumed: whatever was speculated is now the wrong
             # audio, and a later pause in this same utterance may speculate
             # again on the longer buffer.
@@ -2156,7 +2204,12 @@ class VoiceCallSession:
             self._silence_count >= self._silence_threshold
             or self._total_frames >= self._max_utterance
         ):
-            self.log_event("USER_SPEECH_STOPPED", frames=self._total_frames)
+            # A transition, not a per-frame state: while a running turn defers
+            # the next one, this condition stays true on every 20 ms frame and
+            # used to write the same line ten times in a row.
+            if not self._utterance_closed:
+                self.log_event("USER_SPEECH_STOPPED", frames=self._total_frames)
+                self._utterance_closed = True
             # US-001: open a trace for this turn. vad_end is the zero point for
             # processing_ms. The 600 ms the caller waited before this instant is
             # endpointing_ms, which BRD-02 measures separately — do not conflate
@@ -2560,13 +2613,30 @@ class VoiceCallSession:
         code = (self.language or "").strip().lower()
         return code if code in ("hi", "gu") else ""
 
+    def _sarvam_language_hint(self) -> str | None:
+        """The locked session language, as Sarvam's ``language_code``.
+
+        A locked choice is the caller's instruction. Passing it as the STT hint
+        keeps an ambiguous one-word utterance ("admission") in the chosen
+        language's script, instead of letting LID transcribe it as a different
+        Indian language and then switch the answer language with it. Unlocked
+        sessions keep auto-detection unchanged.
+        """
+        if not self._language_locked:
+            return None
+        code = normalize_language_code(self.language)
+        if not code or code in configured_foreign_languages():
+            return None
+        return code
+
     async def _transcribe_sarvam(
         self, audio_16k_int16: np.ndarray
     ) -> tuple[str, bool]:
         from app import stt_sarvam
 
         result = await asyncio.to_thread(
-            stt_sarvam.transcribe, audio_16k_int16, language_hint=None
+            stt_sarvam.transcribe, audio_16k_int16,
+            language_hint=self._sarvam_language_hint(),
         )
         transcript = self._post_process_transcript(result.transcript)
         hallucinated = looks_like_hallucination(
@@ -2714,17 +2784,31 @@ class VoiceCallSession:
         """Switch the answer language to the language the caller actually spoke.
 
         Only in ``STT_LANGUAGE=auto``. A low-confidence transcription, a short
-        utterance, an unsupported code, or a probability below
-        ``STT_LANGUAGE_MIN_PROB`` keeps the session's previous language.
+        utterance, an unsupported code, or a weak detection keeps the session's
+        previous language.
 
-        Foreign policy is deliberately narrower than the Indic one:
+        Two rules were added after the 2026-10-20 outbound call:
+
+        * An explicit spoken request ("मुझे हिंदी में बात करनी है") outranks a
+          detector result and locks the language. The caller has already told
+          us the answer; the next ambiguous word must not overrule it.
+        * An explicitly selected language (IVR digit, operator-chosen outbound
+          language, campaign setting) never drifts on a detection at all. Only
+          another explicit request changes it.
+
+        For an unlocked session (the default language, or a lead's stored
+        preference) auto-detection still works, but a switch needs stronger
+        evidence than acceptance: ``STT_LANGUAGE_SWITCH_MIN_PROB`` and enough
+        words to be prose. Indic LID labels a single loanword ("admission") as
+        Gujarati at 0.63-0.72 on 8 kHz telephony; that flipped a live Hindi
+        call three times in forty seconds.
+
+        Foreign policy is unchanged for unlocked calls:
 
         * a call that started in ``en``/``hi``/``gu`` (or any Indic code) can
-          never be switched into one of the six foreign languages; its behaviour
-          stays exactly what it was before this feature;
+          never drift into one of the six foreign languages;
         * a call that started in a foreign language may switch to another
-          *enabled* foreign language, but not back to ``en``/``hi``/``gu`` —
-          explicit selection remains authoritative;
+          *enabled* foreign language, but not back to ``en``/``hi``/``gu``;
         * a CJK detection needs CJK characters in the transcript, so a short
           proper noun cannot flip a Spanish call to Japanese.
         """
@@ -2736,6 +2820,26 @@ class VoiceCallSession:
         detected = normalize_language_code(detected)
         current = normalize_language_code(self.language)
         if not detected:
+            return
+
+        # An explicit request wins, even across the Indic/foreign boundary:
+        # it is the caller's instruction, not the detector's guess.
+        requested = requested_language(transcript)
+        if requested and requested != current and is_supported_language(requested):
+            logger.info(
+                "STT: caller requested language %s (was %s) -> answer language %s",
+                requested, current, requested,
+            )
+            self.set_language(requested, "spoken")
+            self.log_event(
+                "LANGUAGE_REQUESTED", language=requested,
+                prob=round(probability, 2),
+            )
+            return
+
+        if self._language_locked:
+            # Explicit selection is authoritative. A detection on one short
+            # utterance is not a reason to rewrite the call.
             return
 
         foreign = configured_foreign_languages()
@@ -2758,8 +2862,24 @@ class VoiceCallSession:
             if detected not in _SUPPORTED_LANGUAGES:
                 return
 
-        if probability < settings.STT_LANGUAGE_MIN_PROB:
+        # A switch is a bigger claim than an acceptance. Demand a confidence
+        # above the acceptance floor and enough words to be prose. A one-word
+        # loanword is exactly what Indic LID gets wrong on phone audio; six
+        # words at 0.91 still switch immediately.
+        if probability < max(
+            settings.STT_LANGUAGE_MIN_PROB,
+            settings.STT_LANGUAGE_SWITCH_MIN_PROB,
+        ):
             return
+        if detected in CJK_LANGUAGES:
+            if len(transcript.strip()) < 3:
+                return
+        else:
+            if len(transcript.strip()) < settings.STT_LANGUAGE_SWITCH_MIN_CHARS:
+                return
+            if len(transcript.split()) < 2:
+                return
+
         if detected == current:
             return
         if detected in CJK_LANGUAGES and not contains_cjk(transcript):
@@ -2771,7 +2891,7 @@ class VoiceCallSession:
             "STT: detected language %s (prob=%.2f) -> answer language %s",
             detected, probability, detected,
         )
-        self.language = detected
+        self.set_language(detected, "detected")
         self.log_event("STT_LANGUAGE", language=detected,
                        prob=round(probability, 2))
 

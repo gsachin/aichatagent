@@ -101,6 +101,26 @@ def _with_answer_language(text: str) -> str:
     return f"{text}\n\n{language_instruction(code)}"
 
 
+async def _stream_rag_answer(prompt: str, collected: list[str]):
+    """Yield answer chunks from the same streaming pipeline voice uses.
+
+    ``st.write_stream`` accepts an async generator and converts it to sync
+    itself. The shared path yields an ``EngineCounters`` object after the
+    text; it is dropped here because it is not display content. ``collected``
+    keeps the text so an interrupted stream can still be logged and shown.
+    """
+    from app.rag import query_rag_stream
+
+    code = normalize_language_code(st.session_state.get("answer_language", "en"))
+    # English is the pre-existing path: no instruction suffix. Passing "en"
+    # would add an "Answer in English" block the old chain never had.
+    language = None if code in ("", "en") else code
+    async for item in query_rag_stream(prompt, language=language):
+        if isinstance(item, str) and item:
+            collected.append(item)
+            yield item
+
+
 def _ui(key: str, default: str, **kwargs) -> str:
     """A Streamlit prompt in the selected language.
 
@@ -140,7 +160,8 @@ def _program_requirements(prog: str) -> str:
 
 
 def _log_and_score_async(phone: str, transcript: str, channel: str,
-                         lead_id: str = "", conversation_id: str = ""):
+                         lead_id: str = "", conversation_id: str = "",
+                         language: str = ""):
     """
     Fire-and-forget: POST the exchange to the backend so it gets
     logged to the conversations table and sentiment-scored.
@@ -162,6 +183,8 @@ def _log_and_score_async(phone: str, transcript: str, channel: str,
                 payload["lead_id"] = lead_id
             if conversation_id:
                 payload["conversation_id"] = conversation_id
+            if language:
+                payload["language"] = language
             requests.post(
                 "http://localhost:8000/api/interactions/log",
                 json=payload,
@@ -886,17 +909,38 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
                 answer = _program_requirements(prog)
 
         # ── RAG fallback ──────────────────────────────────────
+        rendered_inline = False
         if answer is None:
-            with st.spinner("Thinking..."):
-                try:
-                    response = st.session_state.rag_chain.invoke(
-                        {"input": _with_answer_language(prompt)}
-                    )
-                    answer = response["answer"]
-                except Exception as e:
-                    answer = f"Something went wrong: {e}\n\nMake sure LLM_API_KEY and LLM_MODEL are configured (OpenAI)."
+            collected: list[str] = []
+            try:
+                with st.spinner("Thinking..."):
+                    rendered = st.write_stream(_stream_rag_answer(prompt, collected))
+                answer = rendered if isinstance(rendered, str) else "".join(collected)
+                rendered_inline = bool(answer.strip())
+                if not rendered_inline:
+                    raise RuntimeError("the model returned no text")
+            except Exception as e:
+                if collected:
+                    # Part of the answer is already on screen. Append the
+                    # interruption instead of re-rendering the whole reply
+                    # below it, which would show the same text twice.
+                    note = f"\n\n_(The reply stopped early: {e})_"
+                    st.markdown(note)
+                    answer = "".join(collected) + note
+                    rendered_inline = True
+                else:
+                    # Nothing was written: keep the pre-streaming path as the
+                    # fallback, exactly as it was before this change.
+                    try:
+                        response = st.session_state.rag_chain.invoke(
+                            {"input": _with_answer_language(prompt)}
+                        )
+                        answer = response["answer"]
+                    except Exception as e2:
+                        answer = f"Something went wrong: {e2}\n\nMake sure LLM_API_KEY and LLM_MODEL are configured (OpenAI)."
 
-        st.markdown(answer)
+        if not rendered_inline:
+            st.markdown(answer)
 
         st.session_state.messages.append({
             "role": "assistant",
@@ -911,6 +955,7 @@ if prompt := st.chat_input("Ask about admissions, tuition, programs..."):
             channel="streamlit",
             lead_id=st.session_state.get("lead_id", ""),
             conversation_id=st.session_state.get("conversation_id", ""),
+            language=st.session_state.get("answer_language", "en"),
         )
 
 # ── In-chat document upload (below chat, appears when ready for docs) ─

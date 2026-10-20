@@ -42,6 +42,31 @@ services:
       - voice-network
 
   # ──────────────────────────────────────────────────────────────────
+  # One-shot: pre-rendered call assets
+  # ──────────────────────────────────────────────────────────────────
+  # `app/static/audio/` is gitignored, so a fresh checkout has no greeting
+  # WAVs. Without this step every call silently falls back to live synthesis
+  # and the greeting-latency win is lost. `--ensure` renders only what is
+  # missing or stale; the bind mount writes the result back to the host, where
+  # the FastAPI container reads it. A build failure is deliberately non-fatal:
+  # the live path can still greet the caller.
+  assets:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-assistant-assets
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MACHINE_PROFILE_CHECK=0
+    command: >
+      sh -c "python scripts/build_call_assets.py --ensure ||
+             echo 'WARN: call asset build failed; missing greetings will be synthesised live'"
+    networks:
+      - voice-network
+
+  # ──────────────────────────────────────────────────────────────────
   # FastAPI - Backend Server
   # ──────────────────────────────────────────────────────────────────
   fastapi:
@@ -83,6 +108,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      assets:
+        condition: service_completed_successfully
     networks:
       - voice-network
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

@@ -1920,13 +1920,11 @@ async def check_readiness(url: str, *, readiness_url: str | None = None,
         detail["stack_readiness"] = "ready (readiness endpoint)"
     else:
         detail["stack_readiness"] = (
-            "assumed - no readiness surface exists. US-007 IS IMPLEMENTED and its gate "
-            "exits 0 (test_us007_readiness.py 30/30), but the gate is a CLI the operator "
-            "runs at boot (`python -m app.boot_readiness`); the app exposes no /health or "
-            "/ready endpoint, so a run at call time cannot consult it. That is the open "
-            "half of US-007's DoD, not a missing story. Treat 'warm' figures from this "
-            "run as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a "
-            "readiness report"
+            "assumed - no readiness URL was supplied. The app exposes /health and "
+            "/ready (US-007); pass --readiness-url http://127.0.0.1:8000/ready to "
+            "certify the stack at call time instead of assuming it. Treat 'warm' "
+            "figures from this run as warm RELATIVE TO ITS OWN FIRST TURN, not as "
+            "certified against a readiness report"
         )
     return detail
 

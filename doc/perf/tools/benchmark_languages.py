@@ -4,6 +4,7 @@ Run directly, like the other doc/perf tools:
 
     .venv/Scripts/python.exe doc/perf/tools/benchmark_languages.py --tts-only
     .venv/Scripts/python.exe doc/perf/tools/benchmark_languages.py --languages hi,ta,bn
+    .venv/Scripts/python.exe doc/perf/tools/benchmark_languages.py --greeting
 
 It measures two halves separately so a regression is attributable:
 
@@ -108,6 +109,16 @@ TARGET_INDIC_FIRST_MS = 1500.0
 #: RTF here is AUDIO SECONDS PER WALL SECOND (higher is better). A demo must
 #: synthesise faster than it plays: 1.0 is real time, 2.0 is twice as fast.
 TARGET_RTF_MIN = 1.0
+
+#: The greeting set the call path can select: the core three plus six foreign.
+GREETING_LANGUAGES = ["en", "hi", "gu", "es", "fr", "it", "ja", "pt", "zh"]
+
+#: Targets for the pre-rendered greeting paths. The cold asset path is one
+#: disk read plus µ-law conversion; the in-memory cache path touches neither
+#: disk nor model. Hundreds of milliseconds means the asset is missing and the
+#: call fell back to live synthesis -- the regression this mode exists to see.
+TARGET_GREETING_ASSET_MS = 100.0
+TARGET_GREETING_CACHE_MS = 5.0
 
 
 def _pct(values: list[float], p: float) -> float | None:
@@ -287,7 +298,9 @@ async def _tts_once(language: str, text: str, provider_enabled: bool) -> dict:
 def bench_tts(languages: list[str], runs: int) -> list[dict]:
     from app.config import settings
     from app.indic_tts import INDIC_TTS_LANGUAGES
-    from app.voice_handler import TTS_PROVIDER
+    from app.voice_handler import (
+        TTS_PROVIDER, _use_indic_tts, _use_sarvam_tts,
+    )
 
     indic_up = _tts_service_available()
     if languages:
@@ -299,16 +312,23 @@ def bench_tts(languages: list[str], runs: int) -> list[dict]:
             pass
     rows = []
     for lang in languages:
-        if lang in INDIC_TTS_LANGUAGES and lang not in ("hi",) and not (
-            TTS_PROVIDER == "indic_tts" and indic_up
-        ):
+        # A language routed to a provider other than Indic-TTS is not
+        # "pending": Gujarati, for example, runs on Sarvam Bulbul while
+        # TTS_PROVIDER=sarvam. Ask the same routing function the call path
+        # uses instead of inferring from the provider name.
+        routed_elsewhere = _use_sarvam_tts(lang)
+        if (lang in INDIC_TTS_LANGUAGES and lang not in ("hi",)
+                and not routed_elsewhere
+                and not (TTS_PROVIDER == "indic_tts" and indic_up)):
+            if TTS_PROVIDER == "sarvam":
+                reason = ("TTS_PROVIDER=sarvam but the language is not in "
+                          "SARVAM_TTS_LANGUAGES")
+            elif TTS_PROVIDER != "indic_tts":
+                reason = f"TTS_PROVIDER={TTS_PROVIDER!r} is not indic_tts"
+            else:
+                reason = "Indic-TTS service is not reachable at INDIC_TTS_URL"
             rows.append({
-                "language": lang, "status": "pending",
-                "reason": (
-                    "TTS_PROVIDER is not indic_tts"
-                    if TTS_PROVIDER != "indic_tts"
-                    else "Indic-TTS service is not reachable at INDIC_TTS_URL"
-                ),
+                "language": lang, "status": "pending", "reason": reason,
             })
             continue
         measurements = []
@@ -330,10 +350,17 @@ def bench_tts(languages: list[str], runs: int) -> list[dict]:
             TARGET_INDIC_FIRST_MS if lang in INDIC_TTS_LANGUAGES
             else TARGET_KOKORO_FIRST_MS
         )
+        # Report the provider this language actually uses, not the global
+        # TTS_PROVIDER: with TTS_PROVIDER=sarvam, Hindi still runs on Kokoro.
+        provider = (
+            "sarvam" if _use_sarvam_tts(lang)
+            else "indic_tts" if _use_indic_tts(lang)
+            else "kokoro"
+        )
         rows.append({
             "language": lang,
             "status": "ok" if ok else "failed",
-            "tts_provider": TTS_PROVIDER,
+            "tts_provider": provider,
             "runs": len(measurements),
             "ok_runs": len(ok),
             "first_audio_p50_ms": _pct(firsts, 50),
@@ -347,6 +374,140 @@ def bench_tts(languages: list[str], runs: int) -> list[dict]:
             "samples": measurements,
         })
     return rows
+
+
+async def _greeting_stream_once(language: str, direction: str, text: str) -> dict:
+    """Live-synthesise a greeting exactly as the no-asset fallback does."""
+    from app.voice_handler import VoiceCallSession
+
+    # A TTS-cache hit would hide the synthesis cost this row exists to measure:
+    # the real fallback only runs when this greeting has never been rendered.
+    VoiceCallSession._shared_tts_cache.clear()
+    session = VoiceCallSession(language=language, direction=direction)
+    t0 = time.perf_counter()
+    first = None
+    frames = 0
+    audio_s = 0.0
+    async for audio, sr in session.synthesise_stream(text):
+        if first is None:
+            first = time.perf_counter()
+        frames += len(session._chunk_to_ulaw_frames(audio, sr))
+        audio_s += len(audio) / float(sr)
+    total = time.perf_counter() - t0
+    return {
+        "language": language,
+        "direction": direction,
+        "first_audio_ms": round((first - t0) * 1000, 1) if first else None,
+        "total_ms": round(total * 1000, 1),
+        "frames": frames,
+        "audio_s": round(audio_s, 3),
+    }
+
+
+def bench_greetings(languages: list[str], runs: int) -> list[dict]:
+    """Measure the three greeting paths ``_run_greeting`` can take.
+
+    * ``asset_cold_ms`` -- first call after a restart: read the pre-rendered
+      WAV and convert it to µ-law frames.
+    * ``cache_hit_ms`` -- every later call: the frame list is already in
+      ``_GREETING_CACHE``; no disk, no model, no network.
+    * ``stream_*`` -- the fallback when the asset is missing: live synthesis,
+      reported cold (first run, may include model/provider setup) and warm
+      (repeats), so the cost of a missing asset is a number, not an inference.
+
+    The first stream row of the run includes provider/model startup; that is
+    the honest cold cost, and later rows show the warm repeat.
+    """
+    from app.voice_handler import (
+        clear_greeting_cache,
+        greeting_asset_frames,
+        greeting_asset_name,
+        greeting_cache_get,
+        greeting_cache_key,
+        greeting_cache_put,
+    )
+    from app.voice_system_prompt import call_greeting
+
+    rows = []
+    for lang in languages:
+        for direction in ("inbound", "outbound"):
+            text = call_greeting(lang, direction)
+            name = greeting_asset_name(lang, direction, text)
+            key = greeting_cache_key(lang, direction, text)
+
+            clear_greeting_cache()
+            t0 = time.perf_counter()
+            frames = greeting_asset_frames(lang, direction, text)
+            asset_cold_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+            cache_ms = None
+            if frames:
+                greeting_cache_put(key, frames)
+                t0 = time.perf_counter()
+                greeting_cache_get(key)
+                cache_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+            stream_runs = []
+            for _ in range(max(1, runs)):
+                try:
+                    stream_runs.append(asyncio.run(
+                        _greeting_stream_once(lang, direction, text)
+                    ))
+                except Exception as exc:                 # noqa: BLE001
+                    stream_runs.append({
+                        "first_audio_ms": None, "total_ms": None,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+            ok = [r for r in stream_runs if r.get("first_audio_ms") is not None]
+            firsts = [r["first_audio_ms"] for r in ok]
+            cold = stream_runs[0].get("first_audio_ms") if stream_runs else None
+            # The first run is the cold one; p50/p95 describe the warm repeats.
+            warm = firsts[1:] if len(firsts) > 1 else firsts
+
+            rows.append({
+                "language": lang,
+                "direction": direction,
+                "asset": name,
+                "status": "ok" if frames else "missing-asset",
+                "asset_cold_ms": asset_cold_ms,
+                "cache_hit_ms": cache_ms,
+                "stream_cold_ms": cold,
+                "stream_warm_p50_ms": _pct(warm, 50),
+                "stream_warm_p95_ms": _pct(warm, 95),
+                "stream_ok_runs": len(ok),
+                "runs": len(stream_runs),
+                "frame_count": len(frames) if frames else 0,
+                "stream_error": (
+                    next((r.get("error") for r in stream_runs if r.get("error")), None)
+                    if not ok else None
+                ),
+                "accept_asset": (
+                    None if frames is None else asset_cold_ms <= TARGET_GREETING_ASSET_MS
+                ),
+                "accept_cache": (
+                    None if cache_ms is None else cache_ms <= TARGET_GREETING_CACHE_MS
+                ),
+                "samples": stream_runs,
+            })
+    return rows
+
+
+def _print_greeting_table(rows: list[dict]) -> None:
+    def ms(value):
+        return "-" if value is None else f"{value:.1f}"
+
+    print("\nGreeting first audio: pre-rendered asset/cache vs live stream")
+    print(f"{'lang/dir':<9} {'status':<14} {'asset cold':>10} {'cache hit':>9} "
+          f"{'stream cold':>11} {'stream p50':>10} {'stream p95':>10} notes")
+    for r in rows:
+        note = ""
+        if r.get("stream_error"):
+            note = r["stream_error"][:46]
+        print(f"{r['language'] + '/' + r['direction']:<9} {r['status']:<14} "
+              f"{ms(r.get('asset_cold_ms')):>10} {ms(r.get('cache_hit_ms')):>9} "
+              f"{ms(r.get('stream_cold_ms')):>11} "
+              f"{ms(r.get('stream_warm_p50_ms')):>10} "
+              f"{ms(r.get('stream_warm_p95_ms')):>10} {note}")
 
 
 def _print_table(llm_rows: list[dict], tts_rows: list[dict]) -> None:
@@ -382,16 +543,34 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--llm-only", action="store_true")
     ap.add_argument("--tts-only", action="store_true")
+    ap.add_argument(
+        "--greeting", action="store_true",
+        help="benchmark the pre-rendered greeting paths only "
+             "(asset cold / cache hit vs live stream)",
+    )
     ap.add_argument("--output", default="")
     args = ap.parse_args()
 
-    languages = (
-        ALL_LANGUAGES if args.languages == "all"
-        else [x.strip().lower() for x in args.languages.split(",") if x.strip()]
-    )
-    llm_rows = [] if args.tts_only else bench_llm(languages, max(1, args.runs))
-    tts_rows = [] if args.llm_only else bench_tts(languages, max(1, args.runs))
-    _print_table(llm_rows, tts_rows)
+    runs = max(1, args.runs)
+    llm_rows: list[dict] = []
+    tts_rows: list[dict] = []
+    greeting_rows: list[dict] = []
+
+    if args.greeting:
+        languages = (
+            GREETING_LANGUAGES if args.languages == "all"
+            else [x.strip().lower() for x in args.languages.split(",") if x.strip()]
+        )
+        greeting_rows = bench_greetings(languages, runs)
+        _print_greeting_table(greeting_rows)
+    else:
+        languages = (
+            ALL_LANGUAGES if args.languages == "all"
+            else [x.strip().lower() for x in args.languages.split(",") if x.strip()]
+        )
+        llm_rows = [] if args.tts_only else bench_llm(languages, runs)
+        tts_rows = [] if args.llm_only else bench_tts(languages, runs)
+        _print_table(llm_rows, tts_rows)
 
     out = Path(args.output) if args.output else (
         PROJ / "doc" / "perf" / "results"
@@ -406,9 +585,12 @@ def main() -> int:
             "kokoro_first_ms": TARGET_KOKORO_FIRST_MS,
             "indic_first_ms": TARGET_INDIC_FIRST_MS,
             "rtf_min": TARGET_RTF_MIN,
+            "greeting_asset_ms": TARGET_GREETING_ASSET_MS,
+            "greeting_cache_ms": TARGET_GREETING_CACHE_MS,
         },
         "llm": llm_rows,
         "tts": tts_rows,
+        "greetings": greeting_rows,
     }, indent=2), encoding="utf-8")
     print(f"\nwrote {out}")
     return 0

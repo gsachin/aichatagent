@@ -147,6 +147,21 @@ class Settings:
     STT_LANGUAGE_MIN_PROB: float = field(
         default_factory=lambda: _env_float("STT_LANGUAGE_MIN_PROB", 0.5)
     )
+    # Changing the ANSWER language is a larger claim than accepting a
+    # detection. On 8 kHz telephony, Indic LID labels a single loanword
+    # ("admission") as another language with 0.6-0.7 confidence; one such
+    # utterance must not rewrite the rest of the call. A switch therefore
+    # needs a higher probability and enough words to be prose. Explicit
+    # selections (IVR, operator, spoken request) ignore both and are
+    # authoritative.
+    STT_LANGUAGE_SWITCH_MIN_PROB: float = field(
+        default_factory=lambda: _env_float(
+            "STT_LANGUAGE_SWITCH_MIN_PROB", 0.75
+        )
+    )
+    STT_LANGUAGE_SWITCH_MIN_CHARS: int = field(
+        default_factory=lambda: _env_int("STT_LANGUAGE_SWITCH_MIN_CHARS", 12)
+    )
     # A presence check, not a value: `_get_stt_model` picks cuda when this is
     # set and non-empty. Kept as the raw string so the truthiness test is
     # unchanged — "0" selects cuda here exactly as it did before, which is the

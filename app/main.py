@@ -73,6 +73,7 @@ from app import audio_format
 from app.config import settings
 from app.languages import (
     configured_foreign_languages,
+    is_supported_language,
     language_from_command,
     normalize_language_code,
     resolve_answer_language,
@@ -156,7 +157,14 @@ _greeting_warmup_task = None
 _GREETING_WARMUP_ENABLED = os.environ.get(
     "GREETING_WARMUP", "1"
 ).strip().lower() not in ("0", "false", "off", "no")
-_GREETING_WARMUP_LANGUAGES = ("en", "hi", "gu")
+#: Core languages the IVR always offers, plus every foreign language this
+#: deployment enables. Pre-rendered assets cover all nine and are checked
+#: first, so this costs nothing when the deploy step ran; it is the fallback
+#: for a fresh clone or a skipped build, where the first call would otherwise
+#: pay live synthesis. Kept as a plain tuple because tests monkeypatch it.
+_GREETING_WARMUP_LANGUAGES = (
+    "en", "hi", "gu", *sorted(configured_foreign_languages())
+)
 
 
 async def _warm_greeting_cache(delay: float = 2.0) -> None:
@@ -601,11 +609,17 @@ def _resolve_tunnel_host() -> str:
 #
 # `<Stream>` is therefore no longer self-closing.
 
-def _stream_markup(host: str, phone: str = "", language: str = "") -> str:
+def _stream_markup(host: str, phone: str = "", language: str = "",
+                   locked: bool = False) -> str:
     """Build the `<Stream>` element, carrying the caller number and language.
     Both values reach the media stream as custom `<Parameter>`s because Media
     Streams does not carry them in the `start` event. Values are XML-escaped
     (R14); an `&` or `<` would otherwise produce TwiML Twilio rejects.
+
+    ``locked`` says the language was explicitly chosen (an IVR digit or a
+    pinned ?language=), not merely the default. The media stream needs that
+    distinction to decide whether a per-utterance detection may change the
+    answer language; without it every call looks like a deliberate choice.
     """
     url = f"wss://{host}/ws/twilio"
     params = []
@@ -618,6 +632,8 @@ def _stream_markup(host: str, phone: str = "", language: str = "") -> str:
         params.append(
             f'<Parameter name="language" value="{escape(language, {chr(34): "&quot;"})}" />'
         )
+    if locked:
+        params.append('<Parameter name="languageLock" value="1" />')
     if not params:
         return f'<Stream url="{url}" />'
     return f'<Stream url="{url}">' + "".join(params) + "</Stream>"
@@ -1001,6 +1017,12 @@ async def _write_frames(t: _VoiceTurn, frames: list[bytes], sent: dict,
     order" is what the echo gate's reference is built from in both.
     """
     session = t.session
+    if sent["n"] == 0 and frames:
+        # SPEAKING means "audible", so arm the gate at the first frame that
+        # actually reaches the carrier — not before the pipeline. See
+        # `VoiceCallSession.ensure_speaking` for the live failure this fixes.
+        # An empty chunk list must not arm it: there is still nothing to hear.
+        session.ensure_speaking()
     for chunk in frames:
         if session.cancel_requested():
             # The caller is talking. Stop feeding the carrier -- the caller
@@ -1068,9 +1090,13 @@ async def _run_voice_turn(t: _VoiceTurn) -> None:
         """The TTS-stream sink and the batch send loop — see `_write_frames`."""
         await _write_frames(t, frames, sent, marked)
 
-    # Armed BEFORE any send, because under TTS_STREAM the synthesiser sends
-    # mid-pipeline through this same sink.
-    session.mark_speaking()
+    # The gate is armed by `_write_frames` at the first frame that actually
+    # reaches the carrier. Arming it here, before STT/LLM/TTS, made caller
+    # speech during a silent pipeline look like a barge-in: the cancel event
+    # was set and the answer was discarded before a single frame existed. On
+    # the 2026-10-20 call that cancelled 5 of 7 turns. Under TTS_STREAM the
+    # first chunk flows through `_send_chunks` mid-pipeline, so the gate is
+    # still armed before any audible frame is sent.
 
     try:
         from app.voice_handler import TTS_STREAM, _turn_timeout_s
@@ -1485,11 +1511,24 @@ async def websocket_twilio(websocket: WebSocket):
                 # The requested answer language travels as a TwiML <Parameter>
                 # (same channel as the phone number, which Media Streams does
                 # not carry in the start event). Empty keeps DEFAULT_LANGUAGE.
-                output_language = normalize_language_code(str(
-                    (start_payload.get("customParameters") or {}).get("language") or ""
-                ))
+                # `languageLock=1` means the caller pressed an IVR digit (or
+                # the number pinned ?language=), so this is a choice and STT
+                # auto-detection must not rewrite it mid-call.
+                start_params = start_payload.get("customParameters") or {}
+                output_language = normalize_language_code(
+                    str(start_params.get("language") or "")
+                )
+                language_locked = str(
+                    start_params.get("languageLock") or ""
+                ).strip().lower() in ("1", "true", "yes")
                 if output_language:
-                    session.language = output_language
+                    session.set_language(
+                        output_language, "ivr" if language_locked else "default"
+                    )
+                logger.info(
+                    "WS /ws/twilio: language=%s source=%s",
+                    session.language, session.language_source,
+                )
                 from app.crm import session as crm_session
 
                 inbound_session = crm_session.start(
@@ -1732,8 +1771,23 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                 outbound_language = normalize_language_code(
                     str(outbound_params.get("language") or "")
                 )
+                # "operator" and "campaign" are explicit choices and lock the
+                # language; "lead" is the person's stored preference and stays
+                # open to strong auto-detection (the stricter switch gate still
+                # rejects one-word flips). Older URLs carry no source: treat a
+                # non-empty language as the lead's preference, which is what it
+                # was before this parameter existed.
+                outbound_language_source = str(
+                    outbound_params.get("languageSource") or ""
+                ).strip().lower() or ("lead" if outbound_language else "default")
                 if outbound_language:
-                    session.language = outbound_language
+                    session.set_language(
+                        outbound_language, outbound_language_source
+                    )
+                logger.info(
+                    "WS /ws/twilio-outbound: language=%s source=%s",
+                    session.language, session.language_source,
+                )
                 from app.crm import session as crm_session
 
                 outbound_session = crm_session.start(
@@ -1872,7 +1926,8 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
 @app.api_route("/twilio/outbound-voice", methods=["GET", "POST"])
 async def twilio_outbound_voice_webhook(
-    leadId: str = Query(""), phone: str = Query(""), language: str = Query("")
+    leadId: str = Query(""), phone: str = Query(""), language: str = Query(""),
+    languageSource: str = Query(""),
 ):
     """
     Twilio fetches this URL when an outbound call is answered.
@@ -1890,11 +1945,20 @@ async def twilio_outbound_voice_webhook(
     from app.outbound.twiml import outbound_connect_twiml
 
     twiml = outbound_connect_twiml(
-        host, {"leadId": leadId, "phone": phone, "language": language}
+        host, {
+            "leadId": leadId,
+            "phone": phone,
+            "language": language,
+            # Without this the media stream cannot tell an operator's explicit
+            # choice from the lead's stored preference, and would leave both
+            # open to per-utterance drift.
+            "languageSource": languageSource,
+        }
     )
     logger.info(
         f"/twilio/outbound-voice: serving TwiML with host={host}, "
-        f"lead={'set' if leadId else 'none'}, language={language or 'default'}"
+        f"lead={'set' if leadId else 'none'}, language={language or 'default'}, "
+        f"source={languageSource or 'default'}"
     )
     return Response(content=twiml, media_type="application/xml")
 
@@ -2038,7 +2102,10 @@ async def twilio_voice_webhook(From: str = Query(""), language: str = Query(""))
     )
     twiml = ivr_template.format(
         host=host,
-        stream=_stream_markup(host, From, language or settings.DEFAULT_LANGUAGE),
+        stream=_stream_markup(
+            host, From, language or settings.DEFAULT_LANGUAGE,
+            locked=bool(normalize_language_code(language)),
+        ),
         # A dedicated Twilio number can pin the language with ?language=hi.
         # Digits 1/2/3 select per call; 9 opens the foreign menu; an unknown
         # digit keeps the default.
@@ -2099,7 +2166,10 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
     foreign = configured_foreign_languages()
     if foreign and stage != "foreign" and (Digits or "").strip() == "9":
         menu = TWIML_FOREIGN_IVR_TEMPLATE.format(
-            stream=_stream_markup(host, From, chosen_language),
+            stream=_stream_markup(
+                host, From, chosen_language,
+                locked=bool(normalize_language_code(language)),
+            ),
             action=_foreign_menu_action(normalize_language_code(language)),
         )
         logger.info(
@@ -2113,12 +2183,23 @@ async def twilio_voice_connect(Digits: str = "", From: str = Query(""),
             (Digits or "").strip(), chosen_language
         )
 
+    # Any digit, or a pinned ?language=, is an explicit selection: the answer
+    # language is locked against per-utterance drift. No digit and no pin is
+    # the default, where auto-detection may still switch on strong evidence.
+    explicit_language = bool((Digits or "").strip()) or bool(
+        normalize_language_code(language)
+    )
+
     logger.info(
         f"/twilio/voice/connect: digit={Digits}, language={chosen_language}, "
-        f"host={host}, caller={'set' if From else 'unknown'}"
+        f"locked={explicit_language}, host={host}, "
+        f"caller={'set' if From else 'unknown'}"
     )
     twiml = TWIML_TEMPLATE.format(
-        host=host, stream=_stream_markup(host, From, chosen_language)
+        host=host,
+        stream=_stream_markup(
+            host, From, chosen_language, locked=explicit_language
+        ),
     )
     return Response(content=twiml, media_type="application/xml")
 
@@ -3381,7 +3462,13 @@ async def api_quick_call(req: Request):
     immediately queue an outbound call.  Returns both the lead and
     call_queue entry in a single response.
 
-    Body: {"phone_number": "+91...", "name": "Optional"}
+    Body: {"phone_number": "+91...", "name": "Optional",
+           "language": "hi"}   # optional, explicit selection
+
+    `language` is the outbound equivalent of the inbound IVR digit: an
+    explicit choice that pins the answer language for the whole call. Without
+    it the worker uses the lead's stored language (soft, auto-detection may
+    still switch on strong evidence), then ``OUTBOUND_LANGUAGE``.
     """
     try:
         body = await req.json()
@@ -3391,6 +3478,12 @@ async def api_quick_call(req: Request):
     phone = body.get("phone_number", "").strip()
     if not phone:
         return JSONResponse({"error": "phone_number is required"}, status_code=400)
+
+    language = normalize_language_code(body.get("language", ""))
+    if language and not is_supported_language(language):
+        return JSONResponse(
+            {"error": f"Unsupported language: {language}"}, status_code=400
+        )
 
     from app.leads.models import add_to_call_queue, upsert_lead_by_phone
 
@@ -3402,7 +3495,9 @@ async def api_quick_call(req: Request):
     if not lead:
         return JSONResponse({"error": "Database unavailable"}, status_code=503)
 
-    queue_entry = await add_to_call_queue(lead_id=lead["id"])
+    queue_entry = await add_to_call_queue(
+        lead_id=lead["id"], language=language
+    )
     if not queue_entry:
         return JSONResponse({"error": "Failed to queue call"}, status_code=503)
 
@@ -3950,7 +4045,8 @@ async def api_log_interaction(req: Request):
         "transcript": "User: ...\nAssistant: ...",
         "channel": "streamlit" | "whatsapp" | "inbound_call" | "outbound_call",
         "lead_id": "optional-uuid (echoed back; the lead is resolved by phone)",
-        "conversation_id": "optional-uuid — the chat's own id for this session"
+        "conversation_id": "optional-uuid — the chat's own id for this session",
+        "language": "optional base code (en, hi, gu, es, ...)"
     }
 
     If lead_id is provided, uses it directly. Otherwise, looks up by phone
@@ -3966,6 +4062,9 @@ async def api_log_interaction(req: Request):
     channel = body.get("channel", "streamlit").strip()
     lead_id = body.get("lead_id", "").strip()
     conversation_id = body.get("conversation_id", "").strip()
+    # Recorded on the conversation row so an outbound follow-up can open in the
+    # language this chat actually used. Empty keeps the pre-language behaviour.
+    language = body.get("language", "").strip()
 
     if not transcript:
         return JSONResponse({"error": "transcript is required"}, status_code=422)
@@ -3993,6 +4092,7 @@ async def api_log_interaction(req: Request):
             # (lead_id is not passed: this helper upserts by phone.)
             conversation_id=conversation_id or None,
             crm_user_id=crm_user_id or None,
+            language=language,
         )
         if conv:
             return {
