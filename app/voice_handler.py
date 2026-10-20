@@ -847,6 +847,16 @@ def greeting_asset_name(language: str | None, direction: str, text: str) -> str:
     return f"greeting_{direction_name}_{code}_{_greeting_digest(key)}.wav"
 
 
+def menu_asset_name(language: str | None, text: str) -> str:
+    """Pre-rendered asset name for the outbound language menu.
+
+    Same digest identity as a greeting, so a voice, pace, provider or wording
+    change produces a new name and Twilio can never serve stale menu audio.
+    """
+    key = greeting_cache_key(language, "menu", text)
+    return f"menu_{key[0]}_{_greeting_digest(key)}.wav"
+
+
 def greeting_asset_frames(
     language: str | None, direction: str, text: str
 ) -> list[bytes] | None:
@@ -1042,7 +1052,7 @@ FRAME_MUTED = "MUTED"                # BARGE_IN_ENABLED off: the documented disc
 #: this set: it is a stored preference, so natural code-switching is allowed —
 #: but only through the stricter switch gate in `_apply_detected_language`.
 _LOCKING_LANGUAGE_SOURCES = frozenset(
-    {"ivr", "pinned", "operator", "campaign", "spoken"}
+    {"ivr", "pinned", "operator", "campaign", "selected", "spoken"}
 )
 
 BARGE_IN_ENABLED = settings.BARGE_IN_ENABLED
@@ -1531,7 +1541,7 @@ class VoiceCallSession:
         sample_rate: int = 8000,             # Twilio uses 8 kHz
         direction: str = "inbound",          # "inbound" | "outbound" — shapes LLM behavior
         language: str = "",                  # BCP-47-ish code; "" -> DEFAULT_LANGUAGE
-        language_source: str = "default",    # "default" | "ivr" | "lead" | "operator" | "spoken"
+        language_source: str = "default",    # "default" | "ivr" | "lead" | "operator" | "campaign" | "selected" | "spoken"
     ):
         # BRD-04: one decision, and `None` resolves to the setting rather than
         # to a literal. The parameter used to default to the number 30 while no

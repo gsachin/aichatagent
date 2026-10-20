@@ -111,6 +111,31 @@ def _outbound_language_source(lead: dict | None, override: str = "") -> str:
     return ""
 
 
+def _outbound_context_params(
+    lead_id: str, phone_number: str, lead: dict | None,
+    override_language: str = "",
+) -> dict:
+    """The query parameters on the outbound TwiML URL.
+
+    They reach the media stream as `<Parameter>`s: lead identity for the CRM
+    link, and the language/source the call opens in. `selectLanguage=1` asks
+    the webhook to play the one-digit language menu before connecting; the
+    configured language remains the fallback for a timeout or digit 4.
+    """
+    from app.config import settings
+
+    params = {"leadId": lead_id, "phone": phone_number}
+    language = _outbound_language(lead, override_language)
+    source = _outbound_language_source(lead, override_language)
+    if language:
+        params["language"] = language
+    if source:
+        params["languageSource"] = source
+    if settings.OUTBOUND_LANGUAGE_MENU:
+        params["selectLanguage"] = "1"
+    return params
+
+
 class OutboundCallWorker:
     """
     Background worker that polls the ``call_queue`` table and initiates
@@ -226,19 +251,17 @@ class OutboundCallWorker:
             # it on the <Stream> as a <Parameter> — the media stream carries no
             # application data otherwise, and without it the call cannot be
             # linked to the CRM (or to the lead it was placed for).
-            context_params = {
-                "leadId": lead_id,
-                "phone": phone_number,
-            }
-            # Empty keeps the URL byte-identical to the pre-foreign behaviour.
-            override_language = str(entry.get("language") or "")
-            outbound_language = _outbound_language(lead, override_language)
-            language_source = _outbound_language_source(lead, override_language)
-            if outbound_language:
-                context_params["language"] = outbound_language
-            if language_source:
-                context_params["languageSource"] = language_source
-            context = urllib.parse.urlencode(context_params)
+            # Empty language/source keeps the URL byte-identical to the
+            # pre-foreign behaviour; `selectLanguage=1` adds the answered-call
+            # menu and leaves that language as its fallback.
+            context = urllib.parse.urlencode(
+                _outbound_context_params(
+                    lead_id,
+                    phone_number,
+                    lead,
+                    str(entry.get("language") or ""),
+                )
+            )
 
             client = Client(
                 settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN

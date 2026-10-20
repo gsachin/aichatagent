@@ -57,7 +57,7 @@ from xml.sax.saxutils import escape
 import json
 import logging
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1996,10 +1996,152 @@ async def websocket_twilio_outbound(websocket: WebSocket):
 
 # ── HTTP: Outbound call voice TwiML (fetched by Twilio) ──────────────
 
+#: The outbound language menu: digit pressed -> answer language. Four (or a
+#: timeout) keeps whatever language the call was configured to open in.
+_OUTBOUND_MENU_DIGITS = {"1": "en", "2": "hi", "3": "gu"}
+
+
+def _outbound_menu_requested(select_language: str, selected: str) -> bool:
+    """Should this request serve the language menu rather than connect?
+
+    The worker puts `selectLanguage=1` on the call URL. `selected=1` is the
+    guard for the stream-connect path: even if the URL is re-fetched with the
+    flag still present, a call that has already chosen never sees the menu
+    again.
+    """
+    # Called directly (tests, other code) the FastAPI defaults are `Query`
+    # objects rather than strings; only a real string can carry a flag.
+    def _text(value) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    return (
+        _text(select_language).lower() in ("1", "true", "yes", "on")
+        and _text(selected) != "1"
+    )
+
+
+def _outbound_menu_action_url(
+    host: str, lead_id: str, phone: str, language: str, language_source: str,
+    stage: str = "",
+) -> str:
+    """The Gather action, carrying the fallback identity and the menu stage.
+
+    `stage=foreign` is the second-level (six foreign languages) menu; its
+    digits are interpreted against ``_FOREIGN_LANGUAGE_BY_DIGIT`` rather than
+    the first menu's 1/2/3.
+    """
+    carried = {
+        key: value
+        for key, value in {
+            "leadId": lead_id,
+            "phone": phone,
+            # The fallback language/source, not the menu's prompt language:
+            # a timeout must behave exactly like the old direct connect.
+            "language": language,
+            "languageSource": language_source,
+            "stage": stage,
+        }.items()
+        if value
+    }
+    action_url = f"https://{host}/twilio/outbound-language"
+    if carried:
+        action_url = f"{action_url}?{urlencode(carried)}"
+    return action_url
+
+
+def _outbound_menu_twiml(
+    host: str, lead_id: str, phone: str, language: str, language_source: str
+) -> str:
+    """The first `<Gather>` menu in the fallback language, plus the connect.
+
+    The prompt is pre-rendered (Sarvam for Hindi/Gujarati, Kokoro for English)
+    so the first thing the callee hears is in the approved call voice. It
+    offers 1/2/3 for the demo languages and, when FOREIGN_LANGUAGES is
+    enabled, 9 for the second-level Spanish/French/Italian/Japanese/
+    Portuguese/Chinese menu -- the same two-level shape as the inbound IVR.
+    The action carries the same identity parameters as the call URL; the digit
+    itself is appended by Twilio.
+    """
+    from app.admission import asset_available
+    from app.outbound.twiml import outbound_language_menu_twiml
+    from app.voice_handler import menu_asset_name
+    from app.voice_system_prompt import (
+        LANGUAGE_MENU_PROMPT_LANGUAGES,
+        call_language_menu,
+    )
+
+    fallback = normalize_language_code(
+        language or settings.DEFAULT_LANGUAGE or "en"
+    )
+    prompt_code = (
+        fallback if fallback in LANGUAGE_MENU_PROMPT_LANGUAGES else "en"
+    )
+    text = call_language_menu(prompt_code, fallback)
+    asset = menu_asset_name(prompt_code, text)
+    audio_url = (
+        f"https://{host}/static/audio/{asset}"
+        if asset_available(asset)
+        else ""
+    )
+
+    return outbound_language_menu_twiml(
+        host,
+        {
+            "leadId": lead_id,
+            "phone": phone,
+            "language": language,
+            "languageSource": language_source,
+        },
+        action_url=_outbound_menu_action_url(
+            host, lead_id, phone, language, language_source
+        ),
+        audio_url=audio_url,
+        prompt=call_language_menu("en", fallback),
+    )
+
+
+def _outbound_foreign_menu_twiml(
+    host: str, lead_id: str, phone: str, language: str, language_source: str
+) -> str:
+    """The second-level menu: six foreign languages on digits 1-6.
+
+    Spoken in English, exactly like the inbound foreign menu: no language has
+    been chosen yet, and the names (Spanish, Chinese, ...) are what the caller
+    is listening for. A timeout continues in the call's fallback language.
+    """
+    from app.admission import asset_available
+    from app.outbound.twiml import outbound_language_menu_twiml
+    from app.voice_handler import menu_asset_name
+    from app.voice_system_prompt import call_foreign_language_menu
+
+    text = call_foreign_language_menu()
+    asset = menu_asset_name("en", text)
+    audio_url = (
+        f"https://{host}/static/audio/{asset}"
+        if asset_available(asset)
+        else ""
+    )
+    return outbound_language_menu_twiml(
+        host,
+        {
+            "leadId": lead_id,
+            "phone": phone,
+            "language": language,
+            "languageSource": language_source,
+        },
+        action_url=_outbound_menu_action_url(
+            host, lead_id, phone, language, language_source, stage="foreign"
+        ),
+        audio_url=audio_url,
+        prompt=text,
+    )
+
+
 @app.api_route("/twilio/outbound-voice", methods=["GET", "POST"])
 async def twilio_outbound_voice_webhook(
     leadId: str = Query(""), phone: str = Query(""), language: str = Query(""),
     languageSource: str = Query(""),
+    selectLanguage: str = Query(""), selected: str = Query(""),
 ):
     """
     Twilio fetches this URL when an outbound call is answered.
@@ -2011,8 +2153,23 @@ async def twilio_outbound_voice_webhook(
     `leadId`/`phone` are put on the URL by the outbound worker
     (app/outbound/caller.py) and passed straight through as `<Parameter>`s, so
     the media stream can tell who it is talking to and link them to the CRM.
+
+    With `selectLanguage=1` the caller first hears a one-digit language menu
+    and `/twilio/outbound-language` returns the connect TwiML once a digit
+    arrives. The menu is skipped (`selected=1`) after a choice has been made.
     """
     host = _resolve_tunnel_host()
+
+    if _outbound_menu_requested(selectLanguage, selected):
+        twiml = _outbound_menu_twiml(
+            host, leadId, phone, language, languageSource
+        )
+        logger.info(
+            f"/twilio/outbound-voice: serving language menu with host={host}, "
+            f"lead={'set' if leadId else 'none'}, "
+            f"fallback={language or 'default'}"
+        )
+        return Response(content=twiml, media_type="application/xml")
 
     from app.outbound.twiml import outbound_connect_twiml
 
@@ -2031,6 +2188,72 @@ async def twilio_outbound_voice_webhook(
         f"/twilio/outbound-voice: serving TwiML with host={host}, "
         f"lead={'set' if leadId else 'none'}, language={language or 'default'}, "
         f"source={languageSource or 'default'}"
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.get("/twilio/outbound-language")
+async def twilio_outbound_language_webhook(
+    leadId: str = Query(""), phone: str = Query(""), language: str = Query(""),
+    languageSource: str = Query(""), Digits: str = Query(""),
+    stage: str = Query(""),
+):
+    """The `<Gather>` action: turn the pressed digit into the call language.
+
+    A valid 1/2/3 (first menu) or 1-6 (foreign menu) is an explicit choice, so
+    it travels as `languageSource=selected` and locks the session against
+    per-utterance drift. Digit 9 on the first menu opens the second-level
+    foreign menu. Anything else -- 4, a timeout (no `Digits`), an unsupported
+    language -- keeps the call's configured language and source untouched.
+    """
+    from app.outbound.twiml import outbound_connect_twiml
+
+    host = _resolve_tunnel_host()
+    digit = Digits.strip() if isinstance(Digits, str) else ""
+    stage = stage.strip().lower() if isinstance(stage, str) else ""
+
+    if stage == "foreign":
+        chosen = _FOREIGN_LANGUAGE_BY_DIGIT.get(digit)
+    elif digit == "9" and configured_foreign_languages():
+        twiml = _outbound_foreign_menu_twiml(
+            host, leadId, phone, language, languageSource
+        )
+        logger.info(
+            f"/twilio/outbound-language: digit=9, serving foreign menu, "
+            f"fallback={language or 'default'}"
+        )
+        return Response(content=twiml, media_type="application/xml")
+    else:
+        chosen = _OUTBOUND_MENU_DIGITS.get(digit)
+
+    if chosen and not is_supported_language(chosen):
+        logger.warning(
+            f"/twilio/outbound-language: digit {digit} selects "
+            f"{chosen}, which this deployment does not support; keeping "
+            f"{language or 'default'}"
+        )
+        chosen = ""
+
+    if chosen:
+        answer_language, answer_source = chosen, "selected"
+    else:
+        # Pass the raw values through: the stream handler already knows how
+        # to interpret an empty language/source, and this is the same
+        # behaviour as a call that never had the menu.
+        answer_language, answer_source = language, languageSource
+
+    twiml = outbound_connect_twiml(
+        host, {
+            "leadId": leadId,
+            "phone": phone,
+            "language": answer_language,
+            "languageSource": answer_source,
+        }
+    )
+    logger.info(
+        f"/twilio/outbound-language: digit={digit or 'none'}, "
+        f"language={answer_language or 'default'}, "
+        f"source={answer_source or 'default'}"
     )
     return Response(content=twiml, media_type="application/xml")
 

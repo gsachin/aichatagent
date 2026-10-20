@@ -569,10 +569,21 @@ class Settings:
             "FOREIGN_LANGUAGES", "es,fr,it,ja,pt,zh"
         ).strip().lower()
     )
-    # Language pinned on the outbound TwiML URL. Empty keeps the URL exactly
-    # as it was; the outbound worker sends no language parameter today.
+    # Campaign default for the outbound TwiML URL when the lead has no stored
+    # language. Empty leaves the language off the URL (session default).
     OUTBOUND_LANGUAGE: str = field(
         default_factory=lambda: _env("OUTBOUND_LANGUAGE", "").strip().lower()
+    )
+    # Ask the callee, as soon as the outbound call is answered, which language
+    # to continue in: a DTMF menu before the media stream starts (1 English,
+    # 2 Hindi, 3 Gujarati, 4 keep the call's configured language). The choice
+    # is carried as `languageSource=selected`, which locks it for the call.
+    # `0` restores the old behaviour: connect straight to the stream.
+    OUTBOUND_LANGUAGE_MENU: bool = field(
+        default_factory=lambda: _env("OUTBOUND_LANGUAGE_MENU", "1")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
     )
     GROUNDING_LANGUAGE_MODE: str = field(
         default_factory=lambda: _env(

@@ -22,7 +22,11 @@ explicit "no information retrieved" marker when retrieval is empty.
 """
 
 from app.config import settings
-from app.languages import normalize_language_code
+from app.languages import (
+    DEFAULT_FOREIGN_LANGUAGES,
+    configured_foreign_languages,
+    normalize_language_code,
+)
 from app.localized_text import INBOUND_GREETINGS, OUTBOUND_GREETINGS
 
 COMPANY_NAME = settings.COMPANY_NAME
@@ -881,6 +885,93 @@ def call_greeting(language: str | None, direction: str = "inbound") -> str:
     table = _OUTBOUND_GREETING if direction == "outbound" else _INBOUND_GREETING
     template = table.get(code, table["en"])
     return template.format(agent_name=AGENT_NAME, company_name=COMPANY_NAME)
+
+
+#: The outbound language menu, spoken before the media stream starts. Each
+#: prompt offers the three core languages and a fourth choice that keeps the
+#: language the call would otherwise have opened in -- so silence (or a caller
+#: who only understands that language) is never a dead end. The prompt itself
+#: is in the fallback language; a caller can always answer with a digit.
+_LANGUAGE_MENU = {
+    "en": (
+        "Hello, this is {company_name} Admissions. Press 1 for English, "
+        "2 for Hindi, or 3 for Gujarati.{foreign_line} Press 4 to continue "
+        "in {continue_name}."
+    ),
+    "hi": (
+        "नमस्ते, यह {company_name} एडमिशन से है। अंग्रेज़ी के लिए 1, "
+        "हिंदी के लिए 2, गुजराती के लिए 3 दबाइए।{foreign_line} "
+        "{continue_name} में जारी रखने के लिए 4 दबाइए।"
+    ),
+    "gu": (
+        "નમસ્તે, આ {company_name} એડમિશનથી છે. અંગ્રેજી માટે 1, "
+        "હિન્દી માટે 2, ગુજરાતી માટે 3 દબાવો.{foreign_line} "
+        "{continue_name}માં ચાલુ રાખવા 4 દબાવો."
+    ),
+}
+
+#: The second-level entry on the first menu. It names the six enabled foreign
+#: languages (the same set, in the same order, as the inbound foreign menu) and
+#: is included only while FOREIGN_LANGUAGES is non-empty -- with the feature
+#: off, the menu stays byte-identical to the English/Hindi/Gujarati version.
+_LANGUAGE_MENU_FOREIGN_LINE = {
+    "en": (
+        " For Spanish, French, Italian, Japanese, Portuguese or Chinese, "
+        "press 9."
+    ),
+    "hi": (
+        " स्पेनिश, फ्रेंच, इतालवी, जापानी, पुर्तगाली या चीनी के लिए "
+        "9 दबाइए।"
+    ),
+    "gu": (
+        " સ્પેનિશ, ફ્રેન્ચ, ઇટાલિયન, જાપાનીઝ, પોર્ટુગીઝ અથવા ચાઈનીઝ "
+        "માટે 9 દબાવો."
+    ),
+}
+
+#: Languages the menu itself can be prompted in. A call whose fallback
+#: language is outside this set is prompted in English; pressing 4 still keeps
+#: that fallback language.
+LANGUAGE_MENU_PROMPT_LANGUAGES = ("en", "hi", "gu")
+
+
+def call_language_menu(
+    language: str | None, continue_language: str | None = None
+) -> str:
+    """The outbound language menu in *language*.
+
+    ``continue_language`` is what pressing 4 (or not pressing anything) keeps;
+    it defaults to the prompt language. Its name is rendered in the prompt's
+    own language for the three core languages, and in English otherwise.
+    """
+    prompt = normalize_language_code(language or "en")
+    if prompt not in _LANGUAGE_MENU:
+        prompt = "en"
+    keep = normalize_language_code(continue_language or language or "en")
+    name = LANGUAGE_NAMES.get(keep, keep or "English")
+    foreign_line = (
+        _LANGUAGE_MENU_FOREIGN_LINE[prompt]
+        if configured_foreign_languages()
+        else ""
+    )
+    return _LANGUAGE_MENU[prompt].format(
+        company_name=COMPANY_NAME,
+        continue_name=name,
+        foreign_line=foreign_line,
+    )
+
+
+def call_foreign_language_menu() -> str:
+    """The English second-level menu for the six foreign languages.
+
+    Digit order is the order of ``DEFAULT_FOREIGN_LANGUAGES``, which is also
+    ``_FOREIGN_LANGUAGE_BY_DIGIT`` on the inbound IVR: 1 Spanish, 2 French,
+    3 Italian, 4 Japanese, 5 Portuguese, 6 Chinese.
+    """
+    return " ".join(
+        f"Press {digit} for {LANGUAGE_NAMES.get(code, code)}."
+        for digit, code in enumerate(DEFAULT_FOREIGN_LANGUAGES, 1)
+    )
 
 
 #: A short "one moment" in the caller's language. It is pre-rendered in the

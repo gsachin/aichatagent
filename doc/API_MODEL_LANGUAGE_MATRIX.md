@@ -93,7 +93,7 @@ retrieves chunks.
 | Surface | Entry point | STT | LLM | TTS | Language selection |
 |---|---|---|---|---|---|
 | **Inbound Twilio call** | `/twilio/voice` -> IVR -> `/ws/twilio` | Sarvam -> IndicConformer -> Whisper | OpenAI `gpt-6-luna` (`query_rag_stream`) | Sarvam gu,hi / Kokoro en | IVR digits 1=en, 2=hi, 3=gu; `?language=` pins a code |
-| **Outbound Twilio call** | `OutboundCallWorker` -> `/twilio/outbound-voice` -> `/ws/twilio-outbound` | same | same | same | `language` + `languageSource` on the TwiML URL: operator/campaign choices lock, the lead's stored language stays soft, empty uses `DEFAULT_LANGUAGE=en` |
+| **Outbound Twilio call** | `OutboundCallWorker` -> `/twilio/outbound-voice` -> answered-call menu -> `/ws/twilio-outbound` | same | same | same | `language` + `languageSource` on the TwiML URL are the fallback; with `OUTBOUND_LANGUAGE_MENU=1` the callee presses 1=en, 2=hi, 3=gu, or 9 for the foreign menu (1=es, 2=fr, 3=it, 4=ja, 5=pt, 6=zh); 4/timeout keeps the fallback, and any choice locks as `languageSource=selected`. Operator/campaign fallbacks lock; the lead's stored language stays soft; empty uses `DEFAULT_LANGUAGE=en` |
 | **WhatsApp** | `POST /twilio/whatsapp` | none (voice notes rejected) | OpenAI via `run_rag_query_sync(mode="chat")` | none | Twilio `Language` form field, else `DEFAULT_LANGUAGE` |
 | **Streamlit chat** | `streamlit run app.py` (port 8501) | none | OpenAI via LangChain `ChatOpenAI` | none | Selector: English / Hindi / Gujarati only |
 | **CLI (legacy)** | `python admissions_bot.py` | none | OpenAI via `get_chat_model` | none | none; not a served surface |
@@ -103,6 +103,15 @@ retrieves chunks.
 
 - Inbound language is chosen by IVR (`_LANGUAGE_BY_DIGIT`, `app/main.py:548`) or a
   `?language=<code>` query on the voice webhook.
+- Outbound language is chosen by the callee as soon as the call is answered:
+  `/twilio/outbound-voice` returns a one-digit `<Gather>` (pre-rendered menu in
+  the fallback language), and `/twilio/outbound-language` maps 1/2/3 to
+  en/hi/gu. Digit 9 opens the same second-level foreign menu as inbound
+  (`stage=foreign`; 1=es, 2=fr, 3=it, 4=ja, 5=pt, 6=zh), offered only while
+  `FOREIGN_LANGUAGES` is non-empty. Digit 4, a timeout, or an unsupported
+  language keeps the call's configured language. A pressed digit is sent as
+  `languageSource=selected`, which is a locking source;
+  `OUTBOUND_LANGUAGE_MENU=0` skips the menu.
 - The language travels to the Media Stream as a `<Parameter>`; the session sets
   `self.language` from it.
 - With `STT_LANGUAGE=auto`, the detected language replaces the session language

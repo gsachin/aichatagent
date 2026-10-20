@@ -57,7 +57,11 @@ from app.admission import (  # noqa: E402
     fixed_response_asset,
     fixed_response_text,
 )
-from app.languages import DEFAULT_FOREIGN_LANGUAGES, contains_cjk  # noqa: E402
+from app.languages import (  # noqa: E402
+    DEFAULT_FOREIGN_LANGUAGES,
+    configured_foreign_languages,
+    contains_cjk,
+)
 
 #: Internal vocabulary that must never reach a caller (AC-5).
 FORBIDDEN_IN_WORDING = (
@@ -73,6 +77,10 @@ TARGET_SR = 8000
 #: covers the full set even when FOREIGN_LANGUAGES is empty, so enabling one
 #: later does not require remembering to rebuild.
 GREETING_LANGUAGES = ("en", "hi", "gu", *DEFAULT_FOREIGN_LANGUAGES)
+
+#: Languages the outbound language menu is prompted in. A call whose fallback
+#: language is one of the six foreign languages hears the English prompt.
+MENU_LANGUAGES = ("en", "hi", "gu")
 
 
 def check_wording(name: str, text: str) -> list[str]:
@@ -197,11 +205,11 @@ def synthesise(text: str, out_path: Path, *,
 
 
 def synthesise_greeting(text: str, out_path: Path, language: str) -> dict:
-    """Render a fixed greeting through the same provider the live call uses.
+    """Render a fixed greeting/menu through the same provider the call uses.
 
-    Gujarati is routed to Sarvam Bulbul in the demo; every other selectable
-    language uses Kokoro. The asset is therefore in the same voice the caller
-    would have heard from live synthesis.
+    Hindi and Gujarati are routed to Sarvam Bulbul in the demo; every other
+    selectable language uses Kokoro. The asset is therefore in the same voice
+    the caller would have heard from live synthesis.
     """
     from app.voice_handler import _use_sarvam_tts
 
@@ -260,6 +268,30 @@ def greeting_jobs() -> list[tuple[str, str, str, str]]:
     return jobs
 
 
+def menu_jobs() -> list[tuple[str, str, str]]:
+    """(language, filename, text) for the outbound language menu prompts.
+
+    The first-level prompts are rendered in the three core languages. When
+    FOREIGN_LANGUAGES is enabled, the English second-level menu (Spanish,
+    French, Italian, Japanese, Portuguese, Chinese) is rendered too; it is the
+    same voice the caller hears for English rather than a carrier voice.
+    """
+    from app.voice_handler import menu_asset_name
+    from app.voice_system_prompt import (
+        call_foreign_language_menu,
+        call_language_menu,
+    )
+
+    jobs = []
+    for code in MENU_LANGUAGES:
+        text = call_language_menu(code)
+        jobs.append((code, menu_asset_name(code, text), text))
+    if configured_foreign_languages():
+        text = call_foreign_language_menu()
+        jobs.append(("en", menu_asset_name("en", text), text))
+    return jobs
+
+
 def _manifest_skeleton(voice: str, speed: float) -> dict:
     return {
         "voice": voice,
@@ -268,6 +300,7 @@ def _manifest_skeleton(voice: str, speed: float) -> dict:
                    "channels": 1, "note": "Twilio <Play> carrier format"},
         "assets": {},
         "greetings": {},
+        "menus": {},
     }
 
 
@@ -304,7 +337,10 @@ def _write_manifest(manifest: dict) -> Path:
     return path
 
 
-def _wording_problems(jobs: list[tuple[str, str, str | None]]) -> list[str]:
+def _wording_problems(
+    jobs: list[tuple[str, str, str | None]],
+    menus: list[tuple[str, str, str]] = (),
+) -> list[str]:
     problems = (
         check_wording("busy", BUSY_TEXT)
         + check_wording("fixed_response", FIXED_RESPONSE_TEXT)
@@ -312,11 +348,17 @@ def _wording_problems(jobs: list[tuple[str, str, str | None]]) -> list[str]:
     for name, text, code in jobs:
         if code is not None:
             problems.extend(check_foreign_wording(name, text))
+    for code, name, text in menus:
+        if code == "en":
+            problems.extend(check_wording(name, text))
+        else:
+            problems.extend(check_foreign_wording(name, text))
     return problems
 
 
 def ensure(jobs: list[tuple[str, str, str | None]],
            greetings: list[tuple[str, str, str, str]],
+           menus: list[tuple[str, str, str]],
            voice: str, speed: float) -> int:
     """Build only the assets that are missing or stale.
 
@@ -354,8 +396,16 @@ def ensure(jobs: list[tuple[str, str, str | None]],
         else:
             manifest["greetings"][name] = record
 
-    total = len(jobs) + len(greetings)
-    pending = len(build_fixed) + len(build_greetings)
+    build_menus = []
+    for code, name, text in menus:
+        record = (existing.get("menus") or {}).get(name)
+        if voice_changed or not _record_current(name, text, record):
+            build_menus.append((code, name, text))
+        else:
+            manifest["menus"][name] = record
+
+    total = len(jobs) + len(greetings) + len(menus)
+    pending = len(build_fixed) + len(build_greetings) + len(build_menus)
     if not pending:
         print(f"  all {total} call assets are present and current")
         return 0
@@ -384,6 +434,19 @@ def ensure(jobs: list[tuple[str, str, str | None]],
             continue
         info["direction"] = direction
         manifest["greetings"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    for code, name, text in build_menus:
+        try:
+            info = synthesise_greeting(text, asset_path(name), code)
+        except Exception as exc:                       # noqa: BLE001 — keep building
+            failures += 1
+            print(f"  FAILED  {name}: {type(exc).__name__}: {exc}")
+            continue
+        info["kind"] = "language_menu"
+        manifest["menus"][name] = info
         print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
               f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
               f"lang {info['language']}  voice {info['voice']}")
@@ -418,8 +481,9 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs = fixed_jobs()
     greetings = greeting_jobs()
+    menus = menu_jobs()
 
-    problems = _wording_problems(jobs)
+    problems = _wording_problems(jobs, menus)
     for p in problems:
         print(f"  REFUSED  {p}")
     if problems:
@@ -430,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     voice, speed = live_voice()
 
     if args.ensure:
-        return ensure(jobs, greetings, voice, speed)
+        return ensure(jobs, greetings, menus, voice, speed)
 
     manifest = _manifest_skeleton(voice, speed)
 
@@ -450,6 +514,17 @@ def main(argv: list[str] | None = None) -> int:
         info = synthesise_greeting(text, asset_path(name), code)
         info["direction"] = direction
         manifest["greetings"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    # The outbound language menu, prompted in the call's fallback language
+    # before the media stream starts.
+    print("\n  language menus")
+    for code, name, text in menus:
+        info = synthesise_greeting(text, asset_path(name), code)
+        info["kind"] = "language_menu"
+        manifest["menus"][name] = info
         print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
               f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
               f"lang {info['language']}  voice {info['voice']}")

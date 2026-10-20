@@ -1,7 +1,7 @@
 """`build_call_assets.py --ensure` is the deploy path: build only what is stale.
 
 A fresh clone has no `app/static/audio/` (it is gitignored), so the launchers
-must generate the greeting set. A restart must not re-render 32 assets, and a
+must generate the greeting set. A restart must not re-render 36 assets, and a
 voice change must invalidate the old ones. These tests pin both behaviours
 without loading a model or touching the network.
 """
@@ -64,16 +64,17 @@ def test_ensure_builds_everything_once_then_is_a_noop(build, capsys):
 
     assert module.main(["--ensure"]) == 0
     # 14 fixed/busy (English + six foreign pairs) + 18 greetings (9 languages
-    # x inbound/outbound).
-    assert len(calls["greeting"]) == 18
-    assert len(list(asset_dir.glob("*.wav"))) == 32
+    # x inbound/outbound) + 4 outbound menu prompts (en/hi/gu + the foreign
+    # second level).
+    assert len(calls["greeting"]) == 22
+    assert len(list(asset_dir.glob("*.wav"))) == 36
     assert (asset_dir / "manifest.json").is_file()
 
     calls["fixed"].clear()
     calls["greeting"].clear()
     assert module.main(["--ensure"]) == 0
     assert calls["greeting"] == []
-    assert "all 32 call assets are present and current" in capsys.readouterr().out
+    assert "all 36 call assets are present and current" in capsys.readouterr().out
 
 
 def test_ensure_rebuilds_only_a_missing_greeting(build):
@@ -109,8 +110,8 @@ def test_ensure_rebuilds_all_when_the_voice_changes(build, monkeypatch, capsys):
 
     # Every asset is rebuilt; the greeting filenames whose voice moved carry a
     # new digest, so no stale file can be selected under the new identity.
-    assert "0/32 current; building 32" in capsys.readouterr().out
-    assert len(calls["greeting"]) == 18
+    assert "0/36 current; building 36" in capsys.readouterr().out
+    assert len(calls["greeting"]) == 22
     names_after = {p.name for p in asset_dir.glob("greeting_*.wav")}
     assert names_after - names_before, "the changed voice must produce new names"
 
