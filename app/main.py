@@ -457,6 +457,17 @@ async def lifespan(app_instance):
             except Exception as tts_exc:                # noqa: BLE001
                 logger.warning(f"Kokoro pre-warm skipped: {tts_exc}")
 
+            # The first _prepare_audio imports scipy.signal inside the turn.
+            # On the 2026-10-20 call that was a 1 s pre-STT stall on turn 1;
+            # pay it here, in the boot thread, not on a caller.
+            try:
+                from app.voice_handler import warmup_audio_resampler
+
+                warmup_audio_resampler()
+                logger.info("Audio resampler pre-warmed")
+            except Exception as resample_exc:           # noqa: BLE001
+                logger.warning(f"Audio resampler warmup skipped: {resample_exc}")
+
         await _asyncio.to_thread(_warmup)
     except Exception as e:
         logger.warning(f"Warmup skipped: {e}")

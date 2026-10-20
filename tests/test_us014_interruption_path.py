@@ -38,6 +38,7 @@ import math
 import re
 import struct
 
+import numpy as np
 import pytest
 
 import app.voice_handler as vh
@@ -448,6 +449,36 @@ async def test_the_sink_stops_mid_stream(monkeypatch):
     k = kinds(ws)
     assert k.count("media") == 1, "a streamed turn must stop feeding the carrier"
     assert "clear" in k
+
+
+@pytest.mark.anyio
+async def test_a_barge_in_stops_the_tts_stream_not_just_the_sink(monkeypatch):
+    """The synthesiser must stop, not keep generating a clause nobody hears.
+
+    On the 2026-10-20 call a barge-in at 0.8 s stopped the sink but the Sarvam
+    stream kept running for ~8 s, then a stray second clause started. The
+    caller heard the answer stop, a long silence, and a fragment -- "like the
+    connection disconnected and reconnected".
+    """
+    session = VoiceCallSession()
+    produced = 0
+
+    async def fake_stream(self, text, **kwargs):
+        nonlocal produced
+        for _ in range(100):
+            produced += 1
+            yield np.full(160, 0.1, dtype=np.float32), 8000
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(VoiceCallSession, "synthesise_stream", fake_stream)
+    session.begin_turn()
+
+    async def sink(frames):
+        session.request_interruption()
+
+    chunks = await session._synthesise_streamed("x", sink)
+    assert produced == 1, "the provider stream must close after a barge-in"
+    assert chunks, "the frames already produced are still returned"
 
 
 # ── cancellation state ──────────────────────────────────────────────────────

@@ -434,6 +434,20 @@ def _kokoro_hindi_phonemes(engine, text: str) -> str:
     return re.sub(r"\([a-z-]+\)", "", phonemes).strip()
 
 
+def warmup_audio_resampler() -> None:
+    """Pay the lazy scipy import before the first caller needs it.
+
+    `_prepare_audio` imports scipy.signal on its first call. On the
+    2026-10-20 call the first turn paid 1.0 s for that import between
+    UTTERANCE_PROCESSING and STT_STARTED; later turns were 2-9 ms. Runs in the
+    boot warm-up thread, never on a call.
+    """
+    try:
+        VoiceCallSession()._prepare_audio(b"\x7f" * 320)
+    except Exception:                                  # noqa: BLE001
+        logger.exception("Audio resampler warmup failed")
+
+
 def warmup_foreign_g2p() -> None:
     """Load the misaki dictionaries for enabled ja/zh at boot.
 
@@ -3678,11 +3692,30 @@ class VoiceCallSession:
         any_audio = False
         try:
             async for audio, sr in self.synthesise_stream(text):
+                if self.cancel_requested():
+                    # The caller has the floor. Breaking here closes the
+                    # provider stream too; before this check the sink stopped
+                    # sending but the synthesiser kept generating the whole
+                    # clause. On the 2026-10-20 call a barge-in at 0.8 s was
+                    # followed by ~8 s of silent synthesis and then a stray
+                    # second clause -- heard as "disconnected and reconnected".
+                    logger.info(
+                        "VoiceCall: TTS stream stopped by caller interruption"
+                    )
+                    break
                 any_audio = True
                 frames = self._chunk_to_ulaw_frames(audio, sr)
                 chunks.extend(frames)
                 if sink is not None and frames:
                     await sink(frames)
+                if self.cancel_requested():
+                    # The sink itself may have seen the caller's frame. Break
+                    # here as well, or `async for` pulls one more chunk from
+                    # the provider before the next iteration's check.
+                    logger.info(
+                        "VoiceCall: TTS stream stopped by caller interruption"
+                    )
+                    break
         except Exception:
             logger.exception("VoiceCall: streaming TTS failed")
             return chunks if any_audio else None
