@@ -127,6 +127,7 @@ With all six secrets in place, every reachable integration was exercised directl
 | CRM health and read | **PASS** — HTTP 200 on `/health` and `/admissions` |
 | Dashboard summary | **PASS** — seeded leads, conversations, and pipeline stats returned |
 | `/ready` after restart | **PASS** — `ready=true`, all four clauses true |
+| `-TunnelUi` UI tunnels | **PASS** — chat (8501) and dashboard (8502) quick tunnels both returned HTTP 200; `demo_stop.ps1` stopped both |
 
 Not exercised: a real Twilio voice call, a real WhatsApp message exchange (needs a recipient who has joined the Sandbox), and CRM writes (kept read-only).
 
