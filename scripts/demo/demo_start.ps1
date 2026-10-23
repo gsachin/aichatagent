@@ -19,6 +19,27 @@
     -WithStreamlit. The 8502 tunnel is skipped when -NoDashboard is used.
 .PARAMETER NoDashboard
     Do not start the admin dashboard on 8502.
+.EXAMPLE
+    .\demo_start.ps1
+    Local UI only: FastAPI, Streamlit chat, and the dashboard.
+.EXAMPLE
+    .\demo_start.ps1 -StartCrm
+    Local UI plus the CRM API on port 8098.
+.EXAMPLE
+    .\demo_start.ps1 -Live -StartCrm
+    Full client demo: FastAPI tunnel, Twilio voice repoint, WhatsApp Sandbox
+    URL, and the CRM API.
+.EXAMPLE
+    .\demo_start.ps1 -Live -StartCrm -TunnelUi
+    Same as the previous example, plus public Cloudflare tunnels for the
+    Streamlit chat (8501) and dashboard (8502). This matches development's
+    .\start_services.ps1 -WithStreamlit.
+.EXAMPLE
+    .\demo_start.ps1 -TunnelUi
+    Local UI with public chat and dashboard tunnels, without changing Twilio.
+.EXAMPLE
+    .\demo_start.ps1 -Live -StartCrm -NoDashboard
+    Full client demo without the admin dashboard or its tunnel.
 #>
 [CmdletBinding()]
 param(
