@@ -1,7 +1,9 @@
 # Separate Demo — Update Guide
 
 **Audience:** a future developer or AI agent asked to change the client demo.
-**Last verified:** 2026-10-23, development commit `356ca29`.
+**Last verified:** 2026-10-23 against development commit `356ca29`. Docs-only
+commits after that can advance the manifest without changing any runtime file;
+re-verify as described in section 2.
 **Demo folder:** `D:\project\UniversityBotDemoAPI`
 **Development source:** `D:\project\universityDemo`
 
@@ -61,7 +63,7 @@ as live truth.
 
 | Fact | Value |
 |---|---|
-| Development HEAD at last sync | `356ca29` |
+| Development HEAD at last sync | the latest clean commit at sync time; runtime files unchanged from `356ca29` |
 | Demo manifest | `status: clean`, `source_tracked_dirty: false` |
 | Managed files | 138 (about 6.7 MB) |
 | Demo runtime | `app/`, `app.py`, `dashboard.py` byte-identical to the approved source |
