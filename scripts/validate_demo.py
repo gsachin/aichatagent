@@ -442,8 +442,13 @@ def render(results: Results) -> str:
     lines.append("")
     if results.has_failures():
         lines.append("Result: **FAIL** — fix the checks marked FAIL.")
+    elif summary.get("BLOCKED"):
+        lines.append(
+            "Result: **PASS with blocked checks** — blocked checks require "
+            "credentials, a running stack, or an external service."
+        )
     else:
-        lines.append("Result: **PASS with blocked checks** — blocked checks require credentials, a running stack, or an external service.")
+        lines.append("Result: **PASS** — all checks passed.")
     lines.append("")
     return "\n".join(lines)
 

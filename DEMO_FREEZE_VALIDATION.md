@@ -1,6 +1,6 @@
 # Demo Freeze Validation
 
-Generated: 2026-10-23T08:30:31-07:00
+Generated: 2026-10-23T08:35:26-07:00
 
 | Status | Check | Detail |
 |---|---|---|
@@ -24,7 +24,7 @@ Generated: 2026-10-23T08:30:31-07:00
 | PASS | manifest readable |  |
 | PASS | manifest files present | 138 files |
 | PASS | manifest hashes match | 138 files |
-| PASS | source commit recorded | da75f59603a926d76c1fc74d916329188774ca20 |
+| PASS | source commit recorded | 219904e52d287a302a8db043e9df69257456a61e |
 | PASS | development tree clean at sync |  |
 | PASS | demo .env present |  |
 | PASS | demo database name | admissions_demo |
@@ -46,4 +46,4 @@ Generated: 2026-10-23T08:30:31-07:00
 
 PASS=37
 
-Result: **PASS with blocked checks** — blocked checks require credentials, a running stack, or an external service.
+Result: **PASS** — all checks passed.
