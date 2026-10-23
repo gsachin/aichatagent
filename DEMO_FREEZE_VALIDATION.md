@@ -1,6 +1,6 @@
 # Demo Freeze Validation
 
-Generated: 2026-10-23T07:57:00-07:00
+Generated: 2026-10-23T08:30:31-07:00
 
 | Status | Check | Detail |
 |---|---|---|
@@ -24,16 +24,16 @@ Generated: 2026-10-23T07:57:00-07:00
 | PASS | manifest readable |  |
 | PASS | manifest files present | 138 files |
 | PASS | manifest hashes match | 138 files |
-| PASS | source commit recorded | 29787f39c454374fc5704ede964e912cda7b408e |
+| PASS | source commit recorded | da75f59603a926d76c1fc74d916329188774ca20 |
 | PASS | development tree clean at sync |  |
 | PASS | demo .env present |  |
 | PASS | demo database name | admissions_demo |
 | PASS | CRM_ENABLED | true |
 | PASS | runtime env keys present | all non-allowed development keys are present |
 | PASS | runtime env parity | all non-allowed values match development |
-| BLOCKED | demo secrets filled | empty: LLM_API_KEY, SARVAM_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, TWILIO_WHATSAPP_NUMBER |
-| BLOCKED | LLM and Sarvam keys configured | chat/voice checks need demo LLM_API_KEY and SARVAM_API_KEY |
-| BLOCKED | Twilio credentials configured | voice/WhatsApp checks need all four TWILIO_* values |
+| PASS | demo secrets filled |  |
+| PASS | LLM and Sarvam keys configured |  |
+| PASS | Twilio credentials configured |  |
 | PASS | database connection | current_database=admissions_demo |
 | PASS | database schema | leads, conversations, courses present |
 | PASS | demo venv imports app.main |  |
@@ -44,6 +44,6 @@ Generated: 2026-10-23T07:57:00-07:00
 
 ## Summary
 
-BLOCKED=3, PASS=34
+PASS=37
 
 Result: **PASS with blocked checks** — blocked checks require credentials, a running stack, or an external service.

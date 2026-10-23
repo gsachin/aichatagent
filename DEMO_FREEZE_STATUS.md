@@ -4,7 +4,7 @@
 **Demo folder:** `D:\project\UniversityBotDemoAPI`
 **Development source:** `D:\project\universityDemo`
 **Runtime source commit:** `07083ae` — feat(chat): language selection at chat start, localized WhatsApp replies
-**Manifest source commit:** `6fafc3b` — demo tooling/docs; the 138 runtime files are unchanged from `07083ae`
+**Manifest source commit:** the latest clean commit at sync time (the validation run used `da75f59`); the 138 runtime files are unchanged from `07083ae`
 **Reference docs:** `DEMO_FREEZE_PLAN.md`, `DEMO_FREEZE_VALIDATION.md`, `README_DEMO.md` (inside the demo folder)
 
 ---
@@ -18,10 +18,11 @@
 | Seed safety guard | **DONE** |
 | Demo venv | **DONE** — 7.57 GB |
 | Demo database + seed data | **DONE** — verified 2026-10-23 |
-| Same-port runtime validation | **DONE** — 34 PASS / 3 BLOCKED / 0 WARN (final run) |
-| Demo `.env` secrets | **PENDING** — all six empty |
-| Live Twilio/WhatsApp rehearsal | **PENDING** — blocked on secrets |
-| Dev tooling committed + clean sync | **DONE** — commit `6fafc3b`; manifest `status: clean`, `source_tracked_dirty=false` |
+| Same-port runtime validation | **DONE** — 37 PASS / 0 BLOCKED / 0 WARN |
+| Demo `.env` secrets | **DONE** — all six set and validated |
+| Live integration checks | **DONE** — LLM, Streamlit chain, Sarvam TTS/STT, Twilio API, CRM read, dashboard |
+| Live Twilio/WhatsApp rehearsal | **PARTIAL** — Twilio API and voice webhook verified; no real call or message sent |
+| Dev tooling committed + clean sync | **DONE** — tooling commit `6fafc3b`; manifest `status: clean`, `source_tracked_dirty=false` |
 | Demo git repository | **PENDING** — yours to create |
 
 ---
@@ -67,7 +68,7 @@ Excluded from the demo: `tests/`, `doc/`, `models/`, `data/`, `logs/`, `__pycach
 | Demo templates | `scripts/demo/` | Setup/start/stop/seed/Twilio scripts |
 | Seed guard | `scripts/seed_demo_data.py` | Refuses non-`_demo` DBs, requires `--yes`, uses a transaction |
 | Plan | `DEMO_FREEZE_PLAN.md` | Finalized |
-| Validation report | `DEMO_FREEZE_VALIDATION.md` | Final run 2026-10-23: 34 PASS / 3 BLOCKED / 0 WARN |
+| Validation report | `DEMO_FREEZE_VALIDATION.md` | Final run 2026-10-23: 37 PASS / 0 BLOCKED / 0 WARN |
 | Status report | `DEMO_FREEZE_STATUS.md` | This document |
 
 ### 2.2 Demo tree
@@ -89,7 +90,7 @@ Excluded from the demo: `tests/`, `doc/`, `models/`, `data/`, `logs/`, `__pycach
 
 Run on the standard ports **8000/8501/8502** with the demo venv, the real demo database, and the CRM API on `8098`.
 
-**Result: 34 PASS / 3 BLOCKED / 0 WARN.**
+**Result: 37 PASS / 0 BLOCKED / 0 WARN.**
 
 | Status | Check | Detail |
 |---|---|---|
@@ -101,11 +102,33 @@ Run on the standard ports **8000/8501/8502** with the demo venv, the real demo d
 | PASS | database schema | `leads`, `conversations`, `courses` present |
 | PASS | demo venv imports app.main |  |
 | PASS | development tree clean at sync | manifest records clean source commit `29787f3` |
-| BLOCKED | demo secrets filled | empty: `LLM_API_KEY`, `SARVAM_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WHATSAPP_NUMBER` |
-| BLOCKED | LLM and Sarvam keys configured | chat/voice checks need demo `LLM_API_KEY` and `SARVAM_API_KEY` |
-| BLOCKED | Twilio credentials configured | voice/WhatsApp checks need all four `TWILIO_*` values |
+| PASS | demo secrets filled | all six secrets present |
+| PASS | LLM and Sarvam keys configured | chat/voice checks enabled |
+| PASS | Twilio credentials configured | all four `TWILIO_*` values present |
 
 The stack was stopped cleanly afterwards with `demo_stop.ps1`; ports 8000/8501/8502/8098 are free again.
+
+### 2.5 Integration verification — 2026-10-23
+
+With all six secrets in place, every reachable integration was exercised directly:
+
+| Check | Result |
+|---|---|
+| LLM via `/ws/voice/text` | **PASS** — real answer in 5.07 s: "Meridian University offers undergraduate, postgraduate, and doctoral programs across Engineering, Computer Science, Business, Arts, Science, and Commerce." |
+| Streamlit LangChain chain | **PASS** — chain used by the chat UI answered in 2.66 s: "MBA tuition is $18,500 per year" |
+| Sarvam TTS (Hindi) | **PASS** — 1.85 s of audio generated in 904 ms |
+| Sarvam STT round-trip | **PASS** — synthesized Hindi speech transcribed back exactly ("नमस्ते यह एक परीक्षण है।") in 431 ms |
+| Twilio account | **PASS** — status `active`, type `Full` |
+| Twilio voice number | **PASS** — configured number is on the account with voice and SMS capabilities |
+| Twilio Calls API | **PASS** — read access confirmed |
+| Twilio Messages API | **PASS** — read access confirmed |
+| Local Twilio voice webhook | **PASS** — HTTP 200, valid TwiML language menu |
+| WhatsApp number | **PASS (ownership expectation)** — configured number is the shared Twilio Sandbox number, not an owned incoming number; this is expected |
+| CRM health and read | **PASS** — HTTP 200 on `/health` and `/admissions` |
+| Dashboard summary | **PASS** — seeded leads, conversations, and pipeline stats returned |
+| `/ready` after restart | **PASS** — `ready=true`, all four clauses true |
+
+Not exercised: a real Twilio voice call, a real WhatsApp message exchange (needs a recipient who has joined the Sandbox), and CRM writes (kept read-only).
 
 ---
 
@@ -132,20 +155,11 @@ The demo tooling and docs were committed as `6fafc3b` (15 files). The subsequent
 
 The runtime `app/`, `app.py`, and `dashboard.py` are unchanged from `07083ae`.
 
-### PENDING — P1: Fill the six demo secrets (owner: you)
+### DONE — P1: Demo secrets filled and validated
 
-Edit `D:\project\UniversityBotDemoAPI\.env`:
+All six values are present in `D:\project\UniversityBotDemoAPI\.env` and were exercised on 2026-10-23: LLM completions, the Streamlit LangChain chain, Sarvam TTS, Sarvam STT, and Twilio account, number, and API checks all succeeded. Secret values are not copied or printed in this report.
 
-- `LLM_API_KEY`
-- `SARVAM_API_KEY`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_PHONE_NUMBER`
-- `TWILIO_WHATSAPP_NUMBER`
-
-Until these are set, chat uses the fixed-response path, voice STT/TTS does not work, and Twilio voice/WhatsApp cannot be validated. `SMTP_*` is optional unless you demo offer email. Development credentials were deliberately **not** copied.
-
-### PENDING — P4: Live rehearsal (after P1)
+### PENDING — P4: Live rehearsal (credentials verified; no real call or message yet)
 
 `demo_start.ps1 -Live -StartCrm` will:
 
@@ -160,9 +174,11 @@ Until these are set, chat uses the fixed-response path, voice STT/TTS does not w
 
 The demo folder has no `.git`. Its `.gitignore` is ready. A fresh repo will be about 6.7 MB because `.env`, `.venv/`, `data/`, and `logs/` are ignored.
 
-### PENDING — P7: Post-secret verification (owner: me)
+### PARTIAL — P7: Post-secret verification (owner: me)
 
-Once P1 is done: chat answer quality, voice STT/TTS, Twilio voice webhook, WhatsApp inbound/outbound, CRM read endpoints. No live call or WhatsApp message has been sent so far, and no CRM records have been written.
+Verified on 2026-10-23: LLM text path, the Streamlit chat chain, Sarvam TTS, Sarvam STT round-trip, Twilio account and number, Twilio Calls/Messages API read access, the local voice webhook, CRM health/read, and dashboard reads.
+
+Not yet exercised: a real Twilio voice call, a real WhatsApp message exchange (requires a recipient who has joined the Sandbox), and a CRM write (deliberately read-only so far).
 
 ---
 
@@ -176,8 +192,9 @@ Once P1 is done: chat answer quality, voice STT/TTS, Twilio voice webhook, Whats
 | Ports 8000 / 8501 / 8502 | Free — demo stopped after validation |
 | CRM port 8098 | Free — stopped with the demo |
 | Development stack | Stopped |
-| Demo `.env` | Exists; all six required secrets empty |
-| Demo manifest | `status: clean`, `source_tracked_dirty: false`, source commit `6fafc3b`, 138 files |
+| Demo `.env` | Exists; all six required secrets set |
+| Demo manifest | `status: clean`, `source_tracked_dirty: false`, 138 files; source commit advances with docs commits |
+| `/ready` after restart | `ready=true`, all four clauses true |
 | Sync tests | 12 passed |
 
 ---
@@ -185,11 +202,12 @@ Once P1 is done: chat answer quality, voice STT/TTS, Twilio voice webhook, Whats
 ## 5. Remaining sequence
 
 ```powershell
-# 1. Fill the six secrets in D:\project\UniversityBotDemoAPI\.env
-
-# 2. Live rehearsal
+# 1. Live rehearsal (secrets are already set)
 cd D:\project\UniversityBotDemoAPI
 .\demo_start.ps1 -Live -StartCrm
+
+# 2. In the Twilio console, set the WhatsApp Sandbox webhook to the printed
+#    https://<tunnel>/twilio/whatsapp URL (HTTP POST)
 
 # 3. After the rehearsal
 .\demo_stop.ps1
@@ -212,4 +230,7 @@ cd D:\project\UniversityBotDemoAPI
 - **Smart App Control.** The demo venv's `psycopg2` DLL was briefly blocked by Windows Application Control, then cleared after re-evaluation. It imported and connected successfully during the 2026-10-23 validation.
 - **CRM is shared.** The demo uses the same Salesforce org through the API at `:8098`; demo and development records mix in that org. Validation so far was read-only.
 - **Twilio is shared.** The same voice number is repointed at the demo tunnel and restored afterwards. WhatsApp Sandbox switching is manual.
+- **WhatsApp Sandbox number.** The configured WhatsApp number is the shared Twilio Sandbox number; it is not an owned incoming number on the account, which is expected. A real message test requires a recipient who has joined the Sandbox.
+- **Readiness boot race.** Immediately after a start, `/ready` can report `not_ready` if the remote LLM probe loses the startup race. A restart with the keys present reported `ready=true` with all four clauses.
+- **CRM writes remain untested.** Verification was read-only; no Salesforce records were created.
 - **Runtime quality is unchanged.** Same model, prompts, knowledge base, STT/TTS providers, voices, and 41 pre-rendered audio files. Only the database name, secrets, tunnel URL, and webhook target differ.
