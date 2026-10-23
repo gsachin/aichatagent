@@ -1,6 +1,6 @@
 # Demo Freeze Validation
 
-Generated: 2026-10-23T07:54:35-07:00
+Generated: 2026-10-23T07:57:00-07:00
 
 | Status | Check | Detail |
 |---|---|---|
@@ -24,8 +24,8 @@ Generated: 2026-10-23T07:54:35-07:00
 | PASS | manifest readable |  |
 | PASS | manifest files present | 138 files |
 | PASS | manifest hashes match | 138 files |
-| PASS | source commit recorded | 07083aece22774c592d68314a3bc86f8296cff59 |
-| WARN | development tree clean at sync | manifest says tracked development files were modified; commit before the next sync |
+| PASS | source commit recorded | 29787f39c454374fc5704ede964e912cda7b408e |
+| PASS | development tree clean at sync |  |
 | PASS | demo .env present |  |
 | PASS | demo database name | admissions_demo |
 | PASS | CRM_ENABLED | true |
@@ -44,6 +44,6 @@ Generated: 2026-10-23T07:54:35-07:00
 
 ## Summary
 
-BLOCKED=3, PASS=33, WARN=1
+BLOCKED=3, PASS=34
 
 Result: **PASS with blocked checks** — blocked checks require credentials, a running stack, or an external service.

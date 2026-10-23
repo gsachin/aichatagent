@@ -18,7 +18,7 @@
 | Seed safety guard | **DONE** |
 | Demo venv | **DONE** — 7.57 GB |
 | Demo database + seed data | **DONE** — verified 2026-10-23 |
-| Same-port runtime validation | **DONE** — 33 PASS / 3 BLOCKED / 1 WARN |
+| Same-port runtime validation | **DONE** — 34 PASS / 3 BLOCKED / 0 WARN (final run) |
 | Demo `.env` secrets | **PENDING** — all six empty |
 | Live Twilio/WhatsApp rehearsal | **PENDING** — blocked on secrets |
 | Dev tooling committed + clean sync | **DONE** — commit `6fafc3b`; manifest `status: clean`, `source_tracked_dirty=false` |
@@ -67,7 +67,7 @@ Excluded from the demo: `tests/`, `doc/`, `models/`, `data/`, `logs/`, `__pycach
 | Demo templates | `scripts/demo/` | Setup/start/stop/seed/Twilio scripts |
 | Seed guard | `scripts/seed_demo_data.py` | Refuses non-`_demo` DBs, requires `--yes`, uses a transaction |
 | Plan | `DEMO_FREEZE_PLAN.md` | Finalized |
-| Validation report | `DEMO_FREEZE_VALIDATION.md` | Regenerated 2026-10-23 from the standard-port run |
+| Validation report | `DEMO_FREEZE_VALIDATION.md` | Final run 2026-10-23: 34 PASS / 3 BLOCKED / 0 WARN |
 | Status report | `DEMO_FREEZE_STATUS.md` | This document |
 
 ### 2.2 Demo tree
@@ -85,11 +85,11 @@ Excluded from the demo: `tests/`, `doc/`, `models/`, `data/`, `logs/`, `__pycach
 - Schema: 10 tables (`call_queue`, `conversations`, `courses`, `crm_sync_outbox`, `follow_ups`, `lead_calls`, `lead_documents`, `leads`, `offer_letters`, `sentiment_scores`).
 - Seed data **verified 2026-10-23**: 12 leads, 8 conversations, 5 follow-ups, 14 courses.
 
-### 2.4 Validation results — run 2026-10-23 07:54 (UTC-7)
+### 2.4 Validation results — final run 2026-10-23
 
 Run on the standard ports **8000/8501/8502** with the demo venv, the real demo database, and the CRM API on `8098`.
 
-**Result: 33 PASS / 3 BLOCKED / 1 WARN.**
+**Result: 34 PASS / 3 BLOCKED / 0 WARN.**
 
 | Status | Check | Detail |
 |---|---|---|
@@ -100,7 +100,7 @@ Run on the standard ports **8000/8501/8502** with the demo venv, the real demo d
 | PASS | database connection | `current_database=admissions_demo` |
 | PASS | database schema | `leads`, `conversations`, `courses` present |
 | PASS | demo venv imports app.main |  |
-| WARN | development tree clean at sync | cleared by commit `6fafc3b` and the following clean sync |
+| PASS | development tree clean at sync | manifest records clean source commit `29787f3` |
 | BLOCKED | demo secrets filled | empty: `LLM_API_KEY`, `SARVAM_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WHATSAPP_NUMBER` |
 | BLOCKED | LLM and Sarvam keys configured | chat/voice checks need demo `LLM_API_KEY` and `SARVAM_API_KEY` |
 | BLOCKED | Twilio credentials configured | voice/WhatsApp checks need all four `TWILIO_*` values |
