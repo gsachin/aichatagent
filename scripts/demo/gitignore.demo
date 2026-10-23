@@ -1,0 +1,12 @@
+# Demo-owned runtime state — never commit these.
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+logs/
+.demo_pids.json
+.demo_tmp/
+.whatsapp_tunnel
+.tunnel_*
+.twilio_repoint_backup.json

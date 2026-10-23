@@ -1,16 +1,100 @@
-"""Seed the database with realistic demo data for dashboard presentation."""
-import os, sys, uuid, random
+"""Seed the database with realistic demo data for dashboard presentation.
+
+Demo-only safety:
+
+- loads ``DATABASE_URL`` from the project ``.env``;
+- prints the target host/database (never the password);
+- refuses any database whose name does not end in ``_demo``;
+- requires ``--yes`` before deleting and replacing data;
+- runs the deletes and inserts in one transaction, so a failed seed rolls back
+  instead of leaving the database empty.
+
+The application never imports this script. It is a manual demo tool.
+"""
+
+from __future__ import annotations
+
+import argparse
+import atexit
+import os
+import random
+import sys
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import urlparse
 
 import psycopg2
+from dotenv import load_dotenv
 
-DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://elearning:elearning_secret@localhost:5432/admissions",
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env")
+
+
+def _dsn_parts(dsn: str) -> tuple[str, str]:
+    """Return (host, database) for a URL or libpq key=value DSN."""
+    parsed = urlparse(dsn)
+    if parsed.scheme.startswith("postgres"):
+        return parsed.hostname or "<unknown>", (parsed.path or "").lstrip("/") or "<unknown>"
+    host = "<unknown>"
+    db_name = "<unknown>"
+    for part in dsn.split():
+        if part.startswith("host="):
+            host = part.split("=", 1)[1]
+        elif part.startswith("dbname="):
+            db_name = part.split("=", 1)[1]
+    return host, db_name
+
+
+_parser = argparse.ArgumentParser(
+    description="Seed synthetic demo data into a *_demo database only."
 )
+_parser.add_argument("--yes", action="store_true", help="confirm the delete + insert")
+_parser.add_argument(
+    "--allow-dev-db",
+    action="store_true",
+    help="allow a database name without the _demo suffix (intentional development use)",
+)
+_args = _parser.parse_args()
 
-conn = psycopg2.connect(DB_URL)
-conn.autocommit = True
+_dsn = (os.environ.get("DATABASE_URL") or "").strip()
+if not _dsn:
+    print("REFUSED: DATABASE_URL is not set. Load the demo .env or export the demo DSN.")
+    raise SystemExit(2)
+
+_host, _db_name = _dsn_parts(_dsn)
+print(f"Target database: host={_host} db={_db_name}")
+
+if not _db_name.endswith("_demo") and not _args.allow_dev_db:
+    print(
+        "REFUSED: the database name must end in _demo. "
+        "Use --allow-dev-db only for an intentional development seed."
+    )
+    raise SystemExit(2)
+if not _args.yes:
+    print("REFUSED: this script deletes and replaces demo data. Pass --yes to proceed.")
+    raise SystemExit(2)
+
+conn = psycopg2.connect(_dsn)
+conn.autocommit = False
+_committed = False
+
+
+@atexit.register
+def _cleanup() -> None:
+    """Roll back an uncommitted seed when the process exits abnormally."""
+    try:
+        if not _committed:
+            conn.rollback()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 cur = conn.cursor()
 
 # -- Clear existing test data --
@@ -207,7 +291,9 @@ for name, duration, fees, intake, desc in courses_data:
     )
 print(f"Inserted {len(courses_data)} courses")
 
+conn.commit()
+_committed = True
 conn.close()
 print("\n=== DASHBOARD DATA SEEDED ===")
-print("Dashboard: https://const-leaves-contest-legend.trycloudflare.com/dashboard")
+print("Dashboard: http://127.0.0.1:8502")
 print(f"12 leads | 8 conversations | 5 follow-ups | {len(courses_data)} courses")
