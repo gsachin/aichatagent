@@ -14,7 +14,9 @@
 .PARAMETER StartCrm
     Start the Salesforce Admission API at 127.0.0.1:8098 if it is not running.
 .PARAMETER TunnelUi
-    Also start a Cloudflare tunnel for the Streamlit UI (remote viewers).
+    Also start Cloudflare tunnels for the Streamlit chat UI (8501) and the
+    admin dashboard (8502), matching development's start_services.ps1
+    -WithStreamlit. The 8502 tunnel is skipped when -NoDashboard is used.
 .PARAMETER NoDashboard
     Do not start the admin dashboard on 8502.
 #>
@@ -197,6 +199,7 @@ if (-not (Test-CrmHealth)) {
 $started = [ordered]@{}
 $tunnelPid = $null
 $uiTunnelPid = $null
+$dashboardTunnelPid = $null
 
 try {
     # Export the demo .env into this process before starting the app children.
@@ -264,9 +267,22 @@ try {
         $uiTunnelPid = $uiTunnel.Id
         $uiHost = Get-TunnelHost $uiLog 40
         if ($uiHost) {
-            Write-Ok "Streamlit tunnel: https://$uiHost"
+            Write-Ok "Streamlit chat tunnel: https://$uiHost"
         } else {
             Write-Warn "Could not read the Streamlit tunnel URL. See logs\tunnel-ui.err.log."
+        }
+
+        if (-not $NoDashboard) {
+            $dashboardLog = Join-Path $logDir 'tunnel-dashboard.err.log'
+            if (Test-Path -LiteralPath $dashboardLog) { Remove-Item -LiteralPath $dashboardLog -Force }
+            $dashboardTunnel = Start-Process -FilePath 'cloudflared' -ArgumentList @('tunnel', '--url', 'http://127.0.0.1:8502') -PassThru -WindowStyle Hidden -RedirectStandardError $dashboardLog
+            $dashboardTunnelPid = $dashboardTunnel.Id
+            $dashboardHost = Get-TunnelHost $dashboardLog 40
+            if ($dashboardHost) {
+                Write-Ok "Dashboard tunnel: https://$dashboardHost"
+            } else {
+                Write-Warn "Could not read the dashboard tunnel URL. See logs\tunnel-dashboard.err.log."
+            }
         }
     }
 
@@ -278,6 +294,7 @@ try {
         crm_pid = $crmPid
         tunnel_pid = $tunnelPid
         ui_tunnel_pid = $uiTunnelPid
+        dashboard_tunnel_pid = $dashboardTunnelPid
     }
     $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $DemoRoot '.demo_pids.json') -Encoding UTF8
 
@@ -300,6 +317,7 @@ try {
     }
     if ($tunnelPid) { Stop-ProcessTree -ProcessId ([int]$tunnelPid) }
     if ($uiTunnelPid) { Stop-ProcessTree -ProcessId ([int]$uiTunnelPid) }
+    if ($dashboardTunnelPid) { Stop-ProcessTree -ProcessId ([int]$dashboardTunnelPid) }
     $pidFile = Join-Path $DemoRoot '.demo_pids.json'
     if (Test-Path -LiteralPath $pidFile) { Remove-Item -LiteralPath $pidFile -Force }
     throw

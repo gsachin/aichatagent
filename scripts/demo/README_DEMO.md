@@ -104,7 +104,7 @@ No tunnel, no Twilio webhook change.
 ### Full client demo
 
 ```powershell
-.\demo_start.ps1 -Live -StartCrm
+.\demo_start.ps1 -Live -StartCrm -TunnelUi
 ```
 
 This additionally:
@@ -117,6 +117,8 @@ This additionally:
    directory if `-StartCrm` is passed.
 5. Prints the WhatsApp Sandbox webhook URL to set manually:
    `https://<tunnel>/twilio/whatsapp` (HTTP POST).
+6. Starts Cloudflare tunnels for the Streamlit chat (8501) and the admin
+   dashboard (8502), printing both public URLs.
 
 The demo and development stacks use the same ports. **Stop the development
 stack first.** The start script refuses to start if 8000, 8501, or 8502 is in
@@ -124,8 +126,9 @@ use.
 
 ### Remote viewers
 
-Add `-TunnelUi` to start a second tunnel for the Streamlit UI and print its
-public URL.
+`-TunnelUi` starts both UI tunnels — Streamlit chat on 8501 and the dashboard
+on 8502 — matching development's `start_services.ps1 -WithStreamlit`. The
+dashboard tunnel is skipped when `-NoDashboard` is used.
 
 ---
 

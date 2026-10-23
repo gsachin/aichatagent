@@ -113,6 +113,9 @@ if ($state.tunnel_pid) {
 if ($state.ui_tunnel_pid) {
     Stop-DemoProcess -ProcessId ([int]$state.ui_tunnel_pid) -ExpectedHint 'cloudflared'
 }
+if ($state.dashboard_tunnel_pid) {
+    Stop-DemoProcess -ProcessId ([int]$state.dashboard_tunnel_pid) -ExpectedHint 'cloudflared'
+}
 
 if ($state.processes) {
     foreach ($property in $state.processes.PSObject.Properties) {

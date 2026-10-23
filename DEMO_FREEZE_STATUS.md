@@ -202,9 +202,10 @@ Not yet exercised: a real Twilio voice call, a real WhatsApp message exchange (r
 ## 5. Remaining sequence
 
 ```powershell
-# 1. Live rehearsal (secrets are already set)
+# 1. Live rehearsal (secrets are already set); -TunnelUi also tunnels the
+#    Streamlit chat (8501) and dashboard (8502), matching the dev launcher
 cd D:\project\UniversityBotDemoAPI
-.\demo_start.ps1 -Live -StartCrm
+.\demo_start.ps1 -Live -StartCrm -TunnelUi
 
 # 2. In the Twilio console, set the WhatsApp Sandbox webhook to the printed
 #    https://<tunnel>/twilio/whatsapp URL (HTTP POST)

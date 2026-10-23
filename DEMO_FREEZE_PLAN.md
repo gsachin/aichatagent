@@ -446,7 +446,9 @@ Steps:
       the voice webhook and status callback,
     - print the WhatsApp Sandbox URL to set manually:
       `https://<host>/twilio/whatsapp`.
-11. Optional `-TunnelUi` starts a second tunnel to 8501 for remote viewers.
+11. Optional `-TunnelUi` starts tunnels to 8501 (chat) and 8502 (dashboard)
+    for remote viewers, matching development's
+    `start_services.ps1 -WithStreamlit`.
 
 ### 6.5 `demo_stop.ps1`
 
