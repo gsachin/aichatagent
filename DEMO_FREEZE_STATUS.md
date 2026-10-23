@@ -3,7 +3,8 @@
 **Report date:** 2026-10-23 (updated after the same-port validation run)
 **Demo folder:** `D:\project\UniversityBotDemoAPI`
 **Development source:** `D:\project\universityDemo`
-**Source commit:** `07083ae` — feat(chat): language selection at chat start, localized WhatsApp replies
+**Runtime source commit:** `07083ae` — feat(chat): language selection at chat start, localized WhatsApp replies
+**Manifest source commit:** `6fafc3b` — demo tooling/docs; the 138 runtime files are unchanged from `07083ae`
 **Reference docs:** `DEMO_FREEZE_PLAN.md`, `DEMO_FREEZE_VALIDATION.md`, `README_DEMO.md` (inside the demo folder)
 
 ---
@@ -20,7 +21,7 @@
 | Same-port runtime validation | **DONE** — 33 PASS / 3 BLOCKED / 1 WARN |
 | Demo `.env` secrets | **PENDING** — all six empty |
 | Live Twilio/WhatsApp rehearsal | **PENDING** — blocked on secrets |
-| Dev tooling committed + clean sync | **IN PROGRESS** |
+| Dev tooling committed + clean sync | **DONE** — commit `6fafc3b`; manifest `status: clean`, `source_tracked_dirty=false` |
 | Demo git repository | **PENDING** — yours to create |
 
 ---
@@ -99,7 +100,7 @@ Run on the standard ports **8000/8501/8502** with the demo venv, the real demo d
 | PASS | database connection | `current_database=admissions_demo` |
 | PASS | database schema | `leads`, `conversations`, `courses` present |
 | PASS | demo venv imports app.main |  |
-| WARN | development tree clean at sync | cleared by the commit + sync in P5 |
+| WARN | development tree clean at sync | cleared by commit `6fafc3b` and the following clean sync |
 | BLOCKED | demo secrets filled | empty: `LLM_API_KEY`, `SARVAM_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WHATSAPP_NUMBER` |
 | BLOCKED | LLM and Sarvam keys configured | chat/voice checks need demo `LLM_API_KEY` and `SARVAM_API_KEY` |
 | BLOCKED | Twilio credentials configured | voice/WhatsApp checks need all four `TWILIO_*` values |
@@ -120,22 +121,16 @@ The stack was stopped cleanly afterwards with `demo_stop.ps1`; ports 8000/8501/8
 
 The earlier alternate-port gap (8100/8601) is closed. The demo ran on its standard ports and passed all stack/database checks. The three blockers are credentials only, not runtime defects.
 
-### IN PROGRESS — P5: Commit development tooling and re-sync
+### DONE — P5: Commit development tooling and re-sync
 
-Uncommitted when this report was written:
+The demo tooling and docs were committed as `6fafc3b` (15 files). The subsequent sync reported:
 
-```text
- M scripts/seed_demo_data.py
-?? scripts/sync_demo.py
-?? scripts/validate_demo.py
-?? scripts/demo/
-?? tests/test_sync_demo.py
-?? DEMO_FREEZE_PLAN.md
-?? DEMO_FREEZE_VALIDATION.md
-?? DEMO_FREEZE_STATUS.md
-```
+- Source `6fafc3b` (clean)
+- `KEEP=138`, `copied=0 deleted=0 conflicts=0`
+- `.demo_manifest.json`: `status: clean`, `source_tracked_dirty=false`
+- `DEMO_VERSION.txt` updated to the same commit
 
-Next: commit these paths, run `python scripts/sync_demo.py --sync`, and confirm `source_tracked_dirty=false` in `.demo_manifest.json`.
+The runtime `app/`, `app.py`, and `dashboard.py` are unchanged from `07083ae`.
 
 ### PENDING — P1: Fill the six demo secrets (owner: you)
 
@@ -171,7 +166,7 @@ Once P1 is done: chat answer quality, voice STT/TTS, Twilio voice webhook, Whats
 
 ---
 
-## 4. Machine snapshot (verified 2026-10-23, after validation)
+## 4. Machine snapshot (verified 2026-10-23, after validation and sync)
 
 | Check | Result |
 |---|---|
@@ -182,7 +177,7 @@ Once P1 is done: chat answer quality, voice STT/TTS, Twilio voice webhook, Whats
 | CRM port 8098 | Free — stopped with the demo |
 | Development stack | Stopped |
 | Demo `.env` | Exists; all six required secrets empty |
-| Demo manifest | `status: clean`, `source_tracked_dirty: true` until P5 completes |
+| Demo manifest | `status: clean`, `source_tracked_dirty: false`, source commit `6fafc3b`, 138 files |
 | Sync tests | 12 passed |
 
 ---
