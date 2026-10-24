@@ -1,14 +1,18 @@
 """Prompt assembly and generation for document-context chat/voice.
 
 RAG has been removed: there is no Chroma, no embedding call, no MCP retrieval
-and no similarity gate. The full configured knowledge base
-(``app.doc_context``) is passed to OpenAI on every turn. ``CONTEXT_MODE=off``
-remains as a test/rollback switch that sends the explicit no-context marker.
+and no similarity gate. The configured prompt bundle (``app.doc_context``) is
+passed to OpenAI on every turn. ``CONTEXT_MODE=off`` remains as a
+test/rollback switch that sends the explicit no-context marker.
+
+``CONTEXT_MODE=site`` is the explicit seam for the future selective router.
+Until the router selects nodes, it returns the same bundle as ``doc``, so the
+prompt and the guard cannot diverge.
 
 The public functions (``query_rag``, ``query_rag_stream``,
 ``last_retrieved_context``) keep their names because the voice handler and the
-text/WhatsApp surfaces call them; ``last_retrieved_context`` now returns the
-injected document, which is what the grounding boundary checks against.
+text/WhatsApp surfaces call them. ``last_context_bundle`` is the provenance-
+preserving form; the guard should use it.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from contextvars import ContextVar
 from typing import AsyncIterator
 
 from app.config import settings
+from app.context_bundle import ContextBundle
 from app.llm_backend import EngineCounters
 from app.voice_system_prompt import SPEAKER_IDENTITY
 
@@ -27,6 +32,12 @@ logger = logging.getLogger("rag_module")
 #: The document injected in the most recent turn, per async context. Two
 #: concurrent callers must not see each other's evidence.
 _LAST_CONTEXT: ContextVar[str] = ContextVar("last_retrieved_context", default="")
+
+#: The full bundle (text + IDs + sources) for THIS turn. The guard reads this
+#: rather than re-reading the document.
+_LAST_BUNDLE: ContextVar[ContextBundle | None] = ContextVar(
+    "last_context_bundle", default=None
+)
 
 #: Chat-surface prompt (Markdown-oriented). Voice uses
 #: ``app.voice_system_prompt.build_voice_system_prompt`` instead.
@@ -55,26 +66,54 @@ SYSTEM_PROMPT = (
 
 
 def last_retrieved_context() -> str:
-    """The document injected for THIS turn ("" when ``CONTEXT_MODE=off``)."""
+    """The prompt text injected for THIS turn ("" when ``CONTEXT_MODE=off``)."""
+    bundle = _LAST_BUNDLE.get()
+    if bundle is not None:
+        return bundle.text
     return _LAST_CONTEXT.get()
 
 
-def context_for_query(query: str = "") -> str:
-    """The context for one turn.
+def last_context_bundle() -> ContextBundle | None:
+    """The bundle for THIS turn, or the configured bundle when none was set.
 
-    ``doc`` (default) — the full configured document.
-    ``off``          — no context (the system prompt gets the explicit marker).
+    The fallback keeps the guard working when a caller reaches it before
+    ``query_rag``/``query_rag_stream`` has set the per-turn value. In the
+    future selective router, the router must set the bundle before the guard;
+    until then the fallback is the same full prompt the model received.
+    """
+    bundle = _LAST_BUNDLE.get()
+    if bundle is not None:
+        return bundle
+    if settings.CONTEXT_MODE == "off":
+        return None
+    from app.doc_context import document_bundle
+
+    return document_bundle()
+
+
+def context_bundle_for_query(query: str = "") -> ContextBundle:
+    """The bundle for one turn.
+
+    ``doc`` (default) and ``site`` — the configured prompt bundle. ``site`` is
+    explicit so the future router can replace this body with a selective
+    bundle without changing call sites.
+    ``off`` — an empty bundle (the system prompt gets the explicit marker).
     """
     if settings.CONTEXT_MODE == "off":
-        return ""
-    if settings.CONTEXT_MODE not in ("doc", ""):
+        return ContextBundle(text="")
+    if settings.CONTEXT_MODE not in ("doc", "site", ""):
         logger.warning(
             "CONTEXT_MODE=%r is not supported after RAG removal; using doc",
             settings.CONTEXT_MODE,
         )
-    from app.doc_context import document_context
+    from app.doc_context import document_bundle
 
-    return document_context()
+    return document_bundle()
+
+
+def context_for_query(query: str = "") -> str:
+    """The context text for one turn (backward-compatible wrapper)."""
+    return context_bundle_for_query(query).text
 
 
 def _temperature() -> float | None:
@@ -119,7 +158,9 @@ def query_rag(question: str, *, mode: str = "voice",
     if not question.strip():
         return None
 
-    context = context_for_query(question)
+    bundle = context_bundle_for_query(question)
+    context = bundle.text
+    _LAST_BUNDLE.set(bundle)
     _LAST_CONTEXT.set(context)
     system = _build_system(mode, context)
 
@@ -174,9 +215,11 @@ async def query_rag_stream(
     if not question.strip():
         raise GenerationFailed("empty question")
 
-    context = context_for_query(question)
+    bundle = context_bundle_for_query(question)
+    context = bundle.text
     # Set on the loop so the grounding boundary sees it (the old to_thread
     # retrieval seam discarded context-var writes made in the worker).
+    _LAST_BUNDLE.set(bundle)
     _LAST_CONTEXT.set(context)
     system = _build_system(mode, context)
     prompt = (
@@ -197,13 +240,15 @@ async def query_rag_stream(
 def warmup() -> None:
     """Startup warm-up: load and report the document; no model call."""
     try:
-        from app.doc_context import document_stats, source_label
+        from app.doc_context import document_bundle, document_stats, source_label
 
         stats = document_stats()
+        bundle = document_bundle()
         logger.info(
-            "Context warmup: %s — %d bytes, %d tokens%s",
+            "Context warmup: %s — %d bytes, %d tokens%s; facts=%d nodes=%d sources=%d",
             source_label(), stats.bytes_read, stats.tokens,
             " [TRUNCATED]" if (stats.truncated_bytes or stats.truncated_tokens) else "",
+            len(bundle.fact_ids), len(bundle.node_ids), len(bundle.source_urls),
         )
     except Exception:
         logger.exception("Context warmup failed")

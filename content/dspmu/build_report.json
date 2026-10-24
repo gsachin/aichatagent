@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-24T19:07:33.943775+00:00",
+  "generated_at": "2026-10-24T19:38:53.024845+00:00",
   "generator": "app/siteindex",
   "mode": "offline-cache",
   "cache_dir": "/Users/aiwork/codebase/aichatagent/content/dspmu/cache",
@@ -150,11 +150,24 @@
     "pages": 2,
     "needs_review": true
   },
+  "prompt_order": [
+    "core_cards.md",
+    "site_map.md",
+    "recent_notices.md"
+  ],
   "tokens": {
-    "site_map": 6503,
-    "core_cards": 1323,
-    "combined": 7826,
-    "budget": 8000
+    "core_cards": 1338,
+    "site_map": 721,
+    "recent_notices": 360,
+    "document": 2419,
+    "voice_kb": 3773,
+    "voice_prompt": 6417,
+    "voice_total": 6622,
+    "chat_prompt": 2760,
+    "chat_total": 2965,
+    "doc_budget": 4000,
+    "voice_budget": 8000,
+    "chat_budget": 30000
   },
   "validation": {
     "parser": "ok",
@@ -166,8 +179,13 @@
       "3410"
     ],
     "no_meridian": true,
-    "no_pii_titles": true
+    "no_pii_titles": true,
+    "prompt_split": true,
+    "doc_budget_ok": true,
+    "voice_budget_ok": true,
+    "chat_budget_ok": true
   },
+  "prompt_manifest": "prompt_manifest.json",
   "warnings": [
     "PG admission PDF required OCR (good, eng); its dates are marked needs_review"
   ],

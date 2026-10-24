@@ -383,7 +383,7 @@ async def lifespan(app_instance):
                 "LLM_API_KEY is empty: every LLM call will use the fixed-response "
                 "path until the key is added to .env and the stack is restarted."
             )
-        if settings.CONTEXT_MODE == "doc":
+        if settings.CONTEXT_MODE in ("doc", "site", ""):
             from app.doc_context import document_stats, source_label
 
             stats = document_stats()

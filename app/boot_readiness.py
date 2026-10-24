@@ -483,7 +483,7 @@ def assess(do_warm: bool = True) -> Readiness:
 
     # RAG/embeddings were removed; the document is passed in full. No embed
     # residency has any meaning here.
-    r.embed = {"skipped": "RAG removed; CONTEXT_MODE=doc"}
+    r.embed = {"skipped": f"RAG removed; CONTEXT_MODE={settings.CONTEXT_MODE}"}
 
     r.ready = all(r.clauses.values())
     return r

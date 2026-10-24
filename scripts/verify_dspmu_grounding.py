@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Run today's voice guard against the generated DSPMU knowledge file.
+"""Run today's voice guard against the split DSPMU prompt and entity corpora.
 
-This is milestone one's acceptance check: the guard must accept a correct DSPMU
-fee and date, and reject a wrong fee, an invented programme and a student roll
-number. It uses the same ``EntityIndex`` and ``is_grounded`` code the live voice
-boundary uses; no LLM call is made.
+The prompt corpus is ``core_cards.md`` + ``site_map.md`` + ``recent_notices.md``.
+The full programme entity corpus is ``voice_kb.md`` and is used only by
+``EntityIndex`` — it is not loaded into the prompt. This is the acceptance check
+for the prompt split: the guard must accept the common DSPMU facts in the
+prompt, and reject a wrong fee, an invented programme and a student roll number.
+No LLM call is made.
 """
 
 from __future__ import annotations
@@ -19,6 +21,9 @@ if str(ROOT) not in sys.path:
 
 from app.kb_entities import EntityIndex  # noqa: E402
 from app.voice_grounding import is_grounded, ungrounded_claims  # noqa: E402
+
+PROMPT_FILES = ("core_cards.md", "site_map.md", "recent_notices.md")
+VOICE_KB = "voice_kb.md"
 
 CASES: tuple[tuple[str, str, bool], ...] = (
     (
@@ -65,21 +70,36 @@ CASES: tuple[tuple[str, str, bool], ...] = (
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--knowledge",
-        default=str(ROOT / "content/dspmu/site_map.md"),
-        help="generated site_map.md used as both context and entity corpus",
+        "--dir",
+        default=str(ROOT / "content/dspmu"),
+        help="directory holding the generated prompt and entity files",
+    )
+    parser.add_argument(
+        "--voice-kb",
+        default=VOICE_KB,
+        help="entity corpus filename (relative to --dir)",
     )
     args = parser.parse_args(argv)
 
-    path = Path(args.knowledge)
-    if not path.exists():
-        print(f"missing {path}; run scripts/build_site_index.py first", file=sys.stderr)
+    base = Path(args.dir)
+    missing = [name for name in (*PROMPT_FILES, args.voice_kb) if not (base / name).exists()]
+    if missing:
+        print(
+            f"missing {', '.join(missing)} in {base}; run scripts/build_site_index.py first",
+            file=sys.stderr,
+        )
         return 1
-    context = path.read_text(encoding="utf-8")
-    index = EntityIndex(context)
+
+    context = "\n\n".join((base / name).read_text(encoding="utf-8") for name in PROMPT_FILES)
+    voice_kb = (base / args.voice_kb).read_text(encoding="utf-8")
+    index = EntityIndex(voice_kb)
 
     failures = 0
-    print(f"knowledge: {path} ({len(context):,} chars, {len(index.names)} entities)")
+    print(f"prompt corpus: {', '.join(PROMPT_FILES)} ({len(context):,} chars)")
+    print(
+        f"entity corpus: {args.voice_kb} ({len(voice_kb):,} chars, "
+        f"{len(index.names)} entities; not in prompt)"
+    )
     for name, claim, expected in CASES:
         actual = is_grounded(claim, context, index)
         status = "PASS" if actual == expected else "FAIL"

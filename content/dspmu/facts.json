@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-24T19:07:33.943775+00:00",
+  "generated_at": "2026-10-24T19:38:53.024845+00:00",
   "university": {
     "name": "Dr. Shyama Prasad Mukherjee University",
     "short_name": "DSPMU",
@@ -16,6 +16,7 @@
   },
   "fees": [
     {
+      "fact_id": "fee.ug.political-science.2026.gen",
       "programme": "Bachelor of Arts (BA) in Political Science",
       "degree": "BA (Political Science)",
       "subject": "Political Science",
@@ -34,6 +35,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.history.2026.gen",
       "programme": "Bachelor of Arts (BA) in History",
       "degree": "BA (History)",
       "subject": "History",
@@ -52,6 +54,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.economics.2026.gen",
       "programme": "Bachelor of Arts (BA) in Economics",
       "degree": "BA (Economics)",
       "subject": "Economics",
@@ -70,6 +73,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.psychology.2026.gen",
       "programme": "Bachelor of Arts (BA) in Psychology",
       "degree": "BA (Psychology)",
       "subject": "Psychology",
@@ -88,6 +92,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.geography.2026.gen",
       "programme": "Bachelor of Arts (BA) in Geography",
       "degree": "BA (Geography)",
       "subject": "Geography",
@@ -106,6 +111,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.sociology.2026.gen",
       "programme": "Bachelor of Arts (BA) in Sociology",
       "degree": "BA (Sociology)",
       "subject": "Sociology",
@@ -124,6 +130,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.anthropology.2026.gen",
       "programme": "Bachelor of Arts (BA) in Anthropology",
       "degree": "BA (Anthropology)",
       "subject": "Anthropology",
@@ -142,6 +149,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.hindi.2026.gen",
       "programme": "Bachelor of Arts (BA) in Hindi",
       "degree": "BA (Hindi)",
       "subject": "Hindi",
@@ -160,6 +168,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.english.2026.gen",
       "programme": "Bachelor of Arts (BA) in English",
       "degree": "BA (English)",
       "subject": "English",
@@ -178,6 +187,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.urdu.2026.gen",
       "programme": "Bachelor of Arts (BA) in Urdu",
       "degree": "BA (Urdu)",
       "subject": "Urdu",
@@ -196,6 +206,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.sanskrit.2026.gen",
       "programme": "Bachelor of Arts (BA) in Sanskrit",
       "degree": "BA (Sanskrit)",
       "subject": "Sanskrit",
@@ -214,6 +225,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.philosophy.2026.gen",
       "programme": "Bachelor of Arts (BA) in Philosophy",
       "degree": "BA (Philosophy)",
       "subject": "Philosophy",
@@ -232,6 +244,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.nagpuri.2026.gen",
       "programme": "Bachelor of Arts (BA) in Nagpuri",
       "degree": "BA (Nagpuri)",
       "subject": "Nagpuri",
@@ -250,6 +263,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.kurux.2026.gen",
       "programme": "Bachelor of Arts (BA) in Kurux",
       "degree": "BA (Kurux)",
       "subject": "Kurux",
@@ -268,6 +282,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.khortha.2026.gen",
       "programme": "Bachelor of Arts (BA) in Khortha",
       "degree": "BA (Khortha)",
       "subject": "Khortha",
@@ -286,6 +301,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.santhali.2026.gen",
       "programme": "Bachelor of Arts (BA) in Santhali",
       "degree": "BA (Santhali)",
       "subject": "Santhali",
@@ -304,6 +320,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.kurmali.2026.gen",
       "programme": "Bachelor of Arts (BA) in Kurmali",
       "degree": "BA (Kurmali)",
       "subject": "Kurmali",
@@ -322,6 +339,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.panchpargnia.2026.gen",
       "programme": "Bachelor of Arts (BA) in PanchPargnia",
       "degree": "BA (PanchPargnia)",
       "subject": "PanchPargnia",
@@ -340,6 +358,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.mundari.2026.gen",
       "programme": "Bachelor of Arts (BA) in Mundari",
       "degree": "BA (Mundari)",
       "subject": "Mundari",
@@ -358,6 +377,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.ho.2026.gen",
       "programme": "Bachelor of Arts (BA) in Ho",
       "degree": "BA (Ho)",
       "subject": "Ho",
@@ -376,6 +396,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.kharia.2026.gen",
       "programme": "Bachelor of Arts (BA) in Kharia",
       "degree": "BA (Kharia)",
       "subject": "Kharia",
@@ -394,6 +415,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.physics.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Physics",
       "degree": "B.Sc. (Physics)",
       "subject": "Physics",
@@ -412,6 +434,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.chemistry.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Chemistry",
       "degree": "B.Sc. (Chemistry)",
       "subject": "Chemistry",
@@ -430,6 +453,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.mathematics.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Mathematics",
       "degree": "B.Sc. (Mathematics)",
       "subject": "Mathematics",
@@ -448,6 +472,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.botany.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Botany",
       "degree": "B.Sc. (Botany)",
       "subject": "Botany",
@@ -466,6 +491,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.zoology.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Zoology",
       "degree": "B.Sc. (Zoology)",
       "subject": "Zoology",
@@ -484,6 +510,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.geology.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Geology",
       "degree": "B.Sc. (Geology)",
       "subject": "Geology",
@@ -502,6 +529,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.commerce.2026.gen",
       "programme": "Bachelor of Commerce (B.Com.)",
       "degree": "B.Com.",
       "subject": "Commerce",
@@ -520,6 +548,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.environmental-sc-sustainability.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Environmental Sc &\nSustainability",
       "degree": "B.Sc. (Environmental Sc &\nSustainability)",
       "subject": "Environmental Sc &\nSustainability",
@@ -538,6 +567,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.bba.2026.gen",
       "programme": "Bachelor of Business Administration (BBA)",
       "degree": "BBA",
       "subject": "BBA",
@@ -556,6 +586,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.computer-application.2026.gen",
       "programme": "Bachelor of Computer Applications (BCA)",
       "degree": "BCA",
       "subject": "Computer Application",
@@ -574,6 +605,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.journalism-mass-communication.2026.gen",
       "programme": "Bachelor of Arts (BA) in Journalism & Mass Communication",
       "degree": "BA (JMC)",
       "subject": "Journalism & Mass\nCommunication",
@@ -592,6 +624,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.electronics.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Electronics",
       "degree": "B.Sc. (Electronics)",
       "subject": "Electronics",
@@ -610,6 +643,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.english-language-literature.2026.gen",
       "programme": "Bachelor of Arts (BA) in English Language & Literature",
       "degree": "BA (English Language & Literature)",
       "subject": "English Language & Literature",
@@ -628,6 +662,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.fisheries-sciences.2026.gen",
       "programme": "Bachelor of Fisheries Sciences (B.F.Sc.)",
       "degree": "B.F.Sc.",
       "subject": "Fisheries Sciences",
@@ -646,6 +681,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.information-technology.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Information Technology",
       "degree": "B.Sc. (IT)",
       "subject": "Information Technology",
@@ -664,6 +700,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.integrated-physics.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Integrated Physics",
       "degree": "B.Sc. (Integrated Physics)",
       "subject": "Integrated Physics",
@@ -682,6 +719,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.kathak-dance.2026.gen",
       "programme": "Bachelor of Arts (BA) in Kathak Dance",
       "degree": "BA (Kathak)",
       "subject": "Kathak Dance",
@@ -700,6 +738,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.microbiology.2026.gen",
       "programme": "Bachelor of Science (B.Sc.) in Microbiology",
       "degree": "B.Sc. (Microbiology)",
       "subject": "Microbiology",
@@ -718,6 +757,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.music.2026.gen",
       "programme": "Bachelor of Arts (BA) in Music",
       "degree": "BA (Music)",
       "subject": "Music",
@@ -736,6 +776,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.visual-art-painting.2026.gen",
       "programme": "Bachelor of Arts (BA) in Visual Art Painting",
       "degree": "BA (Visual Art)",
       "subject": "Visual Art Painting",
@@ -754,6 +795,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.yogic-science.2026.gen",
       "programme": "Bachelor of Arts (BA) in Yogic Science",
       "degree": "BA (Yogic Science)",
       "subject": "Yogic Science",
@@ -772,6 +814,7 @@
       "currency": "INR"
     },
     {
+      "fact_id": "fee.ug.public-administration.2026.gen",
       "programme": "Bachelor of Arts (BA) in Public Administration",
       "degree": "BA (Public Administration)",
       "subject": "Public Administration",

@@ -1,4 +1,4 @@
-"""Build the DSPMU site map and core cards.
+"""Build the split DSPMU prompt corpus and entity corpus.
 
 Run from the repository root::
 
@@ -10,14 +10,21 @@ populated from public pages and PDFs; it is not committed. The generated
 markdown, facts and notice manifest are committed so the app can run without a
 network crawl.
 
-Milestone one deliberately creates no request-path code. It writes:
+The prompt is split deliberately:
 
-* ``site_map.md`` — the full, parser-compatible knowledge file
-* ``core_cards.md`` — the compact voice prefix
+* ``core_cards.md`` — the stable, high-signal facts prefix
+* ``site_map.md`` — compact orientation and source notes, no 43-entry fee dump
+* ``recent_notices.md`` — volatile latest notices, loaded last
+* ``voice_kb.md`` — the full programme entity corpus, used only by
+  ``app.kb_entities`` via ``VOICE_KB_PATH``; never loaded into the prompt
 * ``facts.json`` — structured facts with source and validity
 * ``notices.jsonl`` — non-PII notice metadata
-* ``build_report.json`` — provenance, counts, OCR status and token budgets
+* ``build_report.json`` — provenance, counts, OCR status and real prompt budgets
 * ``nodes/<id>.md`` — extracted page/PDF text for auditing
+
+The build fails unless ``build_voice_system_prompt(...)`` plus the question and
+output reserve fits the full voice budget. It does not rely on the document
+token count alone.
 """
 
 from __future__ import annotations
@@ -25,9 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import sys
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -123,28 +128,6 @@ def _count_tokens(text: str) -> int:
         return max(1, len(text) // 4)
 
 
-def _demote_headings(text: str, levels: int = 3) -> str:
-    """Push page-level headings below the site-map section that contains them."""
-    return re.sub(
-        r"^(#{1,6})\s+",
-        lambda match: "#" * min(6, len(match.group(1)) + levels) + " ",
-        text or "",
-        flags=re.M,
-    )
-
-
-def _excerpt(text: str, limit: int = 700) -> str:
-    value = re.sub(r"\n{3,}", "\n\n", _demote_headings(text).strip())
-    if len(value) <= limit:
-        return value
-    cut = value[:limit]
-    for separator in ("\n\n", ". ", "\n"):
-        position = cut.rfind(separator)
-        if position > int(limit * 0.6):
-            return cut[: position + len(separator)].strip() + " …"
-    return cut.strip() + " …"
-
-
 def _load(book: SourceBook, key: str) -> FetchResult:
     spec = SOURCE_BY_KEY[key]
     return book.load(spec)
@@ -171,175 +154,113 @@ def _departments_from_sitemap(sitemap: list[dict[str, str]]) -> list[tuple[str, 
     return sorted(((label, url) for url, label in found.items()), key=lambda item: item[0].lower())
 
 
-def _notice_lines(notices: list[Notice]) -> str:
-    if not notices:
-        return "- No dated non-PII notices were readable from the manifest."
-    lines = []
-    for notice in notices:
-        date = notice.date or notice.date_text or "date unknown"
-        lines.append(f"- {date} · {notice.title} · {notice.category}")
-    return "\n".join(lines)
-
-
 def _render_site_map(
     *,
-    pages: dict[str, HtmlDoc],
     fees: list[ProgrammeFee],
-    counselling,
-    documents: list[dict],
-    pg_dates: list[dict],
     contacts: dict,
-    notices: list[Notice],
-    latest: list[Notice],
     departments: list[tuple[str, str]],
     sources: dict[str, FetchResult],
-    pg_doc: PdfDoc,
-    counsel_doc: PdfDoc,
     fee_url: str,
 ) -> str:
-    about = pages.get("about")
-    vision = pages.get("vision")
-    glance = pages.get("glance")
-    history = pages.get("dept-history")
-    science = pages.get("faculty-science")
-
+    """Compact prompt orientation. The full entity corpus is voice_kb.md."""
+    annual_min, annual_max, reserved_min, reserved_max = _fee_range(fees)
+    email = contacts["emails"][0] if contacts["emails"] else "registrar@dspmuranchi.ac.in"
     blocks: list[str] = [
         "# DSPMU Site Knowledge",
         (
-            f"> Draft generated from public DSPMU sources on {datetime.now(timezone.utc).date().isoformat()}. "
-            "This is not an official university document. Fees and dates must be confirmed with the "
-            "university before payment or travel."
+            "> Draft orientation for the admissions agent. Fees and dates must be "
+            "confirmed with the university. The prompt carries the common facts and "
+            "recent notices; the full fact and notice indexes are maintained outside it."
         ),
         "## University",
+        "Dr. Shyama Prasad Mukherjee University (DSPMU), Ranchi, Jharkhand.",
+        f"Source: {sources['about'].url}",
+        "## Admissions 2026-27",
+        (
+            "UG and PG applications are made through the Chancellor Portal "
+            "(https://jharkhanduniversities.nic.in). Eligibility is programme-specific; "
+            "the public pages reviewed do not publish a consolidated eligibility table. "
+            "The document checklist and UG counselling dates are in the core cards."
+        ),
+        f"Source: {sources['merit'].url}",
+        "## Fees 2026-27",
+        (
+            f"The 2026 fee sheet covers {len(fees)} UG programmes. Annual fee: "
+            f"₹{annual_min:,}–₹{annual_max:,} (GEN), ₹{reserved_min:,}–₹{reserved_max:,} "
+            "(ST/SC/BC I & II). Semester course fee: ₹0–₹18,000 (GEN), depending on programme. "
+            "Common programmes are in the core cards; if a programme is not listed, say the "
+            "fee needs confirmation and give the registrar contact."
+        ),
+        f"Source: {fee_url}. Valid {FEE_VALID_FROM} to {FEE_VALID_UNTIL}.",
+        "## Important Dates",
+        (
+            "UG counselling dates and the document checklist are in the core cards. "
+            "PG admission dates are in the core cards and are marked for OCR review."
+        ),
+        f"Source: {sources['pgadm2026'].url}",
+        "## Departments",
+        (
+            f"{len(departments)} department pages are in the sitemap. This prompt includes "
+            "History and the Faculty of Science; the sitemap lists the rest."
+        ),
+        f"Source: {CURRENT}/sitemap.xml",
+        "## Results and Merit Lists",
+        (
+            "Result sheets, merit lists, selection lists and applicant lists are excluded "
+            "because they contain student names and roll numbers. Use the official pages: "
+            "https://dspmuranchi.ac.in/news/admission-merit-list and "
+            "https://dspmuranchi.ac.in/archive-notice."
+        ),
+        "## Contacts",
+        f"- Phone: {contacts['phone']}",
+        f"- Email: {email}",
+        f"- Website: {contacts['website']}",
+        f"- Contact page: {contacts['contact_page']}",
+        "## Source Notes",
+        f"- Current site: {CURRENT}",
+        f"- Sitemap: {CURRENT}/sitemap.xml",
+        f"- Old-site notice manifest: {sources['news'].url}",
+        f"- Current archive page: {CURRENT}/archive-notice",
+        f"- Admission notices: {CURRENT}/news/admission-merit-list",
+        f"- UG counselling PDF: {sources['counsel2026'].url}",
+        f"- UG documents PDF: {sources['docs2026'].url}",
+        f"- Fee PDF: {fee_url}",
     ]
-    if about and about.main_chars:
-        blocks += ["### About DSPMU", _excerpt(about.markdown or about.text), f"Source: {about.url}"]
-    if vision and vision.main_chars:
-        blocks += ["### Vision and mission", _excerpt(vision.markdown or vision.text), f"Source: {vision.url}"]
-    if glance and glance.main_chars:
-        blocks += ["### University at a glance", _excerpt(glance.markdown or glance.text), f"Source: {glance.url}"]
+    return "\n\n".join(block.strip() for block in blocks if block and block.strip()) + "\n"
 
-    blocks += ["## Admissions 2026-27", "### Process"]
-    blocks.append(
-        "UG and PG applications are made through the Chancellor Portal "
-        "(https://jharkhanduniversities.nic.in). The university publishes the "
-        "counselling schedule, document checklist and current admission notices "
-        "as PDFs linked from /news/admission-merit-list. The current site's fee "
-        "and examination-notice HTML pages are empty; use the linked PDFs."
-    )
-    blocks += ["### Eligibility"]
-    blocks.append(
-        "The public pages reviewed for this build do not publish a consolidated, "
-        "programme-specific eligibility table. Eligibility is programme-specific; "
-        "confirm it with the department or admission office before applying. "
-        "Check the current admission notice for CUET or other programme requirements."
-    )
-    if documents:
-        blocks += ["### Documents required for UG admission"]
-        blocks += [f"- {item['number']}. {item['text']}" for item in documents]
-        blocks.append(f"Source: {sources['docs2026'].url}")
-    if counselling:
-        blocks += ["### UG counselling schedule 2026"]
-        blocks += ["| Round | Dates | Publication |", "| --- | --- | --- |"]
-        for item in counselling:
-            blocks.append(f"| {item.round} | {item.dates or '—'} | {item.publication or '—'} |")
-        if "sports certificate" in (counsel_doc.text or "").lower():
-            blocks.append(
-                "- Sports-category certificate verification: 20–21 July 2026 at 10:30 AM in Jacob Hall."
-            )
-        blocks.append(f"Source: {sources['counsel2026'].url}")
 
-    # No paragraph may sit between this heading and the first ### entry: the
-    # existing kb_entities parser treats the first non-heading text as an
-    # entry head. Keep the note above the heading.
-    blocks += ["## Fees and Programmes"]
-    blocks.append(
-        "The 2026 fee sheet lists the programmes below. Degree labels are inferred "
-        "from the subject and faculty because the fee PDF names subjects, not "
-        "degrees. The fee numbers are copied exactly from the PDF."
-    )
-    blocks.append("## Undergraduate Programs")
+def _render_voice_kb(fees: list[ProgrammeFee]) -> str:
+    """Entity corpus for app.kb_entities. Never loaded into the prompt."""
+    blocks: list[str] = [
+        "# DSPMU Voice Knowledge",
+        (
+            "> Entity corpus for the grounding index. This file is not loaded into the "
+            "prompt; the prompt uses core_cards.md, site_map.md and recent_notices.md."
+        ),
+        "## Undergraduate Programs",
+    ]
     for fee in fees:
         blocks.append(programme_entry(fee).strip())
+    return "\n\n".join(blocks) + "\n"
 
-    blocks += ["## Important Dates", "### UG counselling 2026"]
-    if counselling:
-        for item in counselling:
-            blocks.append(
-                f"- {item.round}: {item.dates or 'date not stated'}"
-                + (f"; merit list publication {item.publication}" if item.publication else "")
-            )
-    blocks += ["### PG admission 2026-28"]
-    for item in pg_dates:
-        marker = " (needs review: OCR)" if item.get("needs_review") else ""
-        blocks.append(f"- {item['activity']}: {item['date_text']}{marker}")
-    blocks.append(f"Source: {sources['pgadm2026'].url} (OCR; needs human review)")
-    blocks.append(f"- Fee facts are valid from {FEE_VALID_FROM} through {FEE_VALID_UNTIL}; confirm before payment.")
 
-    blocks += ["## Fees Structure"]
-    blocks.append(
-        "The programme entries under ## Undergraduate Programs carry the 2026-27 "
-        "fees: annual fee paid yearly and course fee paid per semester. "
-        f"Source: the 2026 fee-structure PDF linked from /news/admission-merit-list ({fee_url})."
-    )
-
-    blocks += ["## Departments"]
-    if history and history.main_chars:
-        blocks += ["### History", _excerpt(history.markdown or history.text, 600), f"Source: {history.url}"]
-    if science and science.main_chars:
-        blocks += ["### Faculty of Science", _excerpt(science.markdown or science.text, 600), f"Source: {science.url}"]
-    if departments:
-        blocks.append("### Department pages in the sitemap")
-        blocks.append(", ".join(label for label, _ in departments))
-        blocks.append(f"Source: {CURRENT}/sitemap.xml")
-
-    blocks += ["## Notices", _notice_lines(latest)]
-    blocks.append(
-        "The old-site manifest is the working PDF source: "
-        f"{sources['news'].url}. The current archive page lists 4,325 rows, but "
-        "its PDF links return the site's 404 page on the new host."
-    )
-    blocks += ["## Results and Merit Lists"]
-    blocks.append(
-        "Result sheets, merit lists, selection lists and applicant lists are excluded "
-        "from this knowledge file because they contain student names and roll numbers. "
-        "Use the official pages: https://dspmuranchi.ac.in/news/admission-merit-list "
-        "and https://dspmuranchi.ac.in/archive-notice."
-    )
-    counts = pii_counts(notices)
-    if counts:
-        blocks.append(
-            "Excluded by the category and title PII filters: "
-            + ", ".join(f"{name} {count}" for name, count in counts.items())
-            + "."
-        )
-
-    blocks += ["## Contacts"]
-    blocks.append(f"- Address: {contacts['address']}")
-    blocks.append(f"- Phone: {contacts['phone']}")
-    for email in contacts["emails"]:
-        blocks.append(f"- Email: {email}")
-    blocks.append(f"- Website: {contacts['website']}")
-    blocks.append(f"- Contact page: {contacts['contact_page']}")
-    blocks.append(f"- Admission notices: {contacts['admission_page']}")
-
-    blocks += ["## Source Notes"]
-    blocks.append(
-        "The current site is a thin CMS: several content pages are empty and the "
-        "fee and examination-notice pages contain only their titles. The old site's "
-        "News.aspx is the working notice manifest and /pdf/News file server."
-    )
-    blocks.append(f"- Current site: {CURRENT}")
-    blocks.append(f"- Sitemap: {CURRENT}/sitemap.xml")
-    blocks.append(f"- Old site notice manifest: {sources['news'].url}")
-    blocks.append(f"- Current archive page: {CURRENT}/archive-notice")
-    blocks.append(f"- Admission notices: {CURRENT}/news/admission-merit-list")
-    blocks.append(f"- Fee PDF: {fee_url}")
-    if pages.get("syllabus"):
-        blocks.append(f"- Syllabus page: {pages['syllabus'].url}")
-    if pages.get("contact"):
-        blocks.append(f"- Contact page: {pages['contact'].url}")
-    return "\n\n".join(block.strip() for block in blocks if block and block.strip()) + "\n"
+def _render_recent_notices(notices: list[Notice], source_url: str) -> str:
+    """Volatile tail: latest non-PII notices. Loaded last in DOC_PATHS."""
+    blocks: list[str] = [
+        "# Recent DSPMU Notices",
+        f"> Latest non-PII notices. Source: {source_url}",
+        (
+            "Full archive: https://dspmuranchi.ac.in/archive-notice. "
+            "Results and merit lists are excluded."
+        ),
+    ]
+    if notices:
+        for notice in notices:
+            date = notice.date or notice.date_text or "date unknown"
+            blocks.append(f"- {date} · {notice.title} · {notice.category}")
+    else:
+        blocks.append("- No dated non-PII notices were readable from the manifest.")
+    return "\n".join(blocks) + "\n"
 
 
 def _fee_range(fees: list[ProgrammeFee]) -> tuple[int, int, int, int]:
@@ -424,8 +345,10 @@ def _render_core_cards(
                 f"₹{fee.annual_reserved:,} | ₹{fee.semester_gen:,} |"
             )
         blocks.append(
-            f"The full {len(fees)}-programme table and per-programme entries are in site_map.md. "
-            f"Source: {fee_url}. Valid {FEE_VALID_FROM} to {FEE_VALID_UNTIL}."
+            f"The full {len(fees)}-programme table is maintained outside this prompt; "
+            f"this card lists the common programmes. If a programme is not listed, say the "
+            f"fee needs confirmation. Source: {fee_url}. "
+            f"Valid {FEE_VALID_FROM} to {FEE_VALID_UNTIL}."
         )
     else:
         blocks.append("- The fee table could not be parsed; do not quote fees.")
@@ -472,6 +395,8 @@ def build(
     ocr: bool = True,
     max_notices: int = 12,
     max_tokens: int = 8000,
+    max_doc_tokens: int = 4000,
+    chat_budget: int = 30000,
 ) -> dict:
     cache_path = Path(cache_dir)
     output_path = Path(out_dir)
@@ -569,18 +494,10 @@ def build(
         warnings.append("sitemap.xml could not be parsed")
 
     site_map = _render_site_map(
-        pages=pages,
         fees=fees,
-        counselling=counselling,
-        documents=documents,
-        pg_dates=pg_dates,
         contacts=contacts,
-        notices=notices,
-        latest=latest,
         departments=departments,
         sources=loaded,
-        pg_doc=pg_doc,
-        counsel_doc=counsel_doc,
         fee_url=fee_result.url,
     )
     core_cards = _render_core_cards(
@@ -593,23 +510,68 @@ def build(
         notice_url=old_news.url,
         pg_doc=pg_doc,
     )
+    voice_kb = _render_voice_kb(fees)
+    recent_notices = _render_recent_notices(latest, old_news.url)
+    document_text = (
+        "\n\n".join(
+            piece.strip()
+            for piece in (core_cards, site_map, recent_notices)
+            if piece.strip()
+        )
+        + "\n"
+    )
 
-    site_tokens = _count_tokens(site_map)
     core_tokens = _count_tokens(core_cards)
-    combined = site_tokens + core_tokens
-    if combined > max_tokens:
+    site_tokens = _count_tokens(site_map)
+    recent_tokens = _count_tokens(recent_notices)
+    document_tokens = _count_tokens(document_text)
+    voice_kb_tokens = _count_tokens(voice_kb)
+
+    # The 8k gate is the REAL prompt, not just the document files. The voice
+    # wrapper is ~4k tokens; a document-only budget would let the full prompt
+    # exceed the latency target without the build noticing.
+    from app.config import settings
+    from app.rag import SYSTEM_PROMPT
+    from app.voice_system_prompt import build_voice_system_prompt
+
+    probe_question = "What is the annual fee for Bachelor of Arts in Political Science?"
+    output_reserve = int(settings.LLM_MAX_TOKENS or 192)
+    voice_prompt = build_voice_system_prompt(document_text)
+    chat_prompt = SYSTEM_PROMPT.format(context=document_text)
+    voice_prompt_tokens = _count_tokens(voice_prompt)
+    chat_prompt_tokens = _count_tokens(chat_prompt)
+    question_tokens = _count_tokens(probe_question)
+    voice_total = voice_prompt_tokens + question_tokens + output_reserve
+    chat_total = chat_prompt_tokens + question_tokens + output_reserve
+
+    if document_tokens > max_doc_tokens:
         raise BuildError(
-            f"combined prompt is {combined} tokens, over the {max_tokens}-token budget; "
-            f"site_map={site_tokens}, core_cards={core_tokens}. Trim notices/departments or raise --max-tokens."
+            f"document context is {document_tokens} tokens, over the {max_doc_tokens}-token "
+            f"document budget (core={core_tokens}, site={site_tokens}, notices={recent_tokens})"
+        )
+    if voice_total > max_tokens:
+        raise BuildError(
+            f"full voice prompt is {voice_total} tokens, over the {max_tokens}-token budget "
+            f"(wrapper={voice_prompt_tokens - document_tokens}, document={document_tokens}, "
+            f"question+output={question_tokens + output_reserve})"
+        )
+    if chat_total > chat_budget:
+        raise BuildError(
+            f"full chat prompt is {chat_total} tokens, over the {chat_budget}-token budget "
+            f"(wrapper={chat_prompt_tokens - document_tokens}, document={document_tokens})"
         )
 
-    # Parser and guard checks. This is the reason the file exists.
+    # Parser and guard checks. This is the reason the file exists. The entity
+    # corpus is voice_kb.md; the prompt/evidence corpus is document_text. A
+    # claim may be grounded only if it is in the prompt; the index knows the
+    # full programme list, which is why non-top fees are refused until the
+    # router injects the specific fact.
     from app.kb_entities import EntityIndex
     from app.voice_grounding import is_grounded, ungrounded_claims
 
-    index = EntityIndex(site_map)
+    index = EntityIndex(voice_kb)
     if not index.names:
-        raise BuildError("kb_entities found no programme names in site_map.md")
+        raise BuildError("kb_entities found no programme names in voice_kb.md")
     probe = "Bachelor of Arts in Political Science"
     if probe not in index.names:
         raise BuildError(f"kb_entities did not index {probe!r}; names={index.names[:5]}")
@@ -623,28 +585,22 @@ def build(
         "The annual fee for Bachelor of Arts in Political Science is ₹3,410 "
         "for the general category."
     )
-    if not is_grounded(probe_claim, site_map, index):
+    if not is_grounded(probe_claim, document_text, index):
         raise BuildError(
             "today's grounding guard rejected a correct DSPMU fee; "
-            f"ungrounded={ungrounded_claims(probe_claim, site_map, index)}"
+            f"ungrounded={ungrounded_claims(probe_claim, document_text, index)}"
         )
-    if "meridian" in (site_map + core_cards).lower():
+    if "meridian" in (site_map + core_cards + recent_notices + voice_kb).lower():
         raise BuildError("generated files still mention Meridian")
-    if "## Undergraduate Programs" not in site_map:
-        raise BuildError("site_map.md is missing the ## Undergraduate Programs section")
-    # Notice titles live in one section. Check that section rather than the
-    # whole document: a generic title like "Admission" would otherwise match a
-    # section heading and produce a false alarm.
-    notices_section = site_map.split("## Notices", 1)[-1].split(
-        "## Results and Merit Lists", 1
-    )[0]
+    if "## Undergraduate Programs" not in voice_kb:
+        raise BuildError("voice_kb.md is missing the ## Undergraduate Programs section")
     pii_leaks = [
         notice.title
         for notice in notices
-        if notice.pii and notice.title and notice.title in notices_section
+        if notice.pii and notice.title and notice.title in recent_notices
     ]
     if pii_leaks:
-        raise BuildError(f"PII notice leaked into the site map: {pii_leaks[:3]}")
+        raise BuildError(f"PII notice leaked into the prompt tail: {pii_leaks[:3]}")
 
     facts = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -688,6 +644,29 @@ def build(
         "valid_until": FEE_VALID_UNTIL,
     }
 
+    fact_ids = (
+        [fee["fact_id"] for fee in facts["fees"]]
+        + (["admissions.documents.2026"] if documents else [])
+        + (["admissions.counselling.2026"] if counselling else [])
+        + [
+            f"admissions.pg.{item['date']}"
+            for item in pg_dates
+            if item.get("date")
+        ]
+    )
+    prompt_manifest = {
+        "bundle_id": "dspmu-site-v1",
+        "generated_at": facts["generated_at"],
+        "valid_until": FEE_VALID_UNTIL,
+        "prompt_order": ["core_cards.md", "site_map.md", "recent_notices.md"],
+        "node_ids": ["core_cards", "site_map", "recent_notices"],
+        "fact_ids": list(dict.fromkeys(fact_ids)),
+        "notice_ids": [notice.id for notice in latest],
+        "source_urls": sorted({result.url for result in loaded.values()}),
+    }
+    if not prompt_manifest["fact_ids"]:
+        raise BuildError("prompt manifest has no fact IDs")
+
     report = {
         "generated_at": facts["generated_at"],
         "generator": "app/siteindex",
@@ -712,11 +691,20 @@ def build(
             "pages": pg_doc.pages,
             "needs_review": pg_doc.needs_review,
         },
+        "prompt_order": ["core_cards.md", "site_map.md", "recent_notices.md"],
         "tokens": {
-            "site_map": site_tokens,
             "core_cards": core_tokens,
-            "combined": combined,
-            "budget": max_tokens,
+            "site_map": site_tokens,
+            "recent_notices": recent_tokens,
+            "document": document_tokens,
+            "voice_kb": voice_kb_tokens,
+            "voice_prompt": voice_prompt_tokens,
+            "voice_total": voice_total,
+            "chat_prompt": chat_prompt_tokens,
+            "chat_total": chat_total,
+            "doc_budget": max_doc_tokens,
+            "voice_budget": max_tokens,
+            "chat_budget": chat_budget,
         },
         "validation": {
             "parser": "ok",
@@ -724,7 +712,12 @@ def build(
             "probe_numbers": sorted(owned),
             "no_meridian": True,
             "no_pii_titles": True,
+            "prompt_split": True,
+            "doc_budget_ok": True,
+            "voice_budget_ok": True,
+            "chat_budget_ok": True,
         },
+        "prompt_manifest": "prompt_manifest.json",
         "warnings": warnings,
         "current_archive_note": (
             "The current /archive-notice page lists 4,325 rows, but its PDF links "
@@ -735,8 +728,14 @@ def build(
 
     (output_path / "site_map.md").write_text(site_map, encoding="utf-8")
     (output_path / "core_cards.md").write_text(core_cards, encoding="utf-8")
+    (output_path / "voice_kb.md").write_text(voice_kb, encoding="utf-8")
+    (output_path / "recent_notices.md").write_text(recent_notices, encoding="utf-8")
     (output_path / "facts.json").write_text(
         json.dumps(facts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    (output_path / "prompt_manifest.json").write_text(
+        json.dumps(prompt_manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
     with (output_path / "notices.jsonl").open("w", encoding="utf-8") as handle:
         for notice in non_pii:
@@ -746,11 +745,13 @@ def build(
     )
 
     logger.info(
-        "built %s (%d tokens) and %s (%d tokens)",
-        output_path / "site_map.md",
-        site_tokens,
-        output_path / "core_cards.md",
+        "built core=%d site=%d recent=%d document=%d voice_total=%d voice_kb=%d",
         core_tokens,
+        site_tokens,
+        recent_tokens,
+        document_tokens,
+        voice_total,
+        voice_kb_tokens,
     )
     return report
 
@@ -777,7 +778,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-ocr", action="store_true", help="skip the OCR fallback")
     parser.add_argument("--max-notices", type=int, default=12)
-    parser.add_argument("--max-tokens", type=int, default=8000)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=8000,
+        help="full voice prompt budget (wrapper + document + question + output)",
+    )
+    parser.add_argument(
+        "--max-doc-tokens",
+        type=int,
+        default=4000,
+        help="document-only budget for DOC_PATHS",
+    )
+    parser.add_argument(
+        "--chat-budget",
+        type=int,
+        default=30000,
+        help="full chat prompt budget",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -793,15 +811,27 @@ def main(argv: list[str] | None = None) -> int:
             ocr=not args.no_ocr,
             max_notices=args.max_notices,
             max_tokens=args.max_tokens,
+            max_doc_tokens=args.max_doc_tokens,
+            chat_budget=args.chat_budget,
         )
     except (BuildError, FileNotFoundError, FetchError) as exc:
         print(f"build failed: {exc}", file=sys.stderr)
         return 1
 
     tokens = report["tokens"]
-    print(f"site_map.md      {tokens['site_map']:>6} tokens")
     print(f"core_cards.md    {tokens['core_cards']:>6} tokens")
-    print(f"combined         {tokens['combined']:>6} / {tokens['budget']} tokens")
+    print(f"site_map.md      {tokens['site_map']:>6} tokens")
+    print(f"recent_notices.md{tokens['recent_notices']:>6} tokens")
+    print(f"document         {tokens['document']:>6} / {tokens['doc_budget']} tokens")
+    print(
+        f"voice prompt     {tokens['voice_total']:>6} / {tokens['voice_budget']} tokens "
+        f"(wrapper {tokens['voice_prompt'] - tokens['document']})"
+    )
+    print(
+        f"chat prompt      {tokens['chat_total']:>6} / {tokens['chat_budget']} tokens "
+        f"(wrapper {tokens['chat_prompt'] - tokens['document']})"
+    )
+    print(f"voice_kb.md      {tokens['voice_kb']:>6} tokens (entity index, not in prompt)")
     print(
         "notices          "
         f"{report['notices']['manifest_rows']} rows, "

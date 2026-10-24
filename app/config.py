@@ -555,6 +555,11 @@ class Settings:
     DOC_MAX_TOKENS: int = field(
         default_factory=lambda: _env_int("DOC_MAX_TOKENS", 500_000)
     )
+    #: Sidecar metadata for the current prompt bundle (fact/node IDs and source
+    #: URLs). Empty by default so the Meridian fallback carries no DSPMU IDs.
+    CONTEXT_MANIFEST_PATH: str = field(
+        default_factory=lambda: _env("CONTEXT_MANIFEST_PATH", "").strip()
+    )
     DEFAULT_LANGUAGE: str = field(
         default_factory=lambda: _env("DEFAULT_LANGUAGE", "en").strip().lower()
     )

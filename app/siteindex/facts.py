@@ -112,6 +112,7 @@ class ProgrammeFee:
 
     def to_dict(self) -> dict:
         return {
+            "fact_id": f"fee.ug.{slugify(self.subject)}.2026.gen",
             "programme": self.programme,
             "degree": self.degree,
             "subject": self.subject,

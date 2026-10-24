@@ -1829,6 +1829,24 @@ class VoiceCallSession:
             if len(self._grounding_evidence) > 40:
                 del self._grounding_evidence[0]
 
+    def note_turn_context(self) -> None:
+        """Record the exact bundle the prompt used, for the grounding guard.
+
+        The guard must judge the same text the model saw. Re-reading the
+        document here is how the two can drift apart when site mode selects a
+        subset of nodes.
+        """
+        if settings.CONTEXT_MODE == "off":
+            return
+        try:
+            from app.rag import last_context_bundle
+
+            bundle = last_context_bundle()
+            if bundle is not None:
+                self.note_grounding_evidence(bundle.text)
+        except Exception:                          # noqa: BLE001
+            pass                                   # never let the guard break a call
+
     def grounded(self, text: str) -> str:
         """Return `text` with ungrounded claims removed, or a refusal line.
 
@@ -1842,18 +1860,7 @@ class VoiceCallSession:
         """
         if not GROUNDING_ENABLED:
             return text
-        try:
-            if settings.CONTEXT_MODE == "doc":
-                # No retrieval in doc mode: the full document is the evidence.
-                from app.doc_context import document_context
-
-                self.note_grounding_evidence(document_context())
-            elif settings.CONTEXT_MODE != "off":
-                from app.rag import last_retrieved_context
-
-                self.note_grounding_evidence(last_retrieved_context())
-        except Exception:                          # noqa: BLE001
-            pass                                   # never let the guard break a call
+        self.note_turn_context()
         from app.voice_grounding import enforce_grounding, is_refusal
 
         # The English entity index cannot match a translated programme name.
@@ -3129,35 +3136,12 @@ class VoiceCallSession:
             answer = await asyncio.to_thread(
                 run_rag_query_sync, prompt, "voice", question
             ) or ""
-            # BUG-18 (batch seam): record the evidence for the grounding
-            # boundary HERE, on the loop.
-            #
-            # `retrieve_context` sets this ContextVar itself, but on this path it
-            # runs inside the `to_thread` worker, and `to_thread` copies the
-            # calling context IN, not OUT -- the set is discarded when the thread
-            # ends. The streamed path was fixed for exactly this (app/rag.py:423)
-            # and the batch path was left behind: `last_retrieved_context()` read
-            # "" here, so `grounded()` judged every answer against the caller's
-            # own words alone. That is not the fail-open case either -- the
-            # caller's transcript IS in the evidence list, so the guard did judge,
-            # on the wrong evidence, and a correct answer about the university's
-            # own programmes is what that produces.
-            #
-            # `LLM_STREAM=1` is what is deployed, so this is a latent defect, not
-            # a live one. Fixed here because it is the same seam and the same
-            # one-line shape; a deployment that flips the flag must not silently
-            # lose the evidence.
-            try:
-                if settings.CONTEXT_MODE == "doc":
-                    from app.doc_context import document_context
-
-                    self.note_grounding_evidence(document_context())
-                elif settings.CONTEXT_MODE != "off":
-                    from app.rag import last_retrieved_context
-
-                    self.note_grounding_evidence(last_retrieved_context())
-            except Exception:                      # noqa: BLE001
-                pass                               # never let the guard break a call
+            # Record the evidence on the loop. The bundle is set by
+            # query_rag_stream; reading it here keeps the guard on the same
+            # text the prompt used, without a worker-thread context loss.
+            # Same evidence seam as the batch path: use the bundle the prompt
+            # used, not a fresh read of the document.
+            self.note_turn_context()
             if self._trace is not None:
                 self._trace.mark("llm_done")
                 self._trace.note(answer_chars=len(answer))

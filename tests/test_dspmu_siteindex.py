@@ -1,4 +1,4 @@
-"""Milestone one: the DSPMU index builds and today's guard accepts it.
+"""Milestone one + prompt split: the DSPMU index builds and today's guard accepts it.
 
 These tests are offline. They exercise the parsers with small fixtures and, when
 the generated files exist, run the real guard against the generated knowledge
@@ -33,6 +33,8 @@ from app.voice_grounding import is_grounded, ungrounded_claims  # noqa: E402
 
 SITE_MAP = ROOT / "content/dspmu/site_map.md"
 CORE_CARDS = ROOT / "content/dspmu/core_cards.md"
+VOICE_KB = ROOT / "content/dspmu/voice_kb.md"
+RECENT_NOTICES = ROOT / "content/dspmu/recent_notices.md"
 FACTS = ROOT / "content/dspmu/facts.json"
 REPORT = ROOT / "content/dspmu/build_report.json"
 
@@ -159,56 +161,82 @@ def test_pdf_links_are_resolved_and_deduplicated():
     assert links[0].url == "https://dspmuranchi.ac.in/uploads/a.pdf"
 
 
-def _generated() -> tuple[str, str, dict]:
-    if not (SITE_MAP.exists() and CORE_CARDS.exists() and FACTS.exists()):
+def _generated() -> tuple[str, str, dict, str, str]:
+    paths = (SITE_MAP, CORE_CARDS, VOICE_KB, RECENT_NOTICES, FACTS, REPORT)
+    if not all(path.exists() for path in paths):
         pytest.skip("generated DSPMU files are missing; run scripts/build_site_index.py")
     return (
         SITE_MAP.read_text(encoding="utf-8"),
         CORE_CARDS.read_text(encoding="utf-8"),
         json.loads(FACTS.read_text(encoding="utf-8")),
+        VOICE_KB.read_text(encoding="utf-8"),
+        RECENT_NOTICES.read_text(encoding="utf-8"),
     )
 
 
+def _prompt_context() -> tuple[str, str]:
+    site_map, core_cards, _, voice_kb, recent = _generated()
+    return "\n\n".join((core_cards, site_map, recent)), voice_kb
+
+
 def test_generated_files_are_parser_compatible_and_clean():
-    site_map, core_cards, facts = _generated()
-    assert "## Undergraduate Programs" in site_map
-    assert "Meridian" not in site_map
-    assert "Meridian" not in core_cards
+    site_map, core_cards, facts, voice_kb, recent = _generated()
+    assert "## Undergraduate Programs" in voice_kb
+    assert "## Undergraduate Programs" not in site_map
+    assert "meridian" not in (site_map + core_cards + voice_kb + recent).lower()
     assert facts["status"] == "draft"
     assert facts["approved_by"] is None
     assert facts["fees"]
     assert facts["notices"]["pii_excluded"] > 0
 
-    index = EntityIndex(site_map)
+    index = EntityIndex(voice_kb)
     probe = "Bachelor of Arts in Political Science"
     assert index.is_known(probe)
     assert "3410" in index.programme_numbers_for([probe])
 
 
+def test_prompt_split_keeps_the_entity_corpus_out_of_the_prompt():
+    site_map, core_cards, _, voice_kb, _ = _generated()
+    assert "## Undergraduate Programs" in voice_kb
+    assert "## Undergraduate Programs" not in site_map
+    assert "Political Science" in core_cards
+    assert "Bachelor of Arts in Political Science" not in site_map
+    assert len(voice_kb) > len(site_map)
+
+
 def test_guard_accepts_a_real_fee_and_rejects_a_wrong_one():
-    site_map, _, _ = _generated()
-    index = EntityIndex(site_map)
+    context, voice_kb = _prompt_context()
+    index = EntityIndex(voice_kb)
     good = "The annual fee for Bachelor of Arts in Political Science is ₹3,410 for the general category."
     bad = "The annual fee for Bachelor of Arts in Political Science is ₹14,600."
-    assert is_grounded(good, site_map, index)
-    assert not is_grounded(bad, site_map, index)
-    assert ungrounded_claims(bad, site_map, index)
+    assert is_grounded(good, context, index)
+    assert not is_grounded(bad, context, index)
+    assert ungrounded_claims(bad, context, index)
 
 
 def test_guard_rejects_an_invented_programme_and_a_roll_number():
-    site_map, _, _ = _generated()
-    index = EntityIndex(site_map)
+    context, voice_kb = _prompt_context()
+    index = EntityIndex(voice_kb)
     assert not is_grounded(
-        "The university offers a Master of Mechanical Engineering.", site_map, index
+        "The university offers a Master of Mechanical Engineering.", context, index
     )
     assert not is_grounded(
-        "The selected candidate's roll number is 22001.", site_map, index
+        "The selected candidate's roll number is 22001.", context, index
     )
 
 
-def test_generated_prompt_fits_the_voice_budget():
-    _, _, facts = _generated()
+def test_generated_prompt_fits_the_real_voice_and_chat_budgets():
+    _, _, _, _, _ = _generated()
     report = json.loads(REPORT.read_text(encoding="utf-8"))
-    assert report["tokens"]["combined"] <= report["tokens"]["budget"]
+    tokens = report["tokens"]
+    assert tokens["document"] <= tokens["doc_budget"]
+    assert tokens["voice_total"] <= tokens["voice_budget"]
+    assert tokens["chat_total"] <= tokens["chat_budget"]
+    assert tokens["voice_kb"] > tokens["site_map"]
+    assert report["prompt_order"] == [
+        "core_cards.md",
+        "site_map.md",
+        "recent_notices.md",
+    ]
     assert report["notices"]["included_latest"] > 0
     assert report["ocr"]["needs_review"] in (True, False)

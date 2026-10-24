@@ -43,6 +43,9 @@ os.environ.setdefault("CONTEXT_MODE", "rag")
 os.environ.setdefault("VOICE_KB_PATH", "content/meridian/meridian_knowledge_base.md")
 os.environ.setdefault("DOC_PATHS", "content/meridian/meridian_knowledge_base.md")
 os.environ.setdefault("DOC_MAX_TOKENS", "500000")
+# Do not attach the DSPMU prompt manifest's fact/node IDs to the Meridian
+# fixture. A new bundle test overrides this explicitly.
+os.environ.setdefault("CONTEXT_MANIFEST_PATH", "")
 
 # The demo .env also sets LLM_PROVIDER=openai. Tests must stay hermetic and
 # must not require LLM_API_KEY; the OpenAI adapter tests inject a fake client

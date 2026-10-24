@@ -110,7 +110,7 @@ Dr. Shyama Prasad Mukherjee University (DSPMU), Ranchi, Jharkhand.
 
 | Bachelor of Computer Applications (BCA) | ₹3,675 | ₹3,200 | ₹12,000 |
 
-The full 43-programme table and per-programme entries are in site_map.md. Source: https://dspmuranchi.ac.in/uploads/news/gallery/1785318304_034b0538cc479c48018a.pdf. Valid 2026-07-01 to 2027-06-30.
+The full 43-programme table is maintained outside this prompt; this card lists the common programmes. If a programme is not listed, say the fee needs confirmation. Source: https://dspmuranchi.ac.in/uploads/news/gallery/1785318304_034b0538cc479c48018a.pdf. Valid 2026-07-01 to 2027-06-30.
 
 ## Contacts
 

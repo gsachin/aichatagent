@@ -21,12 +21,14 @@ The truncation is a guard for future 2 MB documents, not a path the current
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
+from app.context_bundle import ContextBundle
 
 logger = logging.getLogger("doc_context")
 
@@ -38,6 +40,7 @@ _TOKEN_ENCODING = "o200k_base"
 
 _lock = threading.Lock()
 _cache: dict | None = None
+_manifest_cache: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -200,10 +203,80 @@ def _get() -> tuple[str, DocumentStats]:
     return text, stats
 
 
+def _manifest_path() -> Path | None:
+    raw = (settings.CONTEXT_MANIFEST_PATH or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _strings(value) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if str(item).strip())
+
+
+def _read_manifest() -> dict:
+    """Read the sidecar IDs for the current prompt, cached by path/mtime/size."""
+    global _manifest_cache
+    path = _manifest_path()
+    if path is None:
+        return {}
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    identity = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _lock:
+        if _manifest_cache is not None and _manifest_cache["identity"] == identity:
+            return _manifest_cache["data"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    with _lock:
+        _manifest_cache = {"identity": identity, "data": data}
+    return data
+
+
 def document_context() -> str:
     """The full document text for the current turn ("" when none is readable)."""
     text, _ = _get()
     return text
+
+
+def document_bundle() -> ContextBundle:
+    """The text and provenance for THIS turn.
+
+    The text is exactly what ``document_context()`` returns. The sidecar
+    manifest, when present, adds the fact/node IDs and source URLs that the
+    guard and logs can carry without re-reading a different document.
+    """
+    text, _ = _get()
+    manifest = _read_manifest()
+    node_ids = _strings(manifest.get("node_ids"))
+    expected = {path.stem for path in _paths()}
+    if manifest and expected and set(node_ids) != expected:
+        # A stale sidecar must not attach another prompt's facts/sources to
+        # this text. Keep the text; drop the provenance.
+        logger.warning(
+            "context manifest node_ids %s do not match DOC_PATHS %s; "
+            "dropping bundle provenance",
+            sorted(node_ids),
+            sorted(expected),
+        )
+        return ContextBundle(text=text)
+    valid_until = manifest.get("valid_until")
+    return ContextBundle(
+        text=text,
+        fact_ids=_strings(manifest.get("fact_ids")),
+        node_ids=node_ids,
+        source_urls=_strings(manifest.get("source_urls")),
+        valid_until=str(valid_until) if valid_until else None,
+    )
 
 
 def document_stats() -> DocumentStats:
@@ -222,6 +295,7 @@ def source_label() -> str:
 
 def clear_cache() -> None:
     """Tests and the benchmark tool use this after changing the document."""
-    global _cache
+    global _cache, _manifest_cache
     with _lock:
         _cache = None
+        _manifest_cache = None
