@@ -1,0 +1,8 @@
+{
+  "sid": "PNfa8088a21104459e0fdac57dc8c50c59",
+  "previous": {
+    "voice_url": "https://nav-nose-blake-badly.trycloudflare.com/twilio/voice",
+    "voice_method": "GET",
+    "status_callback": "https://nav-nose-blake-badly.trycloudflare.com/twilio/outbound/status"
+  }
+}

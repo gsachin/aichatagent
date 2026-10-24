@@ -1,0 +1,1104 @@
+{
+  "run_id": "20261019T225957Z",
+  "condition": "N=1",
+  "thermal_state": "cold",
+  "turn_count": 1,
+  "first_audio_n": 1,
+  "fixture_sha256": "46fb579d34a3d59b97917aa58f50e4b295e35ff273a257f43c3cfbd389aaed5d",
+  "fixtures": [
+    "fees-01"
+  ],
+  "fixture_hashes": {
+    "fees-01": "f63390641c72bf25d46e326cca728bf991dd8e289ee0372c0d4e0ea0e97573ce"
+  },
+  "fixture_version": {
+    "fees-01": 1
+  },
+  "network_profile": "clean",
+  "profile_parameters": {
+    "frame_delay_ms": 0.0,
+    "jitter_ms": 0.0,
+    "loss_percent": 0.0,
+    "reorder_percent": 0.0,
+    "disconnect_at_turns": []
+  },
+  "profile_description": "carrier framing, no injection",
+  "injected_condition": false,
+  "first_audio_ms": {
+    "p50": 9031.0,
+    "p95": 9031.0,
+    "worst": 9031.0,
+    "n": 1,
+    "bucket": "cold"
+  },
+  "cold_first_audio_ms": {
+    "n": 1,
+    "p50": 9031.0,
+    "p95": 9031.0,
+    "worst": 9031.0,
+    "min": 9031.0
+  },
+  "warm_first_audio_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "worst": null,
+    "min": null
+  },
+  "vad_end_first_audio_ms": {
+    "n": 1,
+    "p50": 2984.0,
+    "p95": 2984.0,
+    "worst": 2984.0,
+    "min": 2984.0
+  },
+  "endpointing_ms": {
+    "n": 1,
+    "p50": 6047.0,
+    "p95": 6047.0,
+    "worst": 6047.0,
+    "min": 6047.0
+  },
+  "ws_ping_interval": null,
+  "ws_ping_timeout": 20.0,
+  "ws_ping_basis": "keepalive pings DISABLED (default for cold sessions). A cold first turn pays in-process model loads inside the app and can legitimately outlast a keepalive window; a ping then kills the measurement with a 1011 'keepalive ping timeout' -- exactly how the two harness-clean cold N=2 runs in the store died. The pings guard against a dead connection, not a slow turn. Pass --ws-ping-interval to re-enable them.",
+  "carrier_boundary_excluded": true,
+  "records_separated": true,
+  "separation": {
+    "records_separated": true,
+    "separation_basis": "logs/perf_turns.jsonl",
+    "trace_rows_in_window": 1,
+    "trace_rows_unattributable": 0,
+    "distinct_call_ids": 1,
+    "reasons": [],
+    "detail": "rows attributed by call_id to the session that opened that streamSid; no row unattributed, no call_id shared between sessions, no repeated turn_id"
+  },
+  "turns_over_3000ms": 1,
+  "cap_exceeded": true,
+  "cap_basis": "first_audio_ms > 3000 (BRD-05 per-turn ceiling), measured from caller speech end on the harness clock -- INCLUDING the ~600 ms endpointing window (BRD-04). PO-ruled 2026-09-19 (Phase 4a): the cap keys on THIS clock, because the endpointing wait is part of what the caller experiences. The app's vad_end clock is emitted per turn as first_audio_from_vad_end_ms and summarised beside this one as a companion figure, never the judge.",
+  "turns_without_response": 0,
+  "turns_timed_out": 0,
+  "partial": false,
+  "dropped_turns": 0,
+  "discarded": true,
+  "discard_reason": "turn cap exceeded (>3000 ms first audio): A turn 0 = 9031 ms",
+  "stack_readiness": "assumed - no readiness surface exists. US-007 IS IMPLEMENTED and its gate exits 0 (test_us007_readiness.py 30/30), but the gate is a CLI the operator runs at boot (`python -m app.boot_readiness`); the app exposes no /health or /ready endpoint, so a run at call time cannot consult it. That is the open half of US-007's DoD, not a missing story. Treat 'warm' figures from this run as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report",
+  "readiness": {
+    "url": "ws://127.0.0.1:8000/ws/twilio",
+    "checks": [
+      {
+        "check": "quality-eval lock",
+        "path": "D:\\project\\universityDemo\\eval\\.eval_in_progress",
+        "result": "no lock file present",
+        "note": "no runner creates this lock today (US-003 writes none); this is the hook the interlock needs, not a working interlock"
+      },
+      {
+        "check": "tcp reachability",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "result": "listening"
+      }
+    ],
+    "stack_readiness": "assumed - no readiness surface exists. US-007 IS IMPLEMENTED and its gate exits 0 (test_us007_readiness.py 30/30), but the gate is a CLI the operator runs at boot (`python -m app.boot_readiness`); the app exposes no /health or /ready endpoint, so a run at call time cannot consult it. That is the open half of US-007's DoD, not a missing story. Treat 'warm' figures from this run as warm RELATIVE TO ITS OWN FIRST TURN, not as certified against a readiness report"
+  },
+  "frame_audit": {
+    "frames_emitted": 204,
+    "frames_dropped": 0,
+    "frames_reordered": 0,
+    "frames_late_gt_5ms": 0,
+    "frames_slot_clamped": 0,
+    "max_slot_deviation_ms": 0.713,
+    "worst_session_p95_slot_deviation_ms": 0.312,
+    "harness_fault": false,
+    "tac1_holds": true,
+    "per_session": {
+      "A": {
+        "frames_emitted": 204,
+        "frames_dropped": 0,
+        "frames_reordered": 0,
+        "frames_late_gt_5ms": 0,
+        "frames_late_gt_5ms_from_clamp": 0,
+        "frames_late_gt_5ms_unexplained": 0,
+        "frames_slot_clamped": 0,
+        "max_slot_deviation_ms": 0.713,
+        "p50_slot_deviation_ms": 0.16,
+        "p95_slot_deviation_ms": 0.312,
+        "p99_slot_deviation_ms": 0.366,
+        "profile_attributed_delay_ms": 0.0,
+        "profile_attributed_jitter_ms": 0.0,
+        "max_harness_deviation_ms": 0.713,
+        "p95_harness_deviation_ms": 0.312,
+        "frames_harness_late_gt_5ms": 0,
+        "harness_fault": false,
+        "harness_fault_basis": "a harness fault is a frame the pacer could have placed on time but did not: send minus max(ideal slot, previous send). Lateness the injected profile made unavoidable is attributed to the profile, and is still counted in frames_late_gt_5ms",
+        "tac1_holds": true,
+        "tac1_pacing_is_sound": true,
+        "tac1_basis": "tac1_holds is the strict AC (zero frames >5 ms off). tac1_pacing_is_sound additionally requires p95 <= 1 ms and at most 1 late frame per 1000, i.e. an isolated host stall rather than a harness that is systematically off-slot",
+        "spin_margin_ms": 1.5,
+        "wake_lead_ms": 6.0,
+        "timer_resolution_1ms": true,
+        "basis": "deviation = actual send instant - the 20 ms slot the profile asked for (the slot already includes frame_delay_ms and jitter_ms, so injected lateness is attributed to the profile). The grid restarts at each turn's burst, because a session is a burst per turn separated by the app's replies, not one continuous stream"
+      }
+    },
+    "basis": "TAC-1: no emitted frame may sit more than 5 ms off its 20 ms slot on a clean profile. Under a profile the slot already includes the injected delay and jitter, so injected lateness is attributed to the profile and only the remainder is a harness fault."
+  },
+  "per_session": [
+    {
+      "label": "A",
+      "turn_count": 1,
+      "planned_turns": 1,
+      "completed": true,
+      "connected": true,
+      "error": null,
+      "dropped_by_harness": false,
+      "stream_sids": [
+        "MZe2118526548198bf0f01c26d3b94f3"
+      ],
+      "reconnects": 0,
+      "reconnect_events": [],
+      "warm": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "worst": null,
+        "min": null
+      },
+      "cold": {
+        "n": 1,
+        "p50": 9031.0,
+        "p95": 9031.0,
+        "worst": 9031.0,
+        "min": 9031.0
+      },
+      "turns_over_3000ms": 1,
+      "turns_without_response": 0,
+      "greeting_seen": true,
+      "events_seen": {
+        "media": 692,
+        "clear": 1
+      },
+      "turns": [
+        {
+          "session_label": "A",
+          "turn_index": 0,
+          "fixture_id": "fees-01",
+          "fixture_turn_index": 0,
+          "intent": "Fees structure",
+          "thermal": "cold",
+          "first_audio_ms": 9031.0,
+          "turn_total_ms": 9031.0,
+          "exceeded_cap": true,
+          "responded": true,
+          "timed_out": false,
+          "responses_seen": 1,
+          "expected_responses": 1,
+          "sent_frames": 204,
+          "speech_frames": 130,
+          "segment_s": 4.08,
+          "t_speech_end": 7017.312,
+          "stream_sid": "MZe2118526548198bf0f01c26d3b94f3",
+          "new_session": false,
+          "first_audio_from_vad_end_ms": 2984.0,
+          "endpointing_ms": 6047.0,
+          "note": "",
+          "first_audio_from_speech_end_ms": 9031.0
+        }
+      ]
+    }
+  ],
+  "target_turns_per_session": 1,
+  "powered": false,
+  "url": "ws://127.0.0.1:8000/ws/twilio",
+  "started_at": "2026-10-19T22:59:57Z",
+  "ended_at": "2026-10-19T23:00:23Z",
+  "wall_seconds": 26.13,
+  "harness_version": "us002-harness/1.0.0",
+  "harness_sha256": "f92fe84173020c7f964a11fabfdd784bfc19d9dcf406d87d2293881b77ee30d0",
+  "extra_load": {},
+  "app_contract_check": {
+    "checked": [
+      {
+        "file": "voice_handler.py",
+        "name": "max_utterance_frames",
+        "harness": 300,
+        "app": 300,
+        "status": "ok"
+      }
+    ],
+    "drift": [
+      "silence_threshold_frames: pattern not found in voice_handler.py - the app may have changed shape; re-verify the harness's mirror",
+      "MIN_UTTERANCE_FRAMES: pattern not found in voice_handler.py - the app may have changed shape; re-verify the harness's mirror",
+      "RMS gate: pattern not found in voice_handler.py - the app may have changed shape; re-verify the harness's mirror"
+    ],
+    "ok": false
+  },
+  "json_path": "",
+  "effective_config": [
+    {
+      "key": "ADMISSION_ENABLED",
+      "value": "true",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "AGENT_NAME",
+      "value": "Alex",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BACKEND_BASE",
+      "value": "http://localhost:8000",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "BACKEND_TIMEOUT",
+      "value": "10.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_ABS_FLOOR",
+      "value": "150",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_ECHO_GAIN",
+      "value": "0.5",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_ENABLED",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_MARGIN",
+      "value": "2.0",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_MIN_FRAMES",
+      "value": "6",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BARGE_IN_REF_DECAY",
+      "value": "0.95",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "BG_DEFER_TIMEOUT_S",
+      "value": "30.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "BG_MAX_CONCURRENT",
+      "value": "1",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "COMPANY_NAME",
+      "value": "Meridian University",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CONTEXT_MODE",
+      "value": "doc",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_API_KEY",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": true
+    },
+    {
+      "key": "CRM_BASE_URL",
+      "value": "http://127.0.0.1:8098",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_BREAKER_RESET_S",
+      "value": "60.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_BREAKER_THRESHOLD",
+      "value": "5",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_DOCUMENT_UPLOAD_ENABLED",
+      "value": "true",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_ENABLED",
+      "value": "true",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_IDLE_WINDOW_HOURS",
+      "value": "6",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_MAX_RETRIES",
+      "value": "3",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_OFFER_DOCUMENT_SOURCE",
+      "value": "Internal Upload",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_OFFER_DOCUMENT_TYPE",
+      "value": "Other",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_OFFER_UPLOAD_ENABLED",
+      "value": "true",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_OUTBOX_MAX_ATTEMPTS",
+      "value": "10",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_OUTBOX_POLL_INTERVAL",
+      "value": "60",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_TIMEOUT_CONNECT_S",
+      "value": "2.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_TIMEOUT_READ_S",
+      "value": "5.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_UPLOAD_CHUNK_BYTES",
+      "value": "1048576",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CRM_UPLOAD_TIMEOUT_S",
+      "value": "30.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "CUDA_VISIBLE_DEVICES",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DASHBOARD_API_URL",
+      "value": "http://localhost:8000",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DATABASE_URL",
+      "value": "postgresql://elearning:elearning_secret@localhost:5432/universcity",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "DATA_DIR",
+      "value": "data",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DB_HOST",
+      "value": "localhost",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DB_NAME",
+      "value": "admissions",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DB_PASSWORD",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": true
+    },
+    {
+      "key": "DB_PORT",
+      "value": "5432",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DB_USER",
+      "value": "postgres",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DEFAULT_LANGUAGE",
+      "value": "en",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "DEFAULT_PAYMENT_LINK",
+      "value": "https://pay.university.edu/admissions",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "DOC_MAX_BYTES",
+      "value": "2000000",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "DOC_MAX_TOKENS",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "DOC_PATHS",
+      "value": "content/meridian/meridian_knowledge_base.md",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "FASTAPI_HOST",
+      "value": "0.0.0.0",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "FASTAPI_PORT",
+      "value": "8000",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "FASTAPI_WORKERS",
+      "value": "4",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "FOLLOW_UP_POLL_INTERVAL",
+      "value": "30",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "FOREIGN_LANGUAGES",
+      "value": "es,fr,it,ja,pt,zh",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "GROUNDING_ENABLED",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "GROUNDING_LANGUAGE_MODE",
+      "value": "relaxed",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "GROUNDING_NAMES_ENABLED",
+      "value": "True",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "HOST",
+      "value": "127.0.0.1",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_CONFORMER_DEVICE",
+      "value": "cpu",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_CONFORMER_MODEL_GU",
+      "value": "OpenVoiceOS/ai4bharat-indicconformer-gu-onnx",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_CONFORMER_MODEL_HI",
+      "value": "OpenVoiceOS/ai4bharat-indicconformer-hi-onnx",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_CONFORMER_QUANTIZATION",
+      "value": "int8",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_TTS_LANGUAGE",
+      "value": "hi",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "INDIC_TTS_URL",
+      "value": "http://127.0.0.1:8020",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "KOKORO_SPEED",
+      "value": "1.0",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "KOKORO_VOICE",
+      "value": "af_heart",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_API_KEY",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "LLM_BASE_URL",
+      "value": "https://api.openai.com/v1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_MAX_TOKENS",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "LLM_MODEL",
+      "value": "gpt-6-luna",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_PROMPT_CACHE_KEY",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "LLM_PROVIDER",
+      "value": "auto",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_REASONING_EFFORT",
+      "value": "none",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_STREAM",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_STREAM_INCLUDE_USAGE",
+      "value": "True",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_TEMPERATURE",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "LLM_TIMEOUT_S",
+      "value": "15",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LOG_FILE",
+      "value": "./logs/voice_assistant.log",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "LOG_LEVEL",
+      "value": "INFO",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "MACHINE_CLOUD",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MACHINE_IN_CONTAINER",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MAX_CALL_ATTEMPTS",
+      "value": "3",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MAX_CONCURRENT_CALLS",
+      "value": "2",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "MCP_ENABLED",
+      "value": "True",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MIN_LABELED_OUTCOMES",
+      "value": "100",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MIN_UTTERANCE_FRAMES",
+      "value": "15",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "MUTE_STT_DURING_TTS",
+      "value": "True",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "NGROK_HOST",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "OFFER_EMAIL",
+      "value": "admissions@university.edu",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "OFFER_GUARD_MINUTES",
+      "value": "1",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "OFFER_VALID_DAYS",
+      "value": "30",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "OUTBOUND_LANGUAGE",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "OUTBOUND_POLL_INTERVAL",
+      "value": "10",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "PORT",
+      "value": "8000",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "PYTHONDONTWRITEBYTECODE",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "PYTHONHASHSEED",
+      "value": "0",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "PYTHONUNBUFFERED",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_API_KEY",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "SARVAM_STT_KEYTERMS",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": true
+    },
+    {
+      "key": "SARVAM_STT_MODE",
+      "value": "codemix",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_STT_MODEL",
+      "value": "saaras:v4",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_STT_TIMEOUT_S",
+      "value": "8",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_STT_URL",
+      "value": "https://api.sarvam.ai/speech-to-text",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_LANGUAGES",
+      "value": "gu",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_MODEL",
+      "value": "bulbul:v4-flash",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_PACE",
+      "value": "1.1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_SAMPLE_RATE",
+      "value": "8000",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_SPEAKER",
+      "value": "pooja_gu_customer",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_TIMEOUT_S",
+      "value": "15",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SARVAM_TTS_URL",
+      "value": "https://api.sarvam.ai/text-to-speech/stream",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SENTIMENT_EWMA_LAMBDA",
+      "value": "0.35",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SENTIMENT_W1",
+      "value": "0.3",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SENTIMENT_W2",
+      "value": "0.3",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SENTIMENT_W3",
+      "value": "0.25",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SENTIMENT_W4",
+      "value": "0.15",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "SMALL_TASK_NUM_CTX",
+      "value": "8192",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SMTP_HOST",
+      "value": "smtp.gmail.com",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SMTP_PASS",
+      "value": "(unset)",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "SMTP_PORT",
+      "value": "587",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SMTP_USER",
+      "value": "(unset)",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STREAMLIT_PORT",
+      "value": "8501",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STREAMLIT_SERVER_HEADLESS",
+      "value": "true",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STT_FALLBACK_PROVIDERS",
+      "value": "indic_conformer,whisper",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STT_LANGUAGE",
+      "value": "auto",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STT_LANGUAGE_MIN_PROB",
+      "value": "0.5",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STT_MAX_NO_SPEECH_PROB",
+      "value": "0.8",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "STT_MIN_AVG_LOGPROB",
+      "value": "-4.0",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "STT_MIN_CHARS",
+      "value": "3",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "STT_PROVIDER",
+      "value": "sarvam",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "STT_SPECULATIVE_ENABLED",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "SUPPORTED_LANGUAGES",
+      "value": "en,hi,as,bn,brx,gu,kn,ml,mni,mr,or,raj,ta,te,es,fr,it,ja,pt,zh",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TRANSPORT_PROVIDER",
+      "value": "websocket",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "TTS_CACHE_SCOPE",
+      "value": "per_call",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TTS_PROVIDER",
+      "value": "sarvam",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TTS_STREAM",
+      "value": "1",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TUNNEL_HOST",
+      "value": "(unset)",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "TURN_TIMEOUT_S",
+      "value": "30",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TWILIO_ACCOUNT_SID",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "TWILIO_AUTH_TOKEN",
+      "value": "***set***",
+      "source": "authoritative (.env)",
+      "sensitive": true
+    },
+    {
+      "key": "TWILIO_PHONE_NUMBER",
+      "value": "+19788198953",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "TWILIO_WHATSAPP_NUMBER",
+      "value": "+14155238886",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "UNIVERSITY_NAME",
+      "value": "Meridian University",
+      "source": "code default",
+      "sensitive": false
+    },
+    {
+      "key": "VAD_SILENCE_MS",
+      "value": "600",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "VAD_SPECULATIVE_ADVANCE_MS",
+      "value": "220",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "WHISPER_MODEL",
+      "value": "small",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    },
+    {
+      "key": "WHISPER_NUM_THREADS",
+      "value": "4",
+      "source": "authoritative (.env)",
+      "sensitive": false
+    }
+  ],
+  "effective_config_source": "resolved in-process by the harness from D:\\project\\universityDemo\\.env via app.boot_readiness.effective_config_rows(); the run targeted a local stack, so this is the same file the serving process resolved",
+  "effective_config_error": "",
+  "disclosures": {
+    "carrier_boundary": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "fixture_fidelity": "Fixture audio is synthetic and speech-like, not intelligible speech. It passes the application's RMS speech gate and drives the real turn path, so the TIMING figures are meaningful; the transcript Whisper produces from it is not the scripted line, so answer content is NOT asserted here. Answer quality is measured by the US-003 instrument, in its own window.",
+    "pooling": "Do not pool a figure from this run with a figure from a different network_profile, a different thermal bucket, or a different fixture sha256.",
+    "injected_profile": "The Twilio round trip (PSTN hop, carrier jitter, carrier-leg loss, carrier disconnect behaviour) is EXCLUDED from every figure in this summary. All figures are harness-observed from a local WebSocket to the application; none of them is an end-to-end caller measurement.",
+    "trace_sink": "records read read-only from D:\\project\\universityDemo\\logs\\perf_turns.jsonl (4168 rows present before the run)"
+  },
+  "notes": [
+    "DISCARDED RUN - no latency claim may be taken from it (a discarded run is not a passing run).",
+    "BRD-12 RAM: 42% (ceiling 80%) - met",
+    "UNDERPOWERED: 1 warm first-audio samples, below the >=100 per condition the BRD-02 success criterion needs. Not reportable as a baseline."
+  ]
+}
