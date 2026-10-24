@@ -44,8 +44,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import checks as C  # noqa: E402
 
 GOLDEN_PATH = C.GOLDEN_PATH
+KB_PATH = C.KB_PATH
 PACKET_PATH = Path(__file__).resolve().parent / "DG-03-signoff-packet.md"
-KB_NAME = "meridian_knowledge_base.md"
+KB_NAME = C.KB_LABEL
+PACKET_TITLE = "DG-03 — ground-truth sign-off packet"
+COMMAND_SUFFIX = ""
 
 
 # ─────────────────────────────── classification ───────────────────────────────
@@ -109,8 +112,8 @@ AWAITING = ("PENDING_PO_SIGNOFF",)
 
 
 def load(kb_text: str | None = None) -> tuple[list[dict], str]:
-    kb_text = kb_text if kb_text is not None else C.KB_PATH.read_text(encoding="utf-8")
-    cases = C.load_cases()
+    kb_text = kb_text if kb_text is not None else KB_PATH.read_text(encoding="utf-8")
+    cases = C.load_cases(GOLDEN_PATH)
     pending = [c for c in cases if c["ground_truth_status"] in AWAITING]
     return [classify(c, kb_text) for c in pending], kb_text
 
@@ -139,7 +142,7 @@ def summarise(items: list[dict]) -> dict:
 def report(items: list[dict]) -> None:
     s = summarise(items)
     print("=" * 78)
-    print("DG-03 -- what actually stands between here and a frozen golden set")
+    print(PACKET_TITLE + " -- what stands between here and a frozen golden set")
     print("=" * 78)
     print(f"  pending cases                     : {s['pending']}")
     print(f"  KB transcription (bulk-approvable): {s['bulk']}")
@@ -160,7 +163,7 @@ def report(items: list[dict]) -> None:
                 print(f"     {i['case']['case_id']}: {json.dumps(f, ensure_ascii=False)}")
     if s["off_kb"]:
         print("  note: behaviour-sourced cases whose required output is general knowledge,")
-        print("        not Meridian knowledge. Expected, and not a defect:")
+        print("        not the knowledge base. Expected, and not a defect:")
         for cid, f in s["off_kb"]:
             print(f"     {cid}: {json.dumps(f, ensure_ascii=False)}")
 
@@ -178,14 +181,13 @@ def write_packet(items: list[dict]) -> Path:
     out: list[str] = []
     w = out.append
 
-    w("# DG-03 — ground-truth sign-off packet")
+    w(f"# {PACKET_TITLE}")
     w("")
     w(f"**{s['pending']} cases await your decision.** Until they are approved the golden set")
-    w("cannot be frozen, no result from it is adoption-grade, and five stories — including")
-    w("the two largest latency levers, `US-004` and `US-009` — stay blocked.")
+    w("cannot be frozen and no result from it is adoption-grade.")
     w("")
     w("This packet sorts them by *what kind of decision each one is*, because they are not")
-    w("137 equal judgements:")
+    w(f"{s['pending']} equal judgements:")
     w("")
     w("| Kind | n | What you are deciding |")
     w("|---|---|---|")
@@ -197,16 +199,16 @@ def write_packet(items: list[dict]) -> Path:
     w("")
     w("```powershell")
     w("# approve a whole intent at once")
-    w('.venv/Scripts/python.exe eval/signoff_packet.py --approve-intent "Fees structure" --by "Your Name"')
+    w(f'python eval/signoff_packet.py --approve-intent "Fees structure" --by "Your Name"{COMMAND_SUFFIX}')
     w("")
     w("# approve individual cases")
-    w(".venv/Scripts/python.exe eval/signoff_packet.py --approve fees-03 dates-02")
+    w(f"python eval/signoff_packet.py --approve fee-gen-001 date-ug-001{COMMAND_SUFFIX}")
     w("")
     w("# send one back with a reason")
-    w('.venv/Scripts/python.exe eval/signoff_packet.py --reject fees-03 --note "fee changed for 2027"')
+    w(f'python eval/signoff_packet.py --reject fee-gen-001 --note "fee changed for 2027"{COMMAND_SUFFIX}')
     w("")
     w("# see where things stand")
-    w(".venv/Scripts/python.exe eval/signoff_packet.py --status")
+    w(f"python eval/signoff_packet.py --status{COMMAND_SUFFIX}")
     w("```")
     w("")
 
@@ -260,8 +262,8 @@ def write_packet(items: list[dict]) -> Path:
         w(f"### {intent} — {len(group)} cases")
         w("")
         cmds = " ".join(c["case"]["case_id"] for c in group)
-        w("```powershell")
-        w(f'.venv/Scripts/python.exe eval/signoff_packet.py --approve {cmds} --by "Your Name"')
+        w("```")
+        w(f'python eval/signoff_packet.py --approve {cmds} --by "Your Name"{COMMAND_SUFFIX}')
         w("```")
         w("")
         w("| case | question | facts found in the KB |")
@@ -279,11 +281,9 @@ def write_packet(items: list[dict]) -> Path:
     w("")
     w("## Why this blocks more than a score")
     w("")
-    w("`US-004` streams generation to the caller — it changes *what the model returns*, so it")
-    w("is gated on a quality baseline that cannot run until these are approved. The same is")
-    w("true of `US-005`, `US-009`, `US-010` and `US-018`. Measured on this stack, generation")
-    w("is 1,202 ms of the 4,684 ms a caller waits, and retrieval is another 990 ms — the two")
-    w("largest addressable terms, both frozen behind this decision.")
+    w("A blocked critical intent is not a score of zero; it is a score that does not exist.")
+    w("It cannot justify a production switch, a latency comparison or an adoption claim.")
+    w("Approving the cases above is what clears the block.")
     w("")
 
     PACKET_PATH.write_text("\n".join(out), encoding="utf-8", newline="\n")
@@ -325,7 +325,13 @@ def approve(ids: list[str], by: str) -> int:
 
 
 def reject(ids: list[str], note: str) -> int:
-    return _rewrite({cid: {"ground_truth_status": "REJECTED", "rejection_note": note} for cid in ids})
+    # Keep the status in the schema's valid set: a rejected draft is still
+    # awaiting a replacement decision, and ``checks.py`` rejects an unknown
+    # status outright. The note records why it went back.
+    return _rewrite({
+        cid: {"ground_truth_status": "PENDING_PO_SIGNOFF", "rejection_note": note}
+        for cid in ids
+    })
 
 
 def ids_for_intent(items: list[dict], intent: str) -> list[str]:
@@ -340,7 +346,13 @@ def intents_available(items: list[dict]) -> list[str]:
 # ─────────────────────────────── cli ───────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
+    global GOLDEN_PATH, KB_PATH, KB_NAME, PACKET_PATH, PACKET_TITLE, COMMAND_SUFFIX
     ap = argparse.ArgumentParser(description="DG-03 sign-off packet and recorder")
+    ap.add_argument("--golden", type=Path, default=GOLDEN_PATH)
+    ap.add_argument("--kb", type=Path, default=KB_PATH)
+    ap.add_argument("--kb-label", default=KB_NAME)
+    ap.add_argument("--packet", type=Path, default=PACKET_PATH)
+    ap.add_argument("--packet-title", default=PACKET_TITLE)
     ap.add_argument("--summary", action="store_true", help="print metrics, write nothing")
     ap.add_argument("--status", action="store_true", help="counts only, no writes")
     ap.add_argument("--approve", nargs="+", metavar="CASE_ID")
@@ -349,13 +361,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--note", default="", help="reason, for --reject")
     ap.add_argument("--by", default="", help="who approved (recorded in approved_by)")
     args = ap.parse_args(argv)
+    GOLDEN_PATH = args.golden
+    KB_PATH = args.kb
+    KB_NAME = args.kb_label
+    PACKET_PATH = args.packet
+    PACKET_TITLE = args.packet_title
+    suffix = []
+    if args.golden != C.GOLDEN_PATH:
+        suffix += ["--golden", str(args.golden)]
+    if args.kb != C.KB_PATH:
+        suffix += ["--kb", str(args.kb)]
+    if args.kb_label != C.KB_LABEL:
+        suffix += ["--kb-label", args.kb_label]
+    if args.packet != Path(__file__).resolve().parent / "DG-03-signoff-packet.md":
+        suffix += ["--packet", str(args.packet)]
+    COMMAND_SUFFIX = (" " + " ".join(suffix)) if suffix else ""
 
     items, _ = load()
 
     if args.status:
         s = summarise(items)
-        total = len(C.load_cases())
-        verified = sum(1 for c in C.load_cases() if c["ground_truth_status"] == "verified")
+        all_cases = C.load_cases(GOLDEN_PATH)
+        total = len(all_cases)
+        verified = sum(1 for c in all_cases if c["ground_truth_status"] == "verified")
         print(f"golden set        : {total} cases")
         print(f"verified          : {verified}")
         print(f"pending           : {s['pending']}")

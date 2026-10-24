@@ -12,6 +12,7 @@ critical intents as **BLOCKED**; no number from this set is adoption-grade.
 | `dspmu_golden_set.jsonl` | 103 DSPMU cases, generated from the committed facts and prompt corpus. |
 | `dspmu_heldout.txt` | Frozen 20-case held-out split (19.4%; every fifth case in sorted id order). Never tune against it. |
 | `dspmu_kb.md` | Combined evaluation KB: core cards, site map, entity corpus, about/glance/vision/syllabus nodes. Used only for deterministic fact traceability. |
+| `DSPMU_SIGNOFF_PACKET.md` | Review packet for the 76 pending cases; regenerate after changes. |
 | `../scripts/build_dspmu_eval.py` | Regenerates the KB, case set and held-out split. |
 
 ## Run
@@ -29,6 +30,21 @@ Regenerate after a DSPMU fee, date, programme or prompt change:
 ```bash
 .venv/bin/python scripts/build_dspmu_eval.py
 ```
+
+## Sign-off packet
+
+```bash
+.venv/bin/python eval/signoff_packet.py \
+  --golden eval/dspmu_golden_set.jsonl \
+  --kb eval/dspmu_kb.md \
+  --kb-label dspmu_kb.md \
+  --packet eval/DSPMU_SIGNOFF_PACKET.md \
+  --packet-title "DSPMU admissions — ground-truth sign-off packet"
+```
+
+Approval is recorded only with a named `--by`; rejected drafts stay
+`PENDING_PO_SIGNOFF` with a `rejection_note` so the checker can still validate
+the fixture.
 
 ## Current status
 
@@ -49,9 +65,9 @@ programme/fee out-of-scope behaviour, and the deterministic boundary cases.
 
 ## Sign-off rule
 
-The existing `eval/signoff_packet.py` is wired to the Meridian set. DSPMU
-sign-off still needs a university-reviewed decision per critical intent. Until
-then:
+The sign-off tool now accepts `--golden`, `--kb`, `--kb-label` and `--packet`;
+the DSPMU packet is generated from those paths. DSPMU sign-off still needs a
+university-reviewed decision per critical intent. Until then:
 
 - do not promote a DSPMU case from `verified` to `PO_APPROVED`;
 - do not treat a blocked or underpowered intent as a pass;
