@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import os
@@ -142,13 +143,22 @@ async def extract_sentiment(transcript: str) -> ScoreResult:
     try:
         from app.llm_backend import chat as backend_chat, small_task_num_ctx
 
-        raw = backend_chat(
+        # `backend_chat` is the SYNCHRONOUS OpenAI client. Called directly from
+        # this `async def` it blocks the event loop for the whole completion —
+        # and this runs as a background task after every logged turn, so the
+        # TwiML reply sits in the transport while the loop is frozen. Measured
+        # 2026-10-23 on the WhatsApp path: a 28 ms greeting took 3.0 s to reach
+        # the client, matching the 1.5-3 s sentiment call that followed it.
+        # Every other call site already goes through `to_thread`; this one was
+        # missed, and it also froze live voice calls for the same window.
+        raw = (await asyncio.to_thread(
+            backend_chat,
             messages=[{"role": "user", "content": prompt}],
             model=model,
             num_ctx=small_task_num_ctx(),
             temperature=0.1,
             json_mode=True,
-        ).strip()
+        )).strip()
         logger.debug(f"Sentiment LLM raw: {raw[:200]}")
 
         # Parse JSON from response
