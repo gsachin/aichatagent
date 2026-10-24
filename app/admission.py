@@ -62,7 +62,7 @@ ASSET_MANIFEST = "manifest.json"
 #: keep. `scripts/build_call_assets.py` enforces the rules at build time and
 #: the test suite re-asserts them, so a hand-edited line cannot reach a caller.
 BUSY_TEXT = (
-    "Thank you for calling Meridian University Admissions. "
+    f"Thank you for calling {settings.COMPANY_NAME} Admissions. "
     "All of our advisors are on calls at the moment. "
     "Please try again in a few minutes and we will be glad to help."
 )

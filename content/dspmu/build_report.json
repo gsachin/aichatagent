@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-24T19:38:53.024845+00:00",
+  "generated_at": "2026-10-24T20:00:58.405026+00:00",
   "generator": "app/siteindex",
   "mode": "offline-cache",
   "cache_dir": "/Users/aiwork/codebase/aichatagent/content/dspmu/cache",
@@ -161,10 +161,10 @@
     "recent_notices": 360,
     "document": 2419,
     "voice_kb": 3773,
-    "voice_prompt": 6417,
-    "voice_total": 6622,
-    "chat_prompt": 2760,
-    "chat_total": 2965,
+    "voice_prompt": 6416,
+    "voice_total": 6621,
+    "chat_prompt": 2768,
+    "chat_total": 2973,
     "doc_budget": 4000,
     "voice_budget": 8000,
     "chat_budget": 30000

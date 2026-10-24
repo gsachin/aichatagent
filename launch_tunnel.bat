@@ -27,11 +27,11 @@ if %errorlevel% NEQ 0 (
 )
 
 :: ── Step 2: Check knowledge base ───────────────────────────────
-echo [2/4] Checking Meridian knowledge base...
-if exist "content\meridian\meridian_knowledge_base.md" (
-    echo    [OK] Meridian knowledge base found.
+echo [2/4] Checking DSPMU knowledge base...
+if exist "content\dspmu\core_cards.md" (
+    echo    [OK] DSPMU knowledge base found.
 ) else (
-    echo    [FAIL] Meridian knowledge base not found at content\meridian\meridian_knowledge_base.md
+    echo    [FAIL] DSPMU knowledge base not found at content\dspmu\core_cards.md
     pause
     exit /b 1
 )

@@ -202,7 +202,7 @@ class Settings:
     SARVAM_STT_TIMEOUT_S: float = field(
         default_factory=lambda: _env_float("SARVAM_STT_TIMEOUT_S", 8.0)
     )
-    # Comma-separated; empty uses the built-in Meridian domain list.
+    # Comma-separated; empty uses the built-in DSPMU domain list.
     SARVAM_STT_KEYTERMS: str = field(
         default_factory=lambda: _env("SARVAM_STT_KEYTERMS", "")
     )
@@ -556,7 +556,7 @@ class Settings:
         default_factory=lambda: _env_int("DOC_MAX_TOKENS", 500_000)
     )
     #: Sidecar metadata for the current prompt bundle (fact/node IDs and source
-    #: URLs). Empty by default so the Meridian fallback carries no DSPMU IDs.
+    #: URLs). Empty by default so a Meridian rollback carries no DSPMU IDs.
     CONTEXT_MANIFEST_PATH: str = field(
         default_factory=lambda: _env("CONTEXT_MANIFEST_PATH", "").strip()
     )
@@ -683,8 +683,38 @@ class Settings:
     NGROK_HOST: str = field(default_factory=lambda: _env("NGROK_HOST", ""))
 
     # ── Presentation ────────────────────────────────────────────────
-    COMPANY_NAME: str = field(default_factory=lambda: _env("COMPANY_NAME", "Meridian University"))
+    # The full legal name is what a caller hears and what appears in prompt
+    # text. The short name is for sentences where the full name would be
+    # unwieldy ("DSPMU admissions"). Both are deployment values; the legacy
+    # Meridian fixtures pin them in tests/conftest.py.
+    COMPANY_NAME: str = field(
+        default_factory=lambda: _env(
+            "COMPANY_NAME", "Dr. Shyama Prasad Mukherjee University"
+        )
+    )
+    COMPANY_SHORT_NAME: str = field(
+        default_factory=lambda: _env("COMPANY_SHORT_NAME", "DSPMU")
+    )
     AGENT_NAME: str = field(default_factory=lambda: _env("AGENT_NAME", "Alex"))
+    ADMISSIONS_EMAIL: str = field(
+        default_factory=lambda: _env(
+            "ADMISSIONS_EMAIL", "registrar@dspmuranchi.ac.in"
+        )
+    )
+    ADMISSIONS_PHONE: str = field(
+        default_factory=lambda: _env("ADMISSIONS_PHONE", "+91 930 455 261")
+    )
+    UNIVERSITY_WEBSITE: str = field(
+        default_factory=lambda: _env(
+            "UNIVERSITY_WEBSITE", "https://dspmuranchi.ac.in"
+        )
+    )
+    # Which programme catalogue app.programs should load. "dspmu" is the
+    # production profile; "meridian" exists for the archived fixtures and the
+    # rollback path.
+    PROGRAM_PROFILE: str = field(
+        default_factory=lambda: _env("PROGRAM_PROFILE", "dspmu").strip().lower()
+    )
 
     # ── Auxiliary HTTP clients ──────────────────────────────────────
     # The Streamlit helpers and the admin dashboard each call the backend.
@@ -753,10 +783,14 @@ class Settings:
     # ── Offer letter / documents ────────────────────────────────────
     DATA_DIR: str = field(default_factory=lambda: _env("DATA_DIR", "data"))
     UNIVERSITY_NAME: str = field(
-        default_factory=lambda: _env("UNIVERSITY_NAME", "Meridian University")
+        default_factory=lambda: _env(
+            "UNIVERSITY_NAME", "Dr. Shyama Prasad Mukherjee University"
+        )
     )
     OFFER_EMAIL: str = field(
-        default_factory=lambda: _env("OFFER_EMAIL", "admissions@university.edu")
+        default_factory=lambda: _env(
+            "OFFER_EMAIL", "registrar@dspmuranchi.ac.in"
+        )
     )
     OFFER_VALID_DAYS: int = field(
         default_factory=lambda: _env_int("OFFER_VALID_DAYS", 30)
@@ -765,7 +799,7 @@ class Settings:
         default_factory=lambda: _env_int("OFFER_GUARD_MINUTES", 1)
     )
     DEFAULT_PAYMENT_LINK: str = field(
-        default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "https://pay.university.edu/admissions")
+        default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "")
     )
 
     # ── Email / SMTP ───────────────────────────────────────────────

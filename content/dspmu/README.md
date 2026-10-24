@@ -69,8 +69,8 @@ roll number are rejected. The existing test suite runs with:
 - The build measures the **real** voice prompt through
   `build_voice_system_prompt(...)` plus the question and output reserve. It
   fails if the full prompt exceeds 8,000 tokens or the document exceeds 4,000.
-- Current build: document **2,419 / 4,000**; full voice **6,622 / 8,000**
-  (wrapper 3,998); full chat **2,965 / 30,000**; entity corpus **3,773** tokens,
+- Current build: document **2,419 / 4,000**; full voice **6,621 / 8,000**
+  (wrapper 3,997); full chat **2,973 / 30,000**; entity corpus **3,773** tokens,
   not in the prompt.
 
 ## Configuration
@@ -84,11 +84,16 @@ DOC_MAX_BYTES=2000000
 DOC_MAX_TOKENS=4000
 VOICE_KB_PATH=content/dspmu/voice_kb.md
 CONTEXT_MANIFEST_PATH=content/dspmu/prompt_manifest.json
-LLM_PROMPT_CACHE_KEY=dspmu-kb-v2
+LLM_PROMPT_CACHE_KEY=dspmu-kb-v3
+COMPANY_NAME=Dr. Shyama Prasad Mukherjee University
+COMPANY_SHORT_NAME=DSPMU
+ADMISSIONS_EMAIL=registrar@dspmuranchi.ac.in
+ADMISSIONS_PHONE=+91 930 455 261
+PROGRAM_PROFILE=dspmu
 ```
 
-Rollback: restore the Meridian `DOC_PATHS` and `VOICE_KB_PATH` values. The code
-defaults still point at the Meridian KB.
+These are the production DSPMU values. The archived fixtures are test-only;
+nothing in this directory's configuration points at them.
 
 ## Source policy
 
@@ -112,10 +117,12 @@ defaults still point at the Meridian KB.
 
 ## Next milestone
 
-Build the signed fact store and the deterministic router, add
-`CONTEXT_MODE=site`, and make the two evidence reads in `voice_handler.py`
-use the same `ContextBundle` as the prompt.
+Add the signed fact store and the deterministic router. `CONTEXT_MODE=site`
+and the bundle-based evidence reads are in place; the router still returns the
+whole compact bundle. The remaining P1 work is the PG programme list and fees,
+a PII text scan, the golden set and university sign-off, and the Hindi OCR
+quality gate.
 
-This first build extracts two department pages (History and the Faculty of
-Science) and lists the sitemap's department pages. It does not fetch every
-department page or every notice PDF; those are on-demand in the next build.
+This build extracts two department pages (History and the Faculty of Science)
+and lists the sitemap's department pages. It does not fetch every department
+page or every notice PDF; those are on-demand in the next build.

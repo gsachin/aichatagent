@@ -307,16 +307,16 @@ def _tts_voice_for(language: str | None) -> str:
 #: original text; only the synthesiser sees the reading.
 _TTS_READINGS = {
     "ja": (
-        (r"Meridian University", "メリディアン大学"),
-        (r"\bMBA\b", "経営学修士"),
-        (r"\bB\.?\s?Tech\b", "ビーテック"),
+        (r"(?:Dr\.?\s+)?Shyama Prasad Mukherjee University", "シャマ・プラサド・ムケルジー大学"),
+        (r"\bBA\b", "文学士"),
+        (r"\bB\.?\s?Sc\b", "理学士"),
         (r"\bBCA\b", "ビーシーエー"),
         (r"\bB\.?\s?Com\b", "ビーコム"),
     ),
     "zh": (
-        (r"Meridian University", "梅里迪安大学"),
-        (r"\bMBA\b", "工商管理硕士"),
-        (r"\bB\.?\s?Tech\b", "技术学士"),
+        (r"(?:Dr\.?\s+)?Shyama Prasad Mukherjee University", "夏玛·普拉萨德·穆克吉大学"),
+        (r"\bBA\b", "文学学士"),
+        (r"\bB\.?\s?Sc\b", "理学学士"),
         (r"\bBCA\b", "计算机应用学士"),
         (r"\bB\.?\s?Com\b", "商学学士"),
     ),
@@ -1383,7 +1383,10 @@ CLOSING_PHRASES_RE = re.compile(
 )
 
 #: Fixed closing line for the deterministic hangup path.
-CLOSING_REPLY = "Thank you for calling Meridian University Admissions. Have a great day!"
+CLOSING_REPLY = (
+    f"Thank you for calling {settings.COMPANY_NAME} Admissions. "
+    "Have a great day!"
+)
 
 #: Sign-off cues in the six foreign languages. Deliberately narrow: bare
 #: "thanks"/"obrigado"/"salut" are too common mid-conversation to end a call.
@@ -1797,11 +1800,12 @@ class VoiceCallSession:
             return ""
         listed = "; ".join(live)
         return (
-            "The caller has asked about something Meridian University does NOT "
+            f"The caller has asked about something {settings.COMPANY_NAME} does NOT "
             f"offer: {listed}.\n"
             "This is a fact from the university profile, not a gap in your "
-            "information. Say plainly that Meridian does not offer it, then say "
-            "what Meridian does offer.\n"
+            f"information. Say plainly that {settings.COMPANY_SHORT_NAME} does not "
+            "offer it, then say what "
+            f"{settings.COMPANY_SHORT_NAME} does offer.\n"
             "Do NOT say you will check, look it up, find out, or come back to "
             "the caller. You cannot do any of those.\n"
             "Do NOT change this position if the caller disputes it -- if they "
@@ -2726,10 +2730,11 @@ class VoiceCallSession:
     # ── Domain dictionary for phone audio corrections ──────────────
 
     _CORRECTIONS = {
-        # Meridian-name corrections (common STT mis-hearings on phone audio)
-        "maridian": "Meridian", "miridian": "Meridian", "meridien": "Meridian",
-        "mary dian": "Meridian",
-        # Generic admissions terms (valid for Meridian)
+        # DSPMU-name corrections (common STT mis-hearings on phone audio)
+        "d s p m u": "DSPMU", "dsp mu": "DSPMU",
+        "shyama prasad mukharji": "Shyama Prasad Mukherjee",
+        "shyama prasad mukherji": "Shyama Prasad Mukherjee",
+        # Generic admissions terms
         "intuition": "tuition", "faze": "fees",
         "emma": "MBA", "gp a": "GPA", "i elts": "IELTS",
         "toefl": "TOEFL", "jimat": "GMAT", "g mat": "GMAT",

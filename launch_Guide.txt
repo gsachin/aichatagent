@@ -2,10 +2,10 @@ python admissions_bot.py
 
 
 Example questions:
-- What are the admission requirements at Meridian?
-- Tell me about Meridian tuition fees
-- What programs does Meridian University offer?
-- How do I apply to Meridian?
+- What are the admission requirements at DSPMU?
+- Tell me about DSPMU tuition fees
+- What programmes does Dr. Shyama Prasad Mukherjee University offer?
+- How do I apply to DSPMU?
 
 
  http://localhost:8501

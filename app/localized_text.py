@@ -12,6 +12,7 @@ the six foreign languages also live here.
 
 from __future__ import annotations
 
+from app.branding import brand_value
 from app.languages import normalize_language_code
 
 #: Reply to a whole-message language command. The command itself is parsed in
@@ -231,8 +232,7 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "Eso es todo lo que el perfil de la universidad tiene sobre ese "
             "tema. La oficina de admisiones puede ayudarle más: "
-            "admissions@meridian.edu o +1 (555) 204-7890, de lunes a viernes, "
-            "de 9 a 5.",
+            "admissions@meridian.edu o +1 (555) 204-7890.",
             "Hasta aquí puedo llegar con ese tema, y prefiero decírselo antes "
             "que seguir dando vueltas. Admisiones puede ayudarle en "
             "admissions@meridian.edu o +1 (555) 204-7890. ¿Hay algo más en lo "
@@ -261,8 +261,7 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "C'est tout ce que le profil de l'université contient sur ce "
             "sujet. Le service des admissions peut aller plus loin : "
-            "admissions@meridian.edu ou +1 (555) 204-7890, du lundi au "
-            "vendredi, de 9 h à 17 h.",
+            "admissions@meridian.edu ou +1 (555) 204-7890.",
             "Je ne peux pas aller plus loin sur ce point, et je préfère vous "
             "le dire plutôt que de tourner en rond. Les admissions peuvent "
             "vous aider à admissions@meridian.edu ou au +1 (555) 204-7890. "
@@ -290,8 +289,7 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "Questo è tutto ciò che il profilo dell'università riporta "
             "sull'argomento. L'ufficio ammissioni può seguirla: "
-            "admissions@meridian.edu o +1 (555) 204-7890, dal lunedì al "
-            "venerdì, dalle 9 alle 17.",
+            "admissions@meridian.edu o +1 (555) 204-7890.",
             "Non posso andare oltre su questo punto, e preferisco dirglielo "
             "invece di girare intorno. Le ammissioni possono aiutarla a "
             "admissions@meridian.edu o al +1 (555) 204-7890. Posso aiutarla in "
@@ -318,8 +316,7 @@ GROUNDING_REFUSALS = {
         ),
         "escalations": (
             "大学のプロフィールにあるのはそこまでです。入学課がさらにご案内"
-            "できます。admissions@meridian.edu または +1 (555) 204-7890"
-            "（月曜〜金曜、9時〜17時）。",
+            "できます。admissions@meridian.edu または +1 (555) 204-7890。",
             "この件はこれ以上お答えできません。同じことを繰り返すより、担当者に"
             "おつなぎするのがよいと思います。admissions@meridian.edu または "
             "+1 (555) 204-7890 までご連絡ください。ほかに何かお手伝いできますか？",
@@ -345,7 +342,7 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "Isso é tudo o que o perfil da universidade tem sobre o assunto. O "
             "setor de admissões pode ajudar mais: admissions@meridian.edu ou "
-            "+1 (555) 204-7890, de segunda a sexta, das 9h às 17h.",
+            "+1 (555) 204-7890.",
             "Não posso ir além nesse ponto, e prefiro dizer isso a ficar "
             "repetindo. As admissões podem ajudar em admissions@meridian.edu "
             "ou +1 (555) 204-7890. Posso ajudar em mais alguma coisa?",
@@ -370,8 +367,7 @@ GROUNDING_REFUSALS = {
         ),
         "escalations": (
             "学校资料里关于这一点只有这些。招生办可以进一步帮您："
-            "admissions@meridian.edu 或 +1 (555) 204-7890，周一至周五 "
-            "9:00–17:00。",
+            "admissions@meridian.edu 或 +1 (555) 204-7890。",
             "这一点我只能说到这里，与其反复解释，不如请您联系招生办："
             "admissions@meridian.edu 或 +1 (555) 204-7890。还有什么我可以帮您的吗？",
         ),
@@ -738,3 +734,18 @@ def whatsapp_language_menu(options) -> str:
     lines.extend(f"{digit}. {label}" for digit, _code, label in options)
     lines.extend(["", WHATSAPP_LANGUAGE_MENU_FOOTER])
     return "\n".join(lines)
+
+
+# The tables above were written for the archived Meridian deployment. Applying
+# the deployment brand here keeps the fixed lines (closing, busy, refusal and
+# onboarding examples) in one place while the call sites stay unchanged. In
+# tests conftest pins the Meridian values, so this is a no-op for the existing
+# fixtures.
+for _branded_table in (
+    "CLOSING_REPLIES",
+    "BUSY_TEXTS",
+    "GROUNDING_REFUSALS",
+    "STREAMLIT_UI",
+):
+    globals()[_branded_table] = brand_value(globals()[_branded_table])
+del _branded_table

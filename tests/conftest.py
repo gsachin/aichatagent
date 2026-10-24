@@ -31,6 +31,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # service in tests (test_rag_dispatcher.py sets the mode per test).
 os.environ.setdefault("USE_MCP_RAG", "off")
 
+# The demo .env is branded for DSPMU. The existing assertions, fixtures and
+# transcripts were written against Meridian, so pin the archived brand and
+# programme catalogue for the suite. New DSPMU tests call the brand helper or
+# pass DSPMU_PROGRAM_ALIASES explicitly; they do not depend on .env.
+os.environ.setdefault("COMPANY_NAME", "Meridian University")
+os.environ.setdefault("COMPANY_SHORT_NAME", "Meridian")
+os.environ.setdefault("UNIVERSITY_NAME", "Meridian University")
+os.environ.setdefault("OFFER_EMAIL", "admissions@meridian.edu")
+os.environ.setdefault("ADMISSIONS_EMAIL", "admissions@meridian.edu")
+os.environ.setdefault("ADMISSIONS_PHONE", "+1 (555) 204-7890")
+os.environ.setdefault("PROGRAM_PROFILE", "meridian")
+
 # The demo .env sets CONTEXT_MODE=doc (full-document prompting). The existing
 # retrieval/dispatcher tests were written against the retrieval path, so the
 # suite pins the code default. A test that exercises doc mode overrides this

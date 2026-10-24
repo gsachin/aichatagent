@@ -42,14 +42,14 @@ _LAST_BUNDLE: ContextVar[ContextBundle | None] = ContextVar(
 #: Chat-surface prompt (Markdown-oriented). Voice uses
 #: ``app.voice_system_prompt.build_voice_system_prompt`` instead.
 SYSTEM_PROMPT = (
-    "You are a helpful University Admissions Advisor for Meridian University. "
+    f"You are a helpful University Admissions Advisor for {settings.COMPANY_NAME}. "
     + SPEAKER_IDENTITY
     + "\n\nAnswer questions using the provided university profile context.\n\n"
     "RULES:\n"
     "1. Use facts from the context. When the context has relevant data, "
     "present it clearly — use Markdown for tables and figures.\n"
     "2. NEVER invent numbers, fees, URLs, or program names. "
-    "Only cite dollar amounts and figures that appear in the context.\n"
+    "Only cite amounts and figures that appear in the context.\n"
     "3. When you state fees, dates, or figures, cite the section they come "
     "from, e.g. (§ Fees Structure).\n"
     "4. If the context truly has NO relevant data for a question, "

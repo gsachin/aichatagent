@@ -1,35 +1,36 @@
 """
-Meridian program-name detection — the single source of truth.
+Programme-name detection — the single source of truth.
 
 Both chat front ends need this: the WhatsApp webhook (``app.main``) and the
 Streamlit UI (``app.py``). Each grew its own copy, and both copies were wrong in
 the same way, so the knowledge lives here now and the callers only import it.
 
-The defects this replaces, all of which were live:
+Two catalogues live here:
 
-  * ``"m.tech" in msg_lower`` never matched "M. Tech" — the spelling the
-    knowledge base itself uses — so a student asking for the real program
-    registered nothing, and whatever was already stored on the lead was reused.
-    The same test also matched ``"mba"`` inside ``"mumbai"``, so "I am from
-    Mumbai" set an MBA lead.
-  * The Streamlit list was ``["computer science", "mba", "data science",
-    "engineering", "business analytics", "information systems"]`` — four of
-    those are not Meridian programs at all (the KB offers B.Tech CS / AI & ML /
-    IT, BBA, BCA, B.Com, BA, B.Sc, MBA, MCA, M.Tech, M.Sc, MA, M.Com), so a
-    student could be enrolled in a course the university does not run.
+  * ``DSPMU_PROGRAM_ALIASES`` is built from the generated
+    ``content/dspmu/facts.json`` and is the production profile. It covers the
+    43 undergraduate programmes in the 2026 fee sheet. Postgraduate programme
+    names are deliberately absent until their list and fees are verified.
+  * ``MERIDIAN_PROGRAM_ALIASES`` is the archived catalogue. It remains for the
+    existing fixtures and as the rollback path, selected with
+    ``PROGRAM_PROFILE=meridian``.
 
 Matching is on a compiled, boundary-anchored pattern. A dotted alias compiles
-to an optional-separator pattern, so ``m.tech`` / ``m. tech`` / ``mtech`` are
-one program, and an ASCII-word boundary is what keeps ``mba`` out of
-``mumbai``.
+to an optional-separator pattern, so ``b.sc`` / ``b. sc`` / ``bsc`` are one
+programme, and an ASCII-word boundary is what keeps ``ba`` out of ``bazar``.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
+
+from app.config import settings
 
 # Longer/more specific aliases first — first match wins.
-PROGRAM_ALIASES = {
+MERIDIAN_PROGRAM_ALIASES = {
     # Compound / specific names first — first match wins
     "master of business administration": "MBA",
     "ai & machine learning": "B.Tech AI & Machine Learning",
@@ -88,6 +89,199 @@ PROGRAM_ALIASES = {
     "m.a": "MA",
 }
 
+#: Degree families a caller may name without a subject. They are attested by
+#: the DSPMU knowledge base as degree headings, but a lead that stops at "BA"
+#: is stored as the family rather than guessed into a subject.
+_DSPMU_DEGREE_ALIASES = {
+    # Longer aliases first: "बी.ए" would otherwise match the prefix of
+    # "बी.एससी", and the pattern boundary treats the following matra as
+    # non-ASCII.
+    "बी.एससी": "B.Sc.",
+    "बी.कॉम": "B.Com.",
+    "बी.बी.ए": "BBA",
+    "बी.सी.ए": "BCA",
+    "बी.ए": "BA",
+    "બી.એસસી": "B.Sc.",
+    "બી.કોમ": "B.Com.",
+    "બી.બી.એ": "BBA",
+    "બી.સી.એ": "BCA",
+    "બી.એ": "BA",
+    "bachelor of science": "B.Sc.",
+    "bachelor of commerce": "B.Com.",
+    "bachelor of business administration": "BBA",
+    "bachelor of computer applications": "BCA",
+    "bachelor of fisheries sciences": "B.F.Sc.",
+    "bachelor of arts": "BA",
+    "b.f.sc": "B.F.Sc.",
+    "bfsc": "B.F.Sc.",
+    "b.sc": "B.Sc.",
+    "bsc": "B.Sc.",
+    "b.com": "B.Com.",
+    "bcom": "B.Com.",
+    "bba": "BBA",
+    "bca": "BCA",
+    "b.a": "BA",
+    "ba": "BA",
+}
+
+#: Hindi names for subjects that occur once in the catalogue. Subject names
+#: that repeat (English, Physics) are deliberately absent: a bare "English"
+#: is not enough to choose between BA English and BA English Language &
+#: Literature, so the detector leaves the program unchanged.
+_DSPMU_HINDI_SUBJECTS = {
+    "political science": "राजनीति विज्ञान",
+    "history": "इतिहास",
+    "economics": "अर्थशास्त्र",
+    "psychology": "मनोविज्ञान",
+    "geography": "भूगोल",
+    "sociology": "समाजशास्त्र",
+    "anthropology": "मानवशास्त्र",
+    "hindi": "हिंदी",
+    "urdu": "उर्दू",
+    "sanskrit": "संस्कृत",
+    "philosophy": "दर्शनशास्त्र",
+    "mathematics": "गणित",
+    "botany": "वनस्पति विज्ञान",
+    "zoology": "प्राणी विज्ञान",
+    "geology": "भूविज्ञान",
+    "microbiology": "सूक्ष्मजीव विज्ञान",
+    "electronics": "इलेक्ट्रॉनिक्स",
+    "information technology": "सूचना प्रौद्योगिकी",
+    "public administration": "लोक प्रशासन",
+    "music": "संगीत",
+    "yogic science": "योग विज्ञान",
+    "journalism & mass communication": "पत्रकारिता एवं जनसंचार",
+    "environmental sc & sustainability": "पर्यावरण विज्ञान एवं स्थिरता",
+}
+
+_DSPMU_FACTS_PATH = (
+    Path(__file__).resolve().parent.parent / "content" / "dspmu" / "facts.json"
+)
+
+
+def _normalise_space(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _dspmu_canonical(programme: str) -> str:
+    """The knowledge-base spelling of a fee-sheet programme name.
+
+    ``Bachelor of Arts (BA) in History`` becomes
+    ``Bachelor of Arts in History (BA)``; degree-only names such as
+    ``Bachelor of Commerce (B.Com.)`` are already in KB form.
+    """
+    match = re.match(r"^(Bachelor of .+?) \(([^)]+)\) in (.+)$", programme)
+    if match:
+        return f"{match.group(1)} in {match.group(3)} ({match.group(2)})"
+    return programme
+
+
+def _dspmu_short(degree: str, subject: str) -> str:
+    """A compact, speakable name such as ``BA Political Science``."""
+    if degree.startswith("BA ("):
+        return f"BA {subject}"
+    if degree.startswith("B.Sc. ("):
+        return f"B.Sc. {subject}"
+    if degree in ("B.Com.", "BBA", "BCA", "B.F.Sc."):
+        return degree
+    return f"{degree} {subject}"
+
+
+def _load_dspmu_fees() -> list[dict[str, object]]:
+    try:
+        payload = json.loads(_DSPMU_FACTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    fees = payload.get("fees")
+    return fees if isinstance(fees, list) else []
+
+
+def _build_dspmu_program_aliases() -> dict[str, str]:
+    """Build the alias table from the generated fee facts.
+
+    The canonical values are the names the knowledge base uses, so the
+    detector cannot return a programme the grounding index does not carry.
+    """
+    rows: list[tuple[str, str, str, str, str]] = []
+    for fee in _load_dspmu_fees():
+        programme = _normalise_space(str(fee.get("programme") or ""))
+        degree = _normalise_space(str(fee.get("degree") or ""))
+        subject = _normalise_space(str(fee.get("subject") or ""))
+        if not programme or not degree or not subject:
+            continue
+        canonical = _dspmu_canonical(programme)
+        rows.append(
+            (programme, canonical, _dspmu_short(degree, subject), degree, subject)
+        )
+
+    subjects = [row[4] for row in rows]
+    subject_counts: dict[str, int] = {}
+    for subject in subjects:
+        key = subject.casefold()
+        subject_counts[key] = subject_counts.get(key, 0) + 1
+
+    def subject_is_ambiguous(subject: str) -> bool:
+        """True when a bare subject also appears inside another subject.
+
+        "Physics" is a substring of "Integrated Physics" and "English" of
+        "English Language & Literature". A bare subject cannot identify those
+        rows, so it must not shadow the longer programme alias.
+        """
+        if subject_counts.get(subject.casefold(), 0) > 1:
+            return True
+        pattern = re.compile(
+            rf"(?<![A-Za-z]){re.escape(subject)}(?![A-Za-z])",
+            re.IGNORECASE,
+        )
+        return any(
+            subject.casefold() != other.casefold() and pattern.search(other)
+            for other in subjects
+        )
+
+    aliases: dict[str, str] = {}
+    for programme, canonical, short, degree, subject in rows:
+        # Most specific first. The full programme name and its KB spelling
+        # must beat the subject-only alias below.
+        for alias in (programme, canonical, short):
+            aliases.setdefault(alias.casefold(), canonical)
+        degree_match = re.match(
+            r"^(BA|B\.Sc\.|B\.Com\.|BBA|BCA|B\.F\.Sc\.) \(([^)]+)\)$", degree
+        )
+        if degree_match:
+            abbreviation, qualifier = degree_match.groups()
+            aliases.setdefault(
+                f"{abbreviation} {qualifier}".casefold(), canonical
+            )
+            if abbreviation == "BA":
+                aliases.setdefault(f"B.A. {qualifier}".casefold(), canonical)
+        elif degree.startswith("BA "):
+            aliases.setdefault(f"B.A. {subject}".casefold(), canonical)
+        aliases.setdefault(degree.casefold(), canonical)
+        if subject == "Journalism & Mass Communication":
+            aliases.setdefault("journalism", canonical)
+            aliases.setdefault("mass communication", canonical)
+        key = subject.casefold()
+        if not subject_is_ambiguous(subject):
+            aliases.setdefault(key, canonical)
+            hindi = _DSPMU_HINDI_SUBJECTS.get(key)
+            if hindi:
+                aliases.setdefault(hindi, canonical)
+
+    # Degree families last: "BA" is shorter than every subject-bearing alias
+    # and must not shadow one.
+    aliases.update(_DSPMU_DEGREE_ALIASES)
+    return aliases
+
+
+DSPMU_PROGRAM_ALIASES = _build_dspmu_program_aliases()
+
+_PROGRAM_PROFILE = (settings.PROGRAM_PROFILE or "dspmu").strip().lower()
+PROGRAM_ALIASES = (
+    MERIDIAN_PROGRAM_ALIASES
+    if _PROGRAM_PROFILE == "meridian"
+    else DSPMU_PROGRAM_ALIASES
+)
+
 _SEPARATOR_RE = re.compile(r"[.\s]+")
 
 #: Punctuation that can sit on the edge of a whitespace token. The Indic
@@ -123,16 +317,35 @@ def _program_alias_pattern(alias: str) -> "re.Pattern[str]":
     )
 
 
-PROGRAM_PATTERNS = tuple(
-    (_program_alias_pattern(alias), canonical)
-    for alias, canonical in PROGRAM_ALIASES.items()
-)
+@lru_cache(maxsize=8)
+def _patterns_from_items(
+    items: tuple[tuple[str, str], ...]
+) -> tuple[tuple["re.Pattern[str]", str], ...]:
+    return tuple(
+        (_program_alias_pattern(alias), canonical)
+        for alias, canonical in items
+    )
 
 
-def detect_program(msg_lower: str) -> str:
-    """Return the canonical Meridian program name for a message, or ''."""
+def _patterns_for(
+    aliases: dict[str, str] | None = None,
+) -> tuple[tuple["re.Pattern[str]", str], ...]:
+    if aliases is None:
+        return PROGRAM_PATTERNS
+    return _patterns_from_items(tuple(aliases.items()))
+
+
+PROGRAM_PATTERNS = _patterns_for(PROGRAM_ALIASES)
+
+
+def detect_program(msg_lower: str, aliases: dict[str, str] | None = None) -> str:
+    """Return the canonical programme name for a message, or ''.
+
+    *aliases* defaults to the profile-selected catalogue. Tests and tooling
+    can pass ``DSPMU_PROGRAM_ALIASES`` explicitly without reloading settings.
+    """
     text = msg_lower.lower()
-    for pattern, canonical in PROGRAM_PATTERNS:
+    for pattern, canonical in _patterns_for(aliases):
         if pattern.search(text):
             return canonical
     return ""
@@ -172,18 +385,23 @@ PROGRAM_CHOICE_FILLER = frozenset({
 })
 
 
-def is_explicit_program_choice(msg_lower: str, detected: str) -> bool:
+def is_explicit_program_choice(
+    msg_lower: str,
+    detected: str,
+    aliases: dict[str, str] | None = None,
+) -> bool:
     """
     True when the message is a course *choice*, not a mention of one.
 
-    "m.tech", "M. Tech please" and "i want to take admission in m.tech" are
-    choices. "is mba good" and "mba or mca" name programs but choose nothing —
-    only a student choosing a course may change the stored program.
+    "b.sc physics", "B.Sc Physics please" and "i want to take admission in
+    ba political science" are choices. "is ba good" and "ba or b.sc" name
+    programmes but choose nothing — only a student choosing a course may
+    change the stored programme.
     """
     if not detected:
         return False
     text = msg_lower
-    for pattern, _ in PROGRAM_PATTERNS:
+    for pattern, _ in _patterns_for(aliases):
         text = pattern.sub(" ", text)
     # Tokenise on whitespace, not on ``\w``: Indic vowel signs (matras) are
     # combining marks, not word characters, so a regex such as ``[^\W\d_]+``

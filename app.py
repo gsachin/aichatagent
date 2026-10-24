@@ -1,7 +1,7 @@
 """
 University Admissions Advisor — Streamlit Web UI (text chat)
 =============================================================
-Text chat interface powered by OpenAI + the full Meridian knowledge base.
+Text chat interface powered by OpenAI + the configured DSPMU knowledge base.
 Run:    streamlit run app.py
         (or: python -m streamlit run app.py --server.headless true)
 """
@@ -23,22 +23,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+from app.config import settings
 from app.streamlit_backend import backend_healthy, sync_lead, sync_program
 from app.languages import configured_foreign_languages, normalize_language_code
 from app.localized_text import eligibility_text, greeting_text, streamlit_ui
 from app.offers.service import missing_fields_text
 from app.programs import detect_program, is_explicit_program_choice
 
-# Eligibility per canonical program, taken verbatim from the Meridian
-# knowledge base (content/meridian/meridian_knowledge_base.md). Keyed on the
-# names app.programs returns.
+# Eligibility by degree family. The DSPMU site does not publish a consolidated
+# programme-by-programme eligibility table, so this stays at the level the
+# public pages support: UG applicants have completed 10+2; PG applicants hold
+# a bachelor's degree. A detected full programme name starts with the degree
+# family and is handled by `_eligibility_for` below.
 #
-# Three copies of this table used to sit inline in the state machine, keyed on
-# "Computer Science", "Data Science", "Engineering", "Business Analytics" and
-# "Information Systems" — none of which the detector can return, and three of
-# which Meridian does not offer — so every lookup fell through to the generic
-# line and the eligibility the student was shown was never the KB's.
+# The archived Meridian names stay for PROGRAM_PROFILE=meridian rollback.
 PROGRAM_ELIGIBILITY = {
+    "BA": "10+2 in any stream",
+    "B.Com.": "10+2 in any stream",
+    "BBA": "10+2 in any stream",
+    "BCA": "10+2 in any stream",
+    "B.Sc.": "10+2 with PCM or PCB",
+    "B.F.Sc.": "10+2 with PCM or PCB",
     "MBA": "a bachelor's degree",
     "MA": "a bachelor's degree",
     "M.Tech": "a B.Tech or B.E. degree",
@@ -50,12 +55,18 @@ PROGRAM_ELIGIBILITY = {
     "B.Tech AI & Machine Learning": "10+2 with Physics, Chemistry and Mathematics (PCM)",
     "B.Tech Information Technology": "10+2 with Physics, Chemistry and Mathematics (PCM)",
     "B.Sc": "10+2 with PCM or PCB",
-    "BBA": "10+2 in any stream",
-    "BCA": "10+2 in any stream",
     "B.Com": "10+2 in any stream",
-    "BA": "10+2 in any stream",
 }
 DEFAULT_ELIGIBILITY = "a relevant bachelor's degree"
+
+
+def _eligibility_for(program: str) -> str:
+    """The eligibility line for a canonical programme or degree family."""
+    if program.startswith(("Bachelor of Science", "Bachelor of Fisheries")):
+        return "10+2 with PCM or PCB"
+    if program.startswith("Bachelor"):
+        return "10+2 in any stream"
+    return PROGRAM_ELIGIBILITY.get(program, DEFAULT_ELIGIBILITY)
 
 
 # ── Public backend URL resolution ───────────────────────────────────
@@ -190,7 +201,7 @@ def _sync_chat_from_sidebar() -> None:
 
 def _program_requirements(prog: str) -> str:
     """The eligibility prompt for *prog*, with the requirement translated."""
-    requirement = PROGRAM_ELIGIBILITY.get(prog, DEFAULT_ELIGIBILITY)
+    requirement = _eligibility_for(prog)
     return _ui(
         "program_requirements",
         "**{prog}** — great choice! 🎓\n\n"
@@ -270,7 +281,7 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown(
         "An AI-powered university admissions assistant. "
-        "Ask questions about **Meridian University** programs, "
+        f"Ask questions about **{settings.COMPANY_NAME}** programmes, "
         "tuition, admission requirements, and more."
     )
     st.markdown("---")
@@ -348,7 +359,7 @@ with st.sidebar:
                         )
                         if readiness["missing"] == ["program_interest"]:
                             st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
+                            st.info("Just type the program you want, e.g. *BA Political Science* or *B.Sc. Physics*.")
                     else:
                         st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
                 else:
@@ -361,7 +372,7 @@ with st.sidebar:
     st.markdown("### Powered by")
     st.markdown("☁️ **OpenAI** (remote LLM)")
     st.markdown("👂 **Faster-Whisper** (multilingual STT)")
-    st.markdown("📚 **Meridian University** knowledge base")
+    st.markdown(f"📚 **{settings.COMPANY_NAME}** knowledge base")
     st.markdown("---")
     st.caption(
         "Prompts, call transcripts and the knowledge base are sent to the "
@@ -370,7 +381,9 @@ with st.sidebar:
 
 # ── Title ──────────────────────────────────────────────────────────
 st.title("🎓 University Admissions Advisor")
-st.caption("Ask me anything about Meridian University — type your question below.")
+st.caption(
+    f"Ask me anything about {settings.COMPANY_NAME} — type your question below."
+)
 
 # ── Load RAG chain (cached, runs once) ─────────────────────────────
 @st.cache_resource(show_spinner=False)
@@ -622,13 +635,11 @@ if prompt:
 
         def extract_program(text):
             """
-            Canonical Meridian program name for a message, or ''.
+            Canonical programme name for a message, or ''.
 
             Delegates to app.programs, the same detector the WhatsApp webhook
-            uses. The local list this replaces was ["computer science", "mba",
-            "data science", "engineering", "business analytics", "information
-            systems"] — four of which Meridian does not run — and matched by
-            raw substring, so "i am from mumbai" returned MBA.
+            uses. The local list this replaces matched by raw substring, so
+            "i am from mumbai" returned MBA.
             """
             return detect_program(text)
 
@@ -775,7 +786,7 @@ if prompt:
             # The old fallback here took *any* message of three words or fewer
             # as the program name (`prog = msg.title()`), so "no thanks" became
             # a course called "No Thanks" and was synced to the lead. A program
-            # now has to be a program Meridian actually runs.
+            # now has to be a programme in the active catalogue.
             if prog:
                 st.session_state.lead_program = prog
                 st.session_state.awaiting_field = "qualification"
@@ -804,7 +815,7 @@ if prompt:
                 answer = _ui(
                     "program_unknown",
                     "I didn't catch the program name. Which program? "
-                    "(e.g., B.Tech Computer Science, MBA, M.Tech)",
+                    "(e.g., BA Political Science, B.Sc. Physics, B.Com.)",
                 )
 
         # ── State: awaiting qualification confirmation ─────────
@@ -882,8 +893,8 @@ if prompt:
                         _ui(
                             "program_ask",
                             "Great! Your info is confirmed. Now, which program "
-                            "are you interested in? (e.g., B.Tech Computer "
-                            "Science, MBA, M.Tech)",
+                            "are you interested in? (e.g., BA Political Science, "
+                            "B.Sc. Physics, B.Com.)",
                         )
                         + "\n\n"
                         # The worked example used to be "I want to take admission
@@ -894,7 +905,7 @@ if prompt:
                         + _ui(
                             "program_example",
                             "Or just say: 'I want to take admission in "
-                            "B.Tech Computer Science'",
+                            "BA Political Science'",
                         )
                     )
 
@@ -922,8 +933,8 @@ if prompt:
                 st.session_state.awaiting_field = "program"
                 answer = _ui(
                     "program_ask",
-                    "Which program are you interested in? (e.g., B.Tech "
-                    "Computer Science, MBA, M.Tech)",
+                    "Which program are you interested in? (e.g., BA Political "
+                    "Science, B.Sc. Physics, B.Com.)",
                 )
             elif st.session_state.get("awaiting_field") != "qualification":
                 st.session_state.lead_program = prog
@@ -1102,7 +1113,7 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                         )
                         if readiness["missing"] == ["program_interest"]:
                             st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
+                            st.info("Just type the program you want, e.g. *BA Political Science* or *B.Sc. Physics*.")
                     else:
                         st.success("✅ Document uploaded! You can upload more or start asking questions.")
                 else:

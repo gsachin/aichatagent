@@ -13,12 +13,12 @@ The chat interfaces (Streamlit app.py, admissions_bot.py) keep the
 Markdown-oriented SYSTEM_PROMPT in app.rag — they are text UIs.
 
 Identity is configurable via env:
-  COMPANY_NAME  (default: Meridian University)
+  COMPANY_NAME  (default: Dr. Shyama Prasad Mukherjee University)
   AGENT_NAME    (default: Alex)
 
-The {context} slot carries retrieved ChromaDB university-profile
-context; build_voice_system_prompt() fills it, or substitutes an
-explicit "no information retrieved" marker when retrieval is empty.
+The {context} slot carries the configured university-profile context;
+build_voice_system_prompt() fills it, or substitutes an explicit
+"no information retrieved" marker when retrieval is empty.
 """
 
 from app.config import settings
@@ -28,9 +28,6 @@ from app.languages import (
     normalize_language_code,
 )
 from app.localized_text import INBOUND_GREETINGS, OUTBOUND_GREETINGS
-
-COMPANY_NAME = settings.COMPANY_NAME
-AGENT_NAME = settings.AGENT_NAME
 
 #: Substituted into {context} when retrieval returns nothing, so the
 #: grounding rules in section 25 still apply.
@@ -657,13 +654,12 @@ preference. Do not revise it because the caller disputes it.
   the caller. You have no way to do any of those, and saying it makes the
   caller wait for something that will not arrive.
 * Say what the university DOES offer instead, and offer the admissions office:
-  admissions@meridian.edu or +1 (555) 204-7890, Monday to Friday, 9 AM to 5 PM.
+  {admissions_email} or {admissions_phone}.
 
 Good:
 
-"We don't have a mechanical engineering programme. Our six schools cover
-Engineering, Computer Science, Business, Arts, Science and Commerce — I can
-take you through those, or the admissions office can help on +1 (555) 204-7890."
+"We don't have a mechanical engineering programme. I can take you through the
+programmes we do offer, or the admissions office can help on {admissions_phone}."
 
 Bad:
 
@@ -682,10 +678,10 @@ When information is unavailable:
 
 Accuracy is more important than sounding confident.
 
-University profile grounding rules (Meridian University admissions):
+University profile grounding rules ({company_name} admissions):
 
 1. Use facts from the retrieved university profile context below when it has relevant data.
-2. NEVER invent numbers, fees, URLs, or program names. Only state dollar amounts and figures that appear in the retrieved context.
+2. NEVER invent numbers, fees, URLs, or program names. Only state amounts and figures that appear in the retrieved context.
 3. If the retrieved context has NO relevant data for a question about the university, say: "I don't have that specific information in the university profile." and offer to connect the caller with the admissions office.
 4. Never mention the context, the knowledge base, retrieval, or internal systems to the caller. Never say "based on the information provided", "from the university profile", or similar meta phrasing.
 5. Always address the caller directly as "you". Never describe or refer to the caller in third person ("the caller is interested…").
@@ -800,8 +796,10 @@ def build_voice_system_prompt(context: str | None) -> str:
     """
     ctx = (context or "").strip() or NO_CONTEXT_MARKER
     return VOICE_SYSTEM_PROMPT.format(
-        agent_name=AGENT_NAME,
-        company_name=COMPANY_NAME,
+        agent_name=settings.AGENT_NAME,
+        company_name=settings.COMPANY_NAME,
+        admissions_email=settings.ADMISSIONS_EMAIL,
+        admissions_phone=settings.ADMISSIONS_PHONE,
         speaker_identity=SPEAKER_IDENTITY,
         context=ctx,
         interruption_contract=INTERRUPTION_CONTRACT_BY_FLAG[
@@ -884,7 +882,11 @@ def call_greeting(language: str | None, direction: str = "inbound") -> str:
     code = normalize_language_code(language or "en")
     table = _OUTBOUND_GREETING if direction == "outbound" else _INBOUND_GREETING
     template = table.get(code, table["en"])
-    return template.format(agent_name=AGENT_NAME, company_name=COMPANY_NAME)
+    return template.format(
+        agent_name=settings.AGENT_NAME,
+        company_name=settings.COMPANY_NAME,
+        company_short_name=settings.COMPANY_SHORT_NAME,
+    )
 
 
 #: The outbound language menu, spoken before the media stream starts. Each
@@ -955,7 +957,7 @@ def call_language_menu(
         else ""
     )
     return _LANGUAGE_MENU[prompt].format(
-        company_name=COMPANY_NAME,
+        company_name=settings.COMPANY_NAME,
         continue_name=name,
         foreign_line=foreign_line,
     )
@@ -1057,7 +1059,7 @@ def language_instruction(language: str | None) -> str:
     return (
         f"Answer in {name}. Use natural, conversational {name} with simple, "
         f"everyday words. Translate every sentence, heading, label and list item into "
-        f"{name}. Keep only these in Latin script: Meridian University, degree "
+        f"{name}. Keep only these in Latin script: {settings.COMPANY_NAME}, degree "
         "abbreviations such as B.Tech, MBA, BCA and B.Com, numbers, currency "
         "amounts, email addresses and URLs. Translate programme fields and "
         f"research areas into {name}. Do not leave English words, headings or "

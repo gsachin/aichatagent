@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 
+from app.branding import brand_text
 from app.languages import normalize_language_code
 
 logger = logging.getLogger("whatsapp_text")
@@ -1339,7 +1340,11 @@ def whatsapp_text(
     default rather than failing the webhook.
     """
     code = normalize_language_code(language)
-    template = WHATSAPP_TEXT.get(code, {}).get(key, default)
+    # Brand the template before formatting, not the formatted result: a
+    # student's name or email must never be rewritten because it happens to
+    # contain "Meridian".
+    default = brand_text(default)
+    template = brand_text(WHATSAPP_TEXT.get(code, {}).get(key, default))
     if not kwargs:
         return template
     try:

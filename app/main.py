@@ -696,7 +696,7 @@ TWIML_IVR_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather numDigits="1" timeout="3" action="{action}" method="GET">
         <Say voice="Polly.Joanna">
-            Welcome to the Meridian University Admissions helpline.
+            Welcome to the {company_name} Admissions helpline.
             Press 1 for English.
             Press 2 for Hindi.
             Press 3 for Gujarati.
@@ -718,7 +718,7 @@ TWIML_IVR_TEMPLATE_FOREIGN = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather numDigits="1" timeout="3" action="{action}" method="GET">
         <Say voice="Polly.Joanna">
-            Welcome to the Meridian University Admissions helpline.
+            Welcome to the {company_name} Admissions helpline.
             Press 1 for English.
             Press 2 for Hindi.
             Press 3 for Gujarati.
@@ -2401,6 +2401,7 @@ async def twilio_voice_webhook(From: str = Query(""), language: str = Query(""))
     )
     twiml = ivr_template.format(
         host=host,
+        company_name=settings.COMPANY_NAME,
         stream=_stream_markup(
             host, From, language or settings.DEFAULT_LANGUAGE,
             locked=bool(normalize_language_code(language)),
@@ -2737,13 +2738,13 @@ async def _handle_whatsapp_document(
         logger.exception("_handle_whatsapp_document failed")
 
 
-# ── Meridian program-name capture ──────────────────────────────────
+# ── Programme-name capture ─────────────────────────────────────────
 # The detector lives in app.programs because the Streamlit UI needs the same
-# one — its own copy listed four programs Meridian does not run. Imported under
-# the local names this module has always used.
+# one — its own copy listed programmes the university does not run. Imported
+# under the local names this module has always used.
 
 from app.programs import (  # noqa: E402  (kept beside its only former use)
-    detect_program as _detect_meridian_program,
+    detect_program as _detect_program,
     is_explicit_program_choice as _is_explicit_program_choice,
 )
 
@@ -2888,7 +2889,7 @@ async def _whatsapp_chat_rag(
     from app.pipeline import run_rag_query_sync
 
     retrieval_query = question
-    if program and not _detect_meridian_program(question.lower()):
+    if program and not _detect_program(question.lower()):
         retrieval_query = f"{question} {program}"
 
     try:
@@ -3037,7 +3038,7 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     text = (msg_lower or "").lower().replace("’", "'").replace("‘", "'")
 
     # ── Extract program from message ───────────────────────────────
-    detected_program = _detect_meridian_program(text)
+    detected_program = _detect_program(text)
 
     # ── Fast path: strong admission keywords ────────────────────────
     # Misspellings are listed explicitly because they are the common case in
@@ -3326,7 +3327,7 @@ async def twilio_whatsapp_webhook(
         twiml = WHATSAPP_TWIML_TEMPLATE.format(
             answer=escape(whatsapp_text(
                 "empty_message", _early_language,
-                "Hello! Send me a question about Meridian admissions.",
+                f"Hello! Send me a question about {settings.COMPANY_SHORT_NAME} admissions.",
             ))
         )
         return Response(content=twiml, media_type="application/xml")
@@ -3592,7 +3593,7 @@ async def twilio_whatsapp_webhook(
         )
         if _name_match:
             name_given = _clean_name_candidate(_name_match.group(1))
-            if name_given and _detect_meridian_program(name_given.lower()):
+            if name_given and _detect_program(name_given.lower()):
                 name_given = ""
 
     # "correct my name" with no new name supplied — ask for it rather than
@@ -3640,14 +3641,14 @@ async def twilio_whatsapp_webhook(
         if lead_name:
             answer = whatsapp_text(
                 "greeting_known_name", _answer_language,
-                "Hello {name}! 👋 I'm the Meridian University admissions "
+                f"Hello {{name}}! 👋 I'm the {settings.COMPANY_NAME} admissions "
                 "assistant. What would you like to know?",
                 name=lead_name,
             )
         else:
             answer = whatsapp_text(
                 "greeting_unknown_name", _answer_language,
-                "Hello! 👋 I'm the Meridian University admissions assistant. "
+                f"Hello! 👋 I'm the {settings.COMPANY_NAME} admissions assistant. "
                 "What's your name?",
             )
     elif looks_like_question(Body) or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
@@ -3655,7 +3656,7 @@ async def twilio_whatsapp_webhook(
     # ── Replies to a question the bot actually asked (see `awaiting`) ────
     elif awaiting == "name":
         candidate = _clean_name_candidate(Body)
-        if candidate and not _detect_meridian_program(candidate.lower()):
+        if candidate and not _detect_program(candidate.lower()):
             if lead_id:
                 await update_lead(lead_id, name=candidate)
             lead_name = candidate
@@ -3689,7 +3690,7 @@ async def twilio_whatsapp_webhook(
             )
         )
     elif awaiting == "program":
-        detected = _detect_meridian_program(msg_lower)
+        detected = _detect_program(msg_lower)
         if detected:
             lead_program = await _apply_program_choice(lead_id, lead_program, detected)
             answer = whatsapp_text(
@@ -3752,7 +3753,7 @@ async def twilio_whatsapp_webhook(
         and not is_done_reply(msg_lower)
         # A short message that names a program is a program, not a person —
         # "M.Tech" as a first message used to be stored as the student's name.
-        and not _detect_meridian_program(msg_lower)
+        and not _detect_program(msg_lower)
     ):
         # User likely provided their name
         if lead_id:
@@ -3770,7 +3771,7 @@ async def twilio_whatsapp_webhook(
             answer = whatsapp_text(
                 "name_captured_profile_updated", _answer_language,
                 "Thanks {name}! I've updated your profile. How can I help you "
-                "with Meridian admissions?",
+                f"with {settings.COMPANY_SHORT_NAME} admissions?",
                 name=Body.strip(),
             )
     elif not lead_email and has_email:
@@ -3876,7 +3877,7 @@ async def twilio_whatsapp_webhook(
             # question. If the previous turn did discuss the program already on
             # file, re-affirm it; otherwise the turn belongs to whatever was
             # really asked and goes to RAG with the conversation attached.
-            offered = _detect_meridian_program(last_asked.lower()) if last_asked else ""
+            offered = _detect_program(last_asked.lower()) if last_asked else ""
             if offered and offered == lead_program:
                 answer = whatsapp_text(
                     "yes_confirmed_program", _answer_language,
@@ -3909,7 +3910,7 @@ async def twilio_whatsapp_webhook(
                 )
         # ── Capture program name from short replies ──────────────────────────
         elif lead_name and lead_email and len(msg_lower.split()) <= 3:
-            detected = _detect_meridian_program(msg_lower)
+            detected = _detect_program(msg_lower)
             # Only a message that IS a course choice moves the program. A
             # passing mention ("is mba good?") names one but chooses nothing,
             # and must not silently enrol the student in it.
@@ -3940,7 +3941,7 @@ async def twilio_whatsapp_webhook(
     except NameError:
         answer = whatsapp_text(
             "safety_fallback", _answer_language,
-            "I have you as {name}. How can I help with Meridian admissions?",
+            f"I have you as {{name}}. How can I help with {settings.COMPANY_SHORT_NAME} admissions?",
             name=lead_name or "there",
         )
 

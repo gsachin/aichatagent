@@ -603,7 +603,7 @@ class EntityIndex:
         "Bachelor of Arts (BA) at Meridian University: ..." -> both
         "Bachelor of Arts" and "BA", because an answer uses either.
         """
-        head = re.split(r"\bat Meridian University\b", head)[0]
+        head = re.split(r"\bat\s+[^:]{0,100}?\bUniversity\b", head)[0]
         head = head.split("—")[-1]            # doctoral entries lead with the prefix
         head = head.split(":")[0].strip(" .—-")
         if not head:

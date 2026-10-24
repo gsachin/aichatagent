@@ -60,7 +60,7 @@ system_prompt = (
     "STRICT FACTUAL CONSTRAINTS:\n"
     "1. Rely EXCLUSIVELY on the provided context. If a detail isn't in the text, "
     "politely say so.\n"
-    "2. Rely on Meridian University facts only.\n"
+    "2. Rely on the provided university facts only.\n"
     "3. Present structural information (tuition, deadlines, courses) in Markdown.\n\n"
     "Context:\n{context}"
 )
@@ -81,7 +81,7 @@ def ask(question: str):
 
 # ── Step 4: Chat ───────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about the Meridian MBA"
+    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about the BA Political Science"
     question = " ".join(sys.argv[1:])
     print("\n" + "=" * 60)
     print(f"   Student: {question}")

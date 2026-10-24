@@ -62,6 +62,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from app.branding import brand_text
 from app.kb_entities import (
     EntityIndex,
     default_index,
@@ -117,12 +118,16 @@ REFUSAL_VARIANTS = (
 #: the last one -- otherwise the caller hears a stuck record and hangs up, which
 #: is exactly what happened.
 ESCALATION_REFUSALS = (
-    "I've given you everything the university profile has on that. The "
-    "admissions office can take it further -- admissions@meridian.edu, or "
-    "+1 (555) 204-7890, Monday to Friday, 9 to 5.",
-    "That's as far as I can take this one, and I'd rather say so than keep "
-    "going round. Admissions can help on admissions@meridian.edu or "
-    "+1 (555) 204-7890. Is there anything else I can look at for you?",
+    brand_text(
+        "I've given you everything the university profile has on that. The "
+        "admissions office can take it further -- admissions@meridian.edu, or "
+        "+1 (555) 204-7890."
+    ),
+    brand_text(
+        "That's as far as I can take this one, and I'd rather say so than keep "
+        "going round. Admissions can help on admissions@meridian.edu or "
+        "+1 (555) 204-7890. Is there anything else I can look at for you?"
+    ),
 )
 
 #: What the caller hears when the turn asserted something the university does
@@ -140,11 +145,22 @@ ESCALATION_REFUSALS = (
 #: running either. A caller who pushes twice hears the same fact, twice, in
 #: different words; a caller who pushes a third time is handed to a human.
 UNOFFERED_REFUSALS = (
-    "Meridian University does not offer {subject}. I can take you through the "
-    "programmes we do offer, or put you in touch with the admissions office.",
-    "{subject_cap} isn't one of Meridian University's programmes. I'm happy to "
-    "go through what we do offer, or the admissions office can help further.",
+    brand_text(
+        "Meridian University does not offer {subject}. I can take you through "
+        "the programmes we do offer, or put you in touch with the admissions "
+        "office."
+    ),
+    brand_text(
+        "{subject_cap} isn't one of Meridian University's programmes. I'm "
+        "happy to go through what we do offer, or the admissions office can "
+        "help further."
+    ),
 )
+
+#: The stable phrases `is_refusal` uses to recognise the boundary's own lines.
+#: Built from the same source as the sentences above so the two cannot drift.
+_NOT_OFFERED_MARKER = brand_text("Meridian University does not offer")
+_NOT_ONE_OF_MARKER = brand_text("isn't one of Meridian University's programmes")
 
 #: "4 years", "$14,500", "3.5", "24 hours", "3-year".
 #:
@@ -495,9 +511,9 @@ def is_refusal(text: str, language: str | None = None) -> bool:
     """
     if not text:
         return False
-    if "Meridian University does not offer" in text:
+    if _NOT_OFFERED_MARKER in text:
         return True
-    if "isn't one of Meridian University's programmes" in text:
+    if _NOT_ONE_OF_MARKER in text:
         return True
     variants, escalations, _unoffered, markers = _refusal_strings(language)
     if text in (*variants, *escalations):
