@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-24T20:00:58.405026+00:00",
+  "generated_at": "2026-10-24T20:37:49.793554+00:00",
   "generator": "app/siteindex",
   "mode": "offline-cache",
   "cache_dir": "/Users/aiwork/codebase/aichatagent/content/dspmu/cache",
@@ -156,15 +156,15 @@
     "recent_notices.md"
   ],
   "tokens": {
-    "core_cards": 1338,
+    "core_cards": 1380,
     "site_map": 721,
     "recent_notices": 360,
-    "document": 2419,
+    "document": 2461,
     "voice_kb": 3773,
-    "voice_prompt": 6416,
-    "voice_total": 6621,
-    "chat_prompt": 2768,
-    "chat_total": 2973,
+    "voice_prompt": 6458,
+    "voice_total": 6663,
+    "chat_prompt": 2810,
+    "chat_total": 3015,
     "doc_budget": 4000,
     "voice_budget": 8000,
     "chat_budget": 30000
@@ -189,5 +189,13 @@
   "warnings": [
     "PG admission PDF required OCR (good, eng); its dates are marked needs_review"
   ],
-  "current_archive_note": "The current /archive-notice page lists 4,325 rows, but its PDF links return the site's 404 page on the new host. The old-site News.aspx manifest is the working source."
+  "current_archive_note": "The current /archive-notice page lists 4,325 rows, but its PDF links return the site's 404 page on the new host. The old-site News.aspx manifest is the working source.",
+  "notice_store": {
+    "built": true,
+    "rows": 1521,
+    "pii_excluded": 39,
+    "db_bytes": 778240,
+    "body_rows": 0,
+    "schema_version": 1
+  }
 }

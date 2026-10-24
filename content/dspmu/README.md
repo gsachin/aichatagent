@@ -19,6 +19,8 @@ guard. `CONTEXT_MODE=site` now selects a route-specific bundle.
 | `prompt_manifest.json` | Sidecar for `ContextBundle`: fact IDs, node IDs, notice IDs, source URLs and `valid_until`. Read by `app.doc_context.document_bundle()`; not loaded into the prompt. |
 | `facts.json` | Structured facts with source URLs, `valid_from`, `valid_until`, `status: draft` and `approved_by: null`. |
 | `notices.jsonl` | Non-PII notice metadata. PII-heavy admission/result categories are excluded. |
+| `notices.sqlite3` | Rebuildable SQLite FTS5 index over the non-PII notices. Rebuilt by `scripts/build_notice_store.py`; the router falls back to the JSONL if it is missing. An extra title guard excludes selection/student-list rows that the category filter lets through. |
+| `notice_bodies/` | Optional PII-clean extracted notice text and review manifest. **Gitignored**; only text that passes `app.pii.scan_text` is written, and OCR/review bodies are not persisted. |
 | `build_report.json` | Sources, counts, real voice/chat prompt budgets, OCR status, warnings and validation results. |
 | `nodes/` | Extracted page/PDF text for auditing (no PII-category notices). |
 | `cache/` | Raw public sources. **Gitignored**; regenerate rather than commit. |
@@ -29,6 +31,28 @@ Offline, from the cache:
 
 ```bash
 .venv/bin/python scripts/build_site_index.py
+```
+
+Rebuild only the notice search index from the committed JSONL:
+
+```bash
+.venv/bin/python scripts/build_notice_store.py
+```
+
+Extract notice bodies offline from a local PDF directory (recommended until the
+university's written permission is on file):
+
+```bash
+.venv/bin/python scripts/extract_notice_bodies.py \
+  --pdf-dir /path/to/authorised/notice-pdfs --limit 5
+```
+
+The extractor writes only PII-clean text and never persists a PII-flagged or
+OCR/review-needed body. After a full extraction, rebuild the body index with
+`--rebuild-db`. Live fetching is opt-in and robots-aware:
+
+```bash
+.venv/bin/python scripts/extract_notice_bodies.py --allow-network --rebuild-db
 ```
 
 Live, only after the university's written permission and with robots.txt /
@@ -67,11 +91,15 @@ roll number are rejected. The existing test suite runs with:
   matching non-PII notices. Unknown questions fall back to the full compact
   bundle. `voice_handler` records the selected bundle as the guard evidence
   instead of re-reading the document.
+- PG programme/fee/seat/eligibility questions are explicitly out of scope.
+  They get a deterministic answer directing the caller to the university for
+  the latest copy; PG admission dates and contact questions remain answerable
+  from the core cards.
 - The build measures the **real** voice prompt through
   `build_voice_system_prompt(...)` plus the question and output reserve. It
   fails if the full prompt exceeds 8,000 tokens or the document exceeds 4,000.
-- Current build: document **2,419 / 4,000**; full voice **6,621 / 8,000**
-  (wrapper 3,997); full chat **2,973 / 30,000**; entity corpus **3,773** tokens,
+- Current build: document **2,461 / 4,000**; full voice **6,663 / 8,000**
+  (wrapper 3,997); full chat **3,015 / 30,000**; entity corpus **3,773** tokens,
   not in the prompt.
 
 ## Configuration
@@ -87,6 +115,7 @@ VOICE_KB_PATH=content/dspmu/voice_kb.md
 CONTEXT_MANIFEST_PATH=content/dspmu/prompt_manifest.json
 SITE_FACTS_PATH=content/dspmu/facts.json
 SITE_NOTICES_PATH=content/dspmu/notices.jsonl
+SITE_NOTICE_DB_PATH=content/dspmu/notices.sqlite3
 SITE_NODES_DIR=content/dspmu/nodes
 SITE_ROUTER_MAX_NOTICES=5
 LLM_PROMPT_CACHE_KEY=dspmu-kb-v3
@@ -113,7 +142,9 @@ nothing in this directory's configuration points at them.
   snapshot. The site map does not claim a total.
 - Admission/selection lists and results are excluded (2,733 of the old-site
   rows in this build). The category filter is a heuristic, not a legal PII
-  audit; scan any new content before indexing it.
+  audit. The notice body extractor adds a conservative text scan and refuses
+  to persist flagged text, but human review is still required before indexing
+  a new batch.
 - The 2026 fee PDF has 43 numbered programme rows. pdfplumber loses row 33
   (`Electronics`) at the page break; a text fallback recovers it, so
   `facts.json` carries 43 programmes.
@@ -123,10 +154,12 @@ nothing in this directory's configuration points at them.
 ## Next milestone
 
 The deterministic router is in place for fees, programme facts, about/vision/
-glance nodes, syllabus links and matching non-PII notices; unknown questions
-still return the full compact bundle. The remaining P1 work is the signed fact
-store, the PG programme list and fees, a PII text scan, the golden set and
-university sign-off, and the Hindi OCR quality gate.
+glance nodes, syllabus links and matching non-PII notices. The FTS5 notice
+store ranks title/category matches. The PDF body extractor and PII text gate
+are implemented; the mass PDF fetch is still waiting for written permission,
+and OCR/Hindi review is pending. The remaining P1 work is the signed fact
+store, the golden set and university sign-off, and the Hindi OCR quality gate.
+PG programme/fee questions are handled by the explicit out-of-scope boundary.
 
 This build extracts two department pages (History and the Faculty of Science)
 and lists the sitemap's department pages. It does not fetch every department

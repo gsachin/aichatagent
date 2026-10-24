@@ -361,6 +361,7 @@ def _render_core_cards(
         "- Results, merit lists, selection lists and applicant lists are excluded because they contain student names and roll numbers. Point callers to the official pages instead.",
         "- Do not answer an expired fee or date. Fee facts are valid through 2027-06-30; the counselling schedule is valid through 2026-12-31.",
         "- If a fact is not in the knowledge file, say so and give the registrar's contact. Do not infer a fee, date or programme.",
+        "- PG programme lists, fees, seats and eligibility details are out of scope for this verified profile. When asked, tell the caller to contact the university for the latest copy; do not infer or quote them.",
         f"- OCR-derived PG dates are marked; source: {pg_doc.ocr_quality} OCR ({pg_doc.ocr_lang or 'no OCR'}).",
         "## Sources",
         f"- Fee structure 2026: {fee_url}",
@@ -740,6 +741,22 @@ def build(
     with (output_path / "notices.jsonl").open("w", encoding="utf-8") as handle:
         for notice in non_pii:
             handle.write(json.dumps(notice.to_dict(), ensure_ascii=False) + "\n")
+
+    # The JSONL is the source of truth; the FTS5 store is a rebuildable index
+    # beside it. A SQLite build without FTS5 must not fail the whole site build:
+    # the router falls back to the title scan.
+    try:
+        from app.notice_store import build_store
+
+        notice_store_stats = build_store(
+            output_path / "notices.jsonl",
+            output_path / "notices.sqlite3",
+        )
+        report["notice_store"] = notice_store_stats.to_dict()
+    except Exception as exc:                                    # noqa: BLE001
+        report["notice_store"] = {"built": False, "error": str(exc)}
+        warnings.append(f"notice FTS5 store not built: {exc}")
+
     (output_path / "build_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -838,6 +855,15 @@ def main(argv: list[str] | None = None) -> int:
         f"{report['notices']['non_pii']} non-PII, "
         f"{report['notices']['pii_excluded']} excluded"
     )
+    store = report.get("notice_store") or {}
+    if store.get("built"):
+        print(
+            "notice store     "
+            f"{store['rows']} rows, {store['pii_excluded']} PII excluded, "
+            f"{store['db_bytes']:,} bytes (FTS5)"
+        )
+    else:
+        print(f"notice store     not built: {store.get('error', 'unknown error')}")
     print(f"fees             {report['fees']['programmes']} programmes")
     print(f"documents        {report['documents']} items")
     print(

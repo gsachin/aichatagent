@@ -163,6 +163,17 @@ def _build_system(mode: str, context: str) -> str:
     return build_voice_system_prompt(context)
 
 
+def _pg_boundary_answer(query: str) -> str | None:
+    """The deterministic PG programme/fee boundary, or None."""
+    try:
+        from app.site_router import pg_boundary_answer
+
+        return pg_boundary_answer(query)
+    except Exception:  # noqa: BLE001 - never drop a turn over the boundary check
+        logger.exception("PG boundary check failed")
+        return None
+
+
 def _language_suffix(language: str | None) -> str:
     if not language:
         return ""
@@ -178,13 +189,21 @@ def query_rag(question: str, *, mode: str = "voice",
               language: str | None = None) -> str | None:
     """Build the OpenAI prompt and return the answer (no retrieval).
 
-    ``retrieval_query`` is retained for call-site compatibility; there is no
-    retriever any more.
+    ``retrieval_query`` is the raw caller question when the caller has already
+    built the full prompt; routing and the PG boundary use it instead of the
+    prompt wrapper.
     """
     if not question.strip():
         return None
 
-    bundle = context_bundle_for_query(question)
+    routing_query = retrieval_query or question
+    boundary = _pg_boundary_answer(routing_query)
+    if boundary is not None:
+        bind_context_bundle(context_bundle_for_query(routing_query))
+        logger.info("PG programme/fee boundary answer")
+        return boundary
+
+    bundle = context_bundle_for_query(routing_query)
     context = bundle.text
     bind_context_bundle(bundle)
     system = _build_system(mode, context)
@@ -240,7 +259,15 @@ async def query_rag_stream(
     if not question.strip():
         raise GenerationFailed("empty question")
 
-    bundle = context_bundle_for_query(question)
+    routing_query = retrieval_query or question
+    boundary = _pg_boundary_answer(routing_query)
+    if boundary is not None:
+        bind_context_bundle(context_bundle_for_query(routing_query))
+        logger.info("PG programme/fee boundary answer (stream)")
+        yield boundary
+        return
+
+    bundle = context_bundle_for_query(routing_query)
     context = bundle.text
     # Set on the loop so the grounding boundary sees it (the old to_thread
     # retrieval seam discarded context-var writes made in the worker).

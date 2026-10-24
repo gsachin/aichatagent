@@ -28,6 +28,7 @@ from typing import Iterable
 from app.config import settings
 from app.context_bundle import ContextBundle
 from app.doc_context import document_bundle
+from app.notice_store import is_likely_pii_title, search_notices
 from app.programs import DSPMU_PROGRAM_ALIASES, detect_program
 
 logger = logging.getLogger("site_router")
@@ -51,13 +52,9 @@ _SAFE_NODES = frozenset({
 
 _URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
-#: Result/merit/selection lists are excluded at build time. Keep a second
-#: title guard here so a future ingestion change cannot route one by accident.
-_PII_TITLE_RE = re.compile(
-    r"\b(?:roll|merit list|selection list|admission list|selected candidates|"
-    r"admit card|answer key|results?)\b",
-    re.IGNORECASE,
-)
+#: Result/merit/selection lists are excluded at build time. The shared
+#: ``is_likely_pii_title`` guard is applied again here so a future ingestion
+#: change cannot route one by accident.
 
 _STOPWORDS = frozenset(
     "a an the is are was were be been being do does did can could would should "
@@ -66,6 +63,38 @@ _STOPWORDS = frozenset(
     "please tell show give any some latest new news notice notification "
     "information details detail programme program examination exam semester "
     "sem".split()
+)
+
+#: Postgraduate programme/fee material is not in the verified DSPMU corpus.
+#: These markers identify the family; _PG_DATA_WORDS distinguish a data request
+#: from a PG admission-date or contact question that the core cards can answer.
+_PG_MARKERS = (
+    "pg", "postgraduate", "post-graduate", "post graduate", "post graduation",
+    "master", "masters", "m.a", "ma", "m.sc", "msc", "m.com", "mcom", "mba",
+    "mca", "m.tech", "mtech", "m.phil", "mphil", "ll.m", "m.ed", "med",
+    "ph.d", "phd", "doctorate", "doctoral",
+    # Hindi / Gujarati.
+    "पीजी", "स्नातकोत्तर", "मास्टर", "एम.बी.ए", "एमबीए", "एम.सी.ए",
+    "एमसीए", "एम.कॉम", "एमकॉम", "एम.एससी", "एमएससी", "एम.ए", "एमए",
+    "पी.एच.डी", "पीएचडी", "પીજી", "અનુસ્નાતક", "સ્નાતકોત્તર", "માસ્ટર", "એમ.બી.એ",
+    "એમબીએ", "એમ.સી.એ", "એમસીએ", "એમ.કોમ", "એમકોમ", "એમ.એસસી",
+    "એમએસસી", "એમ.એ", "એમએ", "પી.એચ.ડી", "પીએચડી",
+)
+_PG_DATA_WORDS = (
+    "programme", "program", "course", "courses", "fee", "fees", "tuition",
+    "cost", "seat", "seats", "eligibility", "duration", "specialisation",
+    "specialization", "syllabus", "curriculum", "degree",
+    "कार्यक्रम", "कोर्स", "फीस", "शुल्क", "सीट", "पात्रता", "अवधि",
+    "पाठ्यक्रम", "डिग्री", "કાર્યક્રમ", "કોર્સ", "ફી", "બેઠક", "પાત્રતા",
+    "અવધિ", "અભ્યાસક્રમ", "ડિગ્રી",
+)
+#: A notice request that names a PG programme still belongs to the notice
+#: route. It only becomes a PG data boundary when it asks for one of these.
+_PG_HARD_DATA_WORDS = (
+    "fee", "fees", "tuition", "cost", "seat", "seats", "eligibility",
+    "duration", "specialisation", "specialization", "syllabus", "curriculum",
+    "फीस", "शुल्क", "सीट", "पात्रता", "अवधि", "पाठ्यक्रम", "ફી", "બેઠક",
+    "પાત્રતા", "અવધિ", "અભ્યાસક્રમ",
 )
 
 _FEE_WORDS = (
@@ -289,6 +318,53 @@ def _has_any(text: str, words: Iterable[str]) -> bool:
     return False
 
 
+def is_pg_data_question(query: str) -> bool:
+    """True for a PG programme/fee/seat/eligibility request.
+
+    PG admission dates and contact questions are deliberately excluded: the
+    core cards carry the published dates and the registrar contact. A bare
+    "MBA" or "postgraduate" is treated as a programme question.
+    """
+    text = (query or "").lower()
+    if not _has_any(text, _PG_MARKERS):
+        return False
+    # A request for a notice about a PG programme is a notice query. A
+    # request that names a fee/seat/eligibility detail is still a data
+    # boundary, even when it says "notice".
+    if _has_any(text, _NOTICE_WORDS) and not _has_any(
+        text, _PG_HARD_DATA_WORDS
+    ):
+        return False
+    if _has_any(text, _PG_DATA_WORDS):
+        return True
+    if _has_any(text, (*_DATE_WORDS, *_CONTACT_WORDS, *_ADMISSION_WORDS)):
+        return False
+    return len(_tokens(text)) <= 2
+
+
+def pg_boundary_answer(query: str) -> str | None:
+    """A deterministic answer for out-of-scope PG programme/fee requests."""
+    if not is_pg_data_question(query):
+        return None
+    return (
+        "I don't have the verified postgraduate programme and fee list, so I "
+        "can't confirm that. Please contact the university directly for the "
+        f"latest details: {settings.ADMISSIONS_EMAIL} or "
+        f"{settings.ADMISSIONS_PHONE}."
+    )
+
+
+def _pg_boundary_block() -> str:
+    return (
+        "## PG programme and fee boundary\n"
+        "Verified PG programme lists, fees, seats and eligibility details are "
+        "not in this knowledge base. If the turn asks for one, say it is outside "
+        "the verified profile and tell the caller to contact the university for "
+        "the latest copy. Do not infer or quote a PG programme, fee or seat. "
+        f"Contact: {settings.ADMISSIONS_EMAIL} or {settings.ADMISSIONS_PHONE}."
+    )
+
+
 def _detected_programme(query: str) -> str:
     # The router is part of the DSPMU profile; use its catalogue even when the
     # test suite has pinned the archived Meridian catalogue for old fixtures.
@@ -351,13 +427,27 @@ def _notice_terms(query: str) -> set[str]:
 
 
 def _matching_notices(query: str) -> list[dict]:
+    limit = max(0, min(20, int(settings.SITE_ROUTER_MAX_NOTICES)))
+    if limit == 0:
+        return []
+    # Prefer the FTS5 store. None means the store is missing/stale/unreadable;
+    # [] means it is healthy and found nothing, so the JSONL scan is not needed.
+    indexed = search_notices(
+        query, limit=limit, db_path=settings.SITE_NOTICE_DB_PATH
+    )
+    if indexed is not None:
+        return [
+            row for row in indexed
+            if not is_likely_pii_title(str(row.get("title") or ""))
+        ]
+
     terms = _notice_terms(query)
     if not terms:
         return []
     scored: list[tuple[int, str, dict]] = []
     for row in _notices():
         title = str(row.get("title") or "")
-        if not title or row.get("pii") or _PII_TITLE_RE.search(title):
+        if not title or row.get("pii") or is_likely_pii_title(title):
             continue
         title_terms = set(_tokens(title))
         score = sum(2 for term in terms if term in title_terms)
@@ -370,7 +460,6 @@ def _matching_notices(query: str) -> list[dict]:
         if score:
             scored.append((score, str(row.get("date") or ""), row))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    limit = max(0, min(20, int(settings.SITE_ROUTER_MAX_NOTICES)))
     return [row for _score, _date, row in scored[:limit]]
 
 
@@ -479,6 +568,16 @@ def route_query(query: str = "") -> ContextBundle:
     if _has_any(text, _BOUNDARY_WORDS):
         logger.info("site router: boundary")
         return base
+
+    if is_pg_data_question(text):
+        logger.info("site router: PG boundary")
+        return ContextBundle(
+            text=f"{base.text}\n\n{_pg_boundary_block()}",
+            fact_ids=base.fact_ids,
+            node_ids=base.node_ids,
+            source_urls=base.source_urls,
+            valid_until=base.valid_until,
+        )
 
     if _has_any(text, _NOTICE_WORDS):
         recent = _recent_notices_text()

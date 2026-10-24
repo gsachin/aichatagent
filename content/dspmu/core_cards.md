@@ -128,6 +128,8 @@ The full 43-programme table is maintained outside this prompt; this card lists t
 
 - If a fact is not in the knowledge file, say so and give the registrar's contact. Do not infer a fee, date or programme.
 
+- PG programme lists, fees, seats and eligibility details are out of scope for this verified profile. When asked, tell the caller to contact the university for the latest copy; do not infer or quote them.
+
 - OCR-derived PG dates are marked; source: good OCR (eng).
 
 ## Sources

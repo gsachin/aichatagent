@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from app import doc_context, site_router
-from app.rag import clear_turn_context, context_bundle_for_query
+from app.rag import clear_turn_context, context_bundle_for_query, query_rag
+from app.config import settings
 
 ROOT = Path(__file__).resolve().parents[1]
 DSPMU = ROOT / "content/dspmu"
@@ -52,11 +53,131 @@ def _activate(override_settings) -> None:
         CONTEXT_MANIFEST_PATH="content/dspmu/prompt_manifest.json",
         SITE_FACTS_PATH="content/dspmu/facts.json",
         SITE_NOTICES_PATH="content/dspmu/notices.jsonl",
+        SITE_NOTICE_DB_PATH="content/dspmu/notices.sqlite3",
         SITE_NODES_DIR="content/dspmu/nodes",
         SITE_ROUTER_MAX_NOTICES=5,
     )
     doc_context.clear_cache()
     site_router.clear_cache()
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is the MBA fee?",
+        "Tell me about M.Com",
+        "PG programme list",
+        "M.Sc eligibility",
+        "postgraduate seats",
+        "master's degree details",
+        "एमबीए की फीस",
+        "સ્નાતકોત્તર કાર્યક્રમ",
+    ],
+)
+def test_pg_programme_and_fee_questions_get_a_deterministic_boundary(
+    override_settings, question
+):
+    _activate(override_settings)
+
+    answer = site_router.pg_boundary_answer(question)
+
+    assert answer is not None
+    assert "latest details" in answer
+    assert settings.ADMISSIONS_EMAIL in answer
+    assert settings.ADMISSIONS_PHONE in answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "PG last date",
+        "PG admission process",
+        "What is the registrar email?",
+    ],
+)
+def test_pg_dates_and_admission_process_are_not_fee_boundaries(
+    override_settings, question
+):
+    _activate(override_settings)
+
+    assert site_router.pg_boundary_answer(question) is None
+
+
+def test_the_pg_boundary_is_a_route_context_block(override_settings):
+    _activate(override_settings)
+
+    bundle = site_router.route_query("What is the MBA fee?")
+
+    assert "PG programme and fee boundary" in bundle.text
+    assert bundle.fact_ids == ()
+    assert bundle.node_ids == ("core_cards",)
+    assert "MBA fee" not in bundle.text
+
+    from app.voice_grounding import enforce_grounding, is_grounded
+
+    answer = site_router.pg_boundary_answer("What is the MBA fee?")
+    assert answer is not None
+    assert is_grounded(answer, bundle.text)
+    assert enforce_grounding(answer, bundle.text) == answer
+
+
+def test_query_rag_short_circuits_the_pg_boundary(override_settings):
+    _activate(override_settings)
+
+    answer = query_rag("What is the MBA fee?", mode="chat")
+
+    assert answer is not None
+    assert "latest details" in answer
+
+
+def test_streaming_uses_the_raw_question_for_routing(override_settings, monkeypatch):
+    _activate(override_settings)
+    import asyncio
+
+    import app.llm_backend as llm_backend
+    from app.rag import last_context_bundle, query_rag_stream
+
+    async def fake_generate_stream(*args, **kwargs):
+        yield "ok"
+
+    monkeypatch.setattr(llm_backend, "generate_stream", fake_generate_stream)
+
+    async def collect():
+        items = [
+            item
+            async for item in query_rag_stream(
+                "SYSTEM PROMPT\nStudent's question: fee for BA Political Science",
+                retrieval_query="What is the fee for BA Political Science?",
+            )
+        ]
+        return items, last_context_bundle()
+
+    items, bundle = asyncio.run(collect())
+    assert items == ["ok"]
+    assert bundle is not None
+    assert "Programme fee fact" in bundle.text
+
+
+def test_the_streaming_path_also_short_circuits_the_pg_boundary(override_settings):
+    _activate(override_settings)
+    import asyncio
+
+    from app.rag import query_rag_stream
+
+    async def collect():
+        return [
+            item
+            async for item in query_rag_stream(
+                "SYSTEM PROMPT\nStudent's question: What is the MBA fee?",
+                retrieval_query="What is the MBA fee?",
+            )
+        ]
+
+    items = asyncio.run(collect())
+
+    assert items
+    assert isinstance(items[0], str)
+    assert "latest details" in items[0]
 
 
 def test_a_fee_question_selects_the_exact_programme_fact(override_settings):
@@ -153,6 +274,37 @@ def test_a_notice_question_selects_non_pii_title_matches(override_settings):
     assert "Fill Application Form for Ph.D. Programme" in bundle.text
     assert "recent_notices" in bundle.node_ids
     assert "## Matching non-PII notices" in bundle.text
+
+
+def test_router_falls_back_to_jsonl_when_the_notice_store_is_missing(
+    override_settings, tmp_path
+):
+    _activate(override_settings)
+    override_settings(SITE_NOTICE_DB_PATH=str(tmp_path / "missing.sqlite3"))
+
+    bundle = site_router.route_query("Any notice about the PhD programme?")
+
+    assert "Fill Application Form for Ph.D. Programme" in bundle.text
+    assert bundle.notice_ids
+
+
+def test_core_cards_carry_the_pg_boundary():
+    text = (DSPMU / "core_cards.md").read_text(encoding="utf-8")
+    assert (
+        "PG programme lists, fees, seats and eligibility details are out of scope"
+        in text
+    )
+
+
+def test_the_generated_fts_store_is_available():
+    from app.notice_store import search_notices
+
+    db = DSPMU / "notices.sqlite3"
+    if not db.exists():
+        pytest.skip("generated notices.sqlite3 is missing; run the build")
+    rows = search_notices("PhD", db_path=db)
+    assert rows is not None
+    assert any("Ph.D." in row["title"] for row in rows)
 
 
 def test_a_result_request_is_a_boundary_not_a_notice_lookup(override_settings):

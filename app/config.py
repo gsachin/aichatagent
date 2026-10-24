@@ -572,6 +572,11 @@ class Settings:
             "SITE_NOTICES_PATH", "content/dspmu/notices.jsonl"
         ).strip()
     )
+    SITE_NOTICE_DB_PATH: str = field(
+        default_factory=lambda: _env(
+            "SITE_NOTICE_DB_PATH", "content/dspmu/notices.sqlite3"
+        ).strip()
+    )
     SITE_NODES_DIR: str = field(
         default_factory=lambda: _env(
             "SITE_NODES_DIR", "content/dspmu/nodes"
