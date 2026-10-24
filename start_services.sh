@@ -6,16 +6,17 @@
 #   kills stale services, frees ports, checks the compute platform, pre-flights
 #   Docker/PostgreSQL, clone/syncs the enterprise-rag-core repo with its Redis
 #   Stack infra (Step 4b, https://github.com/gsachin/enterprise-rag-core,
-#   override location with ERC_ROOT), starts FastAPI, pre-warms the LLM (Apple
-#   MLX on macOS Apple Silicon, Ollama elsewhere), starts a Cloudflare tunnel,
-#   writes the tunnel hostname everywhere it is needed, updates Twilio
-#   webhooks, and optionally starts the Streamlit apps.
+#   override location with ERC_ROOT), starts FastAPI, checks the configured
+#   OpenAI-compatible LLM endpoint, starts a Cloudflare tunnel, writes the
+#   tunnel hostname everywhere it is needed, updates Twilio webhooks, and
+#   starts the Streamlit apps.
 #
 # Usage:
 #   bash start_services.sh              # everything, including Streamlit UIs
 #   bash start_services.sh --skip-streamlit   # FastAPI + tunnel only
 #   bash start_services.sh --skip-twilio
 #   bash start_services.sh --named-tunnel [--tunnel-name my-tunnel]
+#   bash start_services.sh --local-only   # FastAPI + Streamlit, no tunnel/Twilio
 #
 # NOTE: Streamlit starts BY DEFAULT here (unlike the PS1's -WithStreamlit
 # opt-in) -- plain "bash start_services.sh" must leave localhost:8501/8502
@@ -28,6 +29,7 @@
 WITH_STREAMLIT=true
 SKIP_TWILIO=false
 NAMED_TUNNEL=false
+LOCAL_ONLY=false
 TUNNEL_NAME="admissions-tunnel"
 
 while [ $# -gt 0 ]; do
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
         --with-streamlit) WITH_STREAMLIT=true ;;   # PS1-compat (already default)
         --skip-streamlit) WITH_STREAMLIT=false ;;
         --skip-twilio)    SKIP_TWILIO=true ;;
+        --local-only)     LOCAL_ONLY=true; WITH_STREAMLIT=true; SKIP_TWILIO=true ;;
         --named-tunnel)   NAMED_TUNNEL=true ;;
         --tunnel-name)
             if [ $# -lt 2 ]; then
@@ -45,7 +48,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: bash start_services.sh [--skip-streamlit] [--skip-twilio] [--named-tunnel [--tunnel-name NAME]]"
+            echo "Usage: bash start_services.sh [--skip-streamlit] [--skip-twilio] [--local-only] [--named-tunnel [--tunnel-name NAME]]"
             exit 0
             ;;
         *)
@@ -64,7 +67,6 @@ LOG_DIR="$PROJECT_ROOT/logs"
 FASTAPI_PORT=8000
 STREAMLIT_MAIN_PORT=8501
 STREAMLIT_DASH_PORT=8502
-MLX_PORT="${MLX_PORT:-1234}"
 
 mkdir -p "$LOG_DIR"
 
@@ -72,7 +74,13 @@ mkdir -p "$LOG_DIR"
 if [ -f "$PROJECT_ROOT/.env" ]; then
     while IFS='=' read -r _key _value; do
         case "$_key" in ''|\#*) continue ;; esac
-        [ -n "$_value" ] && export "$_key"="$_value"
+        # Match python-dotenv's default (override=False): an explicit
+        # command-line environment value wins over the file. This is what
+        # lets a local UAT run point the OpenAI-compatible client at a local
+        # model without editing the deployed .env.
+        if ! printenv "$_key" >/dev/null 2>&1; then
+            [ -n "$_value" ] && export "$_key"="$_value"
+        fi
     done < "$PROJECT_ROOT/.env"
 fi
 
@@ -87,15 +95,21 @@ fi
 
 # ---- LLM provider resolution (matches app/llm_backend.py) -----------------
 LLM_PROVIDER="${LLM_PROVIDER:-auto}"
-if [ "$LLM_PROVIDER" = "auto" ]; then
-    if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-        LLM_PROVIDER="mlx"
-    else
-        LLM_PROVIDER="ollama"
-    fi
+if [ "$LLM_PROVIDER" = "auto" ] || [ -z "$LLM_PROVIDER" ]; then
+    LLM_PROVIDER="openai"
 fi
-MLX_MODEL="${MLX_MODEL:-mlx-community/Qwen2.5-14B-Instruct-4bit}"
-MLX_BASE_URL="${MLX_BASE_URL:-http://127.0.0.1:$MLX_PORT}"
+if [ "$LLM_PROVIDER" != "openai" ]; then
+    printf "  ERROR: LLM_PROVIDER='%s' is no longer supported by app/llm_backend.py.\n" "$LLM_PROVIDER" >&2
+    printf "  Use LLM_PROVIDER=openai (or auto), or override the base URL for a local OpenAI-compatible server.\n" >&2
+    exit 1
+fi
+
+# Local-only is a validation mode: keep every process local and never touch
+# the public tunnel or Twilio. It also skips the machine-profile rewrite so a
+# test run cannot change the deployed .env.
+if [ "$LOCAL_ONLY" = "true" ]; then
+    MACHINE_PROFILE_CHECK=0
+fi
 
 # ---- Machine profile (.env sizing) ------------------------------------------
 # Re-size .env if the machine changed since last deploy. Idempotent no-op
@@ -189,7 +203,7 @@ elif [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
     _mem_gb="$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%.0f", $1/1024/1024/1024}')"
     _chip="$(system_profiler SPDisplaysDataType 2>/dev/null | grep -i "Chipset Model" | head -1 | sed 's/.*: //')"
     write_ok "Apple Silicon detected: ${_chip:-Metal GPU} (${_mem_gb} GB unified memory)"
-    write_ok "LLM backend: Apple MLX (mlx_lm.server on :$MLX_PORT) -- no CUDA/Ollama needed"
+    write_ok "Generation backend: OpenAI-compatible remote endpoint (no local model)"
 else
     write_warn "No NVIDIA GPU detected -- STT and TTS will fall back to CPU (slow)"
 fi
@@ -199,6 +213,9 @@ write_step "Step 4: Docker / PostgreSQL check"
 
 DB_READY=false
 
+if [ "$LOCAL_ONLY" = "true" ]; then
+    write_warn "Local-only mode: skipping Docker/PostgreSQL pre-flight"
+else
 if docker info >/dev/null 2>&1; then
     write_ok "Docker daemon is running"
 else
@@ -219,26 +236,34 @@ else
 fi
 
 if docker info >/dev/null 2>&1; then
-    _pg_out="$(docker exec elearning-postgres pg_isready -U elearning -d admissions 2>/dev/null || true)"
-    if echo "$_pg_out" | grep -q "accepting"; then
-        write_ok "PostgreSQL: accepting connections on localhost:5432"
+    # Prefer the existing named container. docker compose refuses to recreate
+    # it when the name already exists, even if the container is merely stopped.
+    if docker ps -a --format "{{.Names}}" 2>/dev/null | grep -qx "elearning-postgres"; then
+        if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -qx "elearning-postgres"; then
+            write_warn "Starting existing elearning-postgres container..."
+            docker start elearning-postgres >/dev/null 2>&1 || true
+            sleep 3
+        fi
+    else
+        write_warn "PostgreSQL container not found -- attempting docker compose up..."
+        docker compose -f "$PROJECT_ROOT/docker-compose.yml" up -d postgres >/dev/null 2>&1 || true
+        sleep 5
+    fi
+
+    # Check the actual DATABASE_URL, not pg_isready. pg_isready reports the
+    # server accepts connections even when the role or database in the URL
+    # does not exist -- the exact mismatch that made the old pre-flight pass
+    # while the application logged "PostgreSQL not available".
+    if [ -n "${DATABASE_URL:-}" ] && "$PYTHON" - <<'PYDB' >/dev/null 2>&1
+import os
+import psycopg2
+psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=5).close()
+PYDB
+    then
+        write_ok "PostgreSQL: DATABASE_URL connects"
         DB_READY=true
     else
-        write_warn "PostgreSQL container not running -- attempting docker compose up..."
-        if docker compose -f "$PROJECT_ROOT/docker-compose.yml" up -d postgres >/dev/null 2>&1; then
-            sleep 5
-            _pg_out2="$(docker exec elearning-postgres pg_isready -U elearning -d admissions 2>/dev/null || true)"
-            if echo "$_pg_out2" | grep -q "accepting"; then
-                write_ok "PostgreSQL started and accepting connections"
-                DB_READY=true
-            fi
-        else
-            write_warn "docker compose failed -- checking for existing e-learning container..."
-            if docker ps --filter "name=elearning-postgres" --format "{{.Status}}" 2>/dev/null | grep -q "healthy"; then
-                write_ok "Found existing elearning-postgres container (healthy)"
-                DB_READY=true
-            fi
-        fi
+        write_warn "PostgreSQL: DATABASE_URL does not connect"
     fi
 fi
 
@@ -249,6 +274,7 @@ if [ "$DB_READY" = "false" ]; then
 else
     write_ok "Database pre-flight: PASSED"
 fi
+fi
 
 # ==== Step 4b: Enterprise RAG Core =========================================
 write_step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-rag-core)"
@@ -257,6 +283,9 @@ write_step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-
 # this project. Ensure it is present (clone or pull) and that its only
 # required local infra -- Redis Stack -- is running. Failures here never block
 # the admissions app (warn-only). Override the location with ERC_ROOT.
+if [ "$LOCAL_ONLY" = "true" ]; then
+    write_warn "Local-only mode: skipping enterprise-rag-core and Redis"
+else
 ERC_REPO="https://github.com/gsachin/enterprise-rag-core"
 ERC_ROOT="${ERC_ROOT:-$PROJECT_ROOT/../enterprise-rag-core}"
 
@@ -277,8 +306,7 @@ else
 fi
 
 # Redis Stack (RediSearch + RedisJSON) is the only infra the RAG core needs
-# beyond its embedding endpoint (Step 6's LLM provider: MLX on macOS Apple
-# Silicon, Ollama elsewhere). Reuse the repo's compose file so the stack
+# beyond its embedding endpoint. Reuse the repo's compose file so the stack
 # matches its pinned setup; fall back to a bare container.
 if [ -d "$ERC_ROOT/.git" ] && docker info >/dev/null 2>&1; then
     _redis_names="$(docker ps --filter "publish=6379" --format "{{.Names}}" 2>/dev/null)"
@@ -300,6 +328,8 @@ if [ -d "$ERC_ROOT/.git" ] && docker info >/dev/null 2>&1; then
     fi
 fi
 
+fi
+
 # ==== Step 4c: Pre-rendered call assets ====================================
 # The greeting WAVs are generated, not committed (`app/static/audio/` is
 # gitignored). A fresh clone or deploy that skips this step silently falls back
@@ -307,7 +337,9 @@ fi
 # error anywhere. `--ensure` is a no-op when every asset is present and
 # current, so a restart pays nothing; it renders only what is missing or stale.
 write_step "Step 4c: Pre-rendered call assets"
-if "$PYTHON" "$PROJECT_ROOT/scripts/build_call_assets.py" --ensure; then
+if [ "$LOCAL_ONLY" = "true" ]; then
+    write_warn "Local-only mode: skipping call-asset build"
+elif "$PYTHON" "$PROJECT_ROOT/scripts/build_call_assets.py" --ensure; then
     write_ok "call assets ready (greetings asset-first on the next call)"
 else
     write_warn "call asset build failed - missing greetings will be synthesised live"
@@ -325,14 +357,16 @@ write_ok "FastAPI starting (PID $FASTAPI_PID) - log: $SERVER_LOG"
 
 _attempt=0
 SERVER_READY=false
-while [ "$SERVER_READY" = "false" ] && [ "$_attempt" -lt 30 ]; do
+# First boot can spend ~1 minute downloading the Whisper model; 60s was too
+# short and made a healthy server look like a failed start.
+while [ "$SERVER_READY" = "false" ] && [ "$_attempt" -lt 90 ]; do
     sleep 2
     _attempt=$((_attempt + 1))
     if [ "$(http_code "http://127.0.0.1:$FASTAPI_PORT/")" = "200" ]; then
         write_ok "FastAPI server responding (took ~$((_attempt * 2))s)"
         SERVER_READY=true
     else
-        write_warn "Waiting for FastAPI server... ($_attempt/30)"
+        write_warn "Waiting for FastAPI server... ($_attempt/90)"
     fi
 done
 
@@ -342,10 +376,24 @@ if [ "$SERVER_READY" = "false" ]; then
 fi
 
 # ==== Step 6: LLM pre-warming ==============================================
-write_step "Step 6: LLM pre-warming (OpenAI)"
-write_ok "Remote LLM: OpenAI - no local model to load or warm"
+write_step "Step 6: LLM readiness"
+if [ -n "${LLM_BASE_URL:-}" ]; then
+    write_ok "Generation endpoint: $LLM_BASE_URL (model: ${LLM_MODEL:-default})"
+else
+    write_ok "Remote LLM: OpenAI - no local model to load or warm"
+fi
+if [ -z "${LLM_API_KEY:-}" ]; then
+    write_warn "LLM_API_KEY is empty - the app will use the fixed-response path"
+fi
 
 # ==== Step 7: Start Cloudflare tunnel ======================================
+if [ "$LOCAL_ONLY" = "true" ]; then
+    write_step "Step 7: Local-only mode"
+    TUNNEL_HOST=""
+    export DASHBOARD_API_URL="http://127.0.0.1:$FASTAPI_PORT"
+    write_ok "Skipping Cloudflare tunnel and Twilio update"
+    write_ok "DASHBOARD_API_URL=$DASHBOARD_API_URL"
+else
 write_step "Step 7: Starting Cloudflare tunnel"
 
 if ! command -v cloudflared >/dev/null 2>&1; then
@@ -482,6 +530,8 @@ for n in c.incoming_phone_numbers.list():
     fi
 fi
 
+fi
+
 # ==== Step 11: Optional Streamlit apps =====================================
 if [ "$WITH_STREAMLIT" = "true" ]; then
     write_step "Step 11: Starting Streamlit apps"
@@ -495,13 +545,34 @@ if [ "$WITH_STREAMLIT" = "true" ]; then
         --server.port "$STREAMLIT_MAIN_PORT" --server.headless true \
         >> "$LOG_DIR/streamlit.log" 2>&1 &
     write_ok "Main app starting -> http://localhost:$STREAMLIT_MAIN_PORT"
+
+    # In local-only validation the tunnel normally provides the first external
+    # probe; wait on the local ports so the launcher cannot report success
+    # before Streamlit is actually accepting connections.
+    if [ "$LOCAL_ONLY" = "true" ]; then
+        for _s_port in "$STREAMLIT_MAIN_PORT" "$STREAMLIT_DASH_PORT"; do
+            _s_ready=false
+            _s_attempt=0
+            while [ "$_s_ready" = "false" ] && [ "$_s_attempt" -lt 20 ]; do
+                sleep 2
+                _s_attempt=$((_s_attempt + 1))
+                if [ "$(http_code "http://127.0.0.1:$_s_port/")" = "200" ]; then
+                    write_ok "Streamlit :$_s_port responding (took ~$((_s_attempt * 2))s)"
+                    _s_ready=true
+                fi
+            done
+            if [ "$_s_ready" = "false" ]; then
+                write_warn "Streamlit :$_s_port did not respond within 40s -- check $LOG_DIR"
+            fi
+        done
+    fi
 fi
 
 # ==== Step 12: Streamlit chat tunnel (8501) ================================
 # The chat UI needs its own public URL (WebSocket UI can't share the
 # FastAPI tunnel). Reuse the conventions of tunnel_streamlit.sh.
 CHAT_TUNNEL_HOST=""
-if [ "$WITH_STREAMLIT" = "true" ]; then
+if [ "$LOCAL_ONLY" != "true" ] && [ "$WITH_STREAMLIT" = "true" ]; then
     write_step "Step 12: Starting Streamlit chat tunnel"
     CHAT_TUNNEL_CACHE="$PROJECT_ROOT/.tunnel_8501"
 
@@ -560,60 +631,122 @@ if [ "$WITH_STREAMLIT" = "true" ]; then
     fi
 fi
 
+# ==== Step 12b: Streamlit dashboard tunnel (8502) ==========================
+# The dashboard is a separate Streamlit process and needs its own hostname.
+DASH_TUNNEL_HOST=""
+if [ "$LOCAL_ONLY" != "true" ] && [ "$WITH_STREAMLIT" = "true" ]; then
+    write_step "Step 12b: Starting Streamlit dashboard tunnel"
+    DASH_TUNNEL_CACHE="$PROJECT_ROOT/.tunnel_8502"
+
+    if [ -f "$DASH_TUNNEL_CACHE" ]; then
+        _cached_dash="$(tr -d '[:space:]' < "$DASH_TUNNEL_CACHE")"
+        if [ -n "$_cached_dash" ] && [ "$(http_code "https://$_cached_dash/")" = "200" ]; then
+            DASH_TUNNEL_HOST="$_cached_dash"
+            write_ok "Dashboard tunnel already alive: $DASH_TUNNEL_HOST"
+        fi
+    fi
+
+    if [ -z "$DASH_TUNNEL_HOST" ]; then
+        if pgrep -f "cloudflared.*--url.*localhost:$STREAMLIT_DASH_PORT" >/dev/null 2>&1; then
+            write_warn "Dashboard tunnel process already running but its URL is unknown"
+            write_warn "Kill it and re-run to recreate: pkill -f cloudflared"
+        else
+            DASH_TUNNEL_LOG="$LOG_DIR/cloudflared_8502.log"
+            : > "$DASH_TUNNEL_LOG"
+            nohup cloudflared tunnel --url "http://localhost:$STREAMLIT_DASH_PORT" \
+                --metrics "localhost:0" >> "$DASH_TUNNEL_LOG" 2>&1 &
+            write_ok "Dashboard tunnel starting - log: $DASH_TUNNEL_LOG"
+
+            _dash_attempt=0
+            while [ -z "$DASH_TUNNEL_HOST" ] && [ "$_dash_attempt" -lt 15 ]; do
+                sleep 3
+                _dash_attempt=$((_dash_attempt + 1))
+                DASH_TUNNEL_HOST="$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$DASH_TUNNEL_LOG" 2>/dev/null | head -1 | sed 's|https://||')"
+                if [ -z "$DASH_TUNNEL_HOST" ]; then
+                    write_warn "Waiting for dashboard tunnel URL... ($_dash_attempt/15)"
+                fi
+            done
+
+            if [ -n "$DASH_TUNNEL_HOST" ]; then
+                printf '%s' "$DASH_TUNNEL_HOST" > "$DASH_TUNNEL_CACHE"
+                _dash_verify=false
+                _dash_v=0
+                while [ "$_dash_verify" = "false" ] && [ "$_dash_v" -lt 6 ]; do
+                    if [ "$_dash_v" -gt 0 ]; then sleep 3; fi
+                    _dash_v=$((_dash_v + 1))
+                    [ "$(http_code "https://$DASH_TUNNEL_HOST/")" = "200" ] && _dash_verify=true
+                done
+                if [ "$_dash_verify" = "true" ]; then
+                    write_ok "Dashboard tunnel reachable: https://$DASH_TUNNEL_HOST/"
+                else
+                    write_warn "Dashboard tunnel started but not yet reachable (DNS warm-up): $DASH_TUNNEL_HOST"
+                fi
+            else
+                write_warn "Dashboard tunnel did not start -- run ./tunnel_streamlit.sh to retry"
+            fi
+        fi
+    fi
+fi
+
 # ==== Step 13: Summary =====================================================
 printf '\n%s%sALL SERVICES STARTED SUCCESSFULLY%s\n\n' "$GREEN" "$BOLD" "$RESET"
-printf '%sPublic Tunnel:%s\n' "$BOLD" "$RESET"
-printf '%s   https://%s%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
-printf '\n%sInbound Calls:%s\n' "$BOLD" "$RESET"
-# .env stores TWILIO_PHONE_NUMBER in E.164 (already has a leading +),
-# so strip any existing + before re-adding one — avoids "Dial ++1..."
-_TWILIO_DISPLAY="${TWILIO_PHONE_NUMBER#+}"
-printf '   Dial %s+%s%s for AI admissions assistant\n' "$YELLOW" "${_TWILIO_DISPLAY:-19788198953}" "$RESET"
-printf '   Webhook: %shttps://%s/twilio/voice%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
-printf '\n%sWhatsApp:%s\n' "$BOLD" "$RESET"
-printf '   Webhook: %shttps://%s/twilio/whatsapp%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
-printf '   (Configure in the Twilio Console -> WhatsApp Sandbox)\n'
-if [ -n "$CHAT_TUNNEL_HOST" ]; then
-    printf '\n%sStreamlit Chat:%s\n' "$BOLD" "$RESET"
-    printf '   Public URL: %shttps://%s%s\n' "$CYAN" "$CHAT_TUNNEL_HOST" "$RESET"
+if [ "$LOCAL_ONLY" = "true" ]; then
+    printf '%sLocal-only validation mode%s\n' "$BOLD" "$RESET"
+    printf '   No public tunnel and no Twilio changes.\n'
+else
+    printf '%sPublic Tunnel:%s\n' "$BOLD" "$RESET"
+    printf '%s   https://%s%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
+    printf '\n%sInbound Calls:%s\n' "$BOLD" "$RESET"
+    # .env stores TWILIO_PHONE_NUMBER in E.164 (already has a leading +),
+    # so strip any existing + before re-adding one — avoids "Dial ++1..."
+    _TWILIO_DISPLAY="${TWILIO_PHONE_NUMBER#+}"
+    printf '   Dial %s+%s%s for AI admissions assistant\n' "$YELLOW" "${_TWILIO_DISPLAY:-19788198953}" "$RESET"
+    printf '   Webhook: %shttps://%s/twilio/voice%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
+    printf '\n%sWhatsApp:%s\n' "$BOLD" "$RESET"
+    printf '   Webhook: %shttps://%s/twilio/whatsapp%s\n' "$CYAN" "$TUNNEL_HOST" "$RESET"
+    printf '   (Configure in the Twilio Console -> WhatsApp Sandbox)\n'
+    if [ -n "$CHAT_TUNNEL_HOST" ]; then
+        printf '\n%sStreamlit Chat:%s\n' "$BOLD" "$RESET"
+        printf '   Public URL: %shttps://%s%s\n' "$CYAN" "$CHAT_TUNNEL_HOST" "$RESET"
+    fi
+    if [ -n "$DASH_TUNNEL_HOST" ]; then
+        printf '%sDashboard:%s\n' "$BOLD" "$RESET"
+        printf '   Public URL: %shttps://%s%s\n' "$CYAN" "$DASH_TUNNEL_HOST" "$RESET"
+    fi
 fi
 printf '\n%sLocal Services:%s\n' "$BOLD" "$RESET"
 printf '   FastAPI backend:  %shttp://localhost:%s%s\n' "$CYAN" "$FASTAPI_PORT" "$RESET"
-printf '   Enterprise RAG Core: %s%s%s  (repo: %shttps://github.com/gsachin/enterprise-rag-core%s)\n' "$CYAN" "$ERC_ROOT" "$RESET" "$CYAN" "$RESET"
-printf '     MCP server (optional): cd %s && .venv/bin/enterprise-rag-core serve --port 8010\n' "$ERC_ROOT"
-if [ "$LLM_PROVIDER" = "mlx" ]; then
-    printf '     Embeddings: MLX (auto-detected on Apple Silicon)\n'
-    printf '       - run an MLX embedding server (vllm-mlx / mlx-serve / mlx-omni-server)\n'
-    printf '       - export EMBED_MODEL=<served-embedding-model> [RAG_CORE_MLX_BASE_URL=<base/v1>]\n'
-else
-    printf '     Embeddings: Ollama (auto-detected on CUDA/Linux/Windows, http://localhost:11434)\n'
+if [ "$LOCAL_ONLY" != "true" ]; then
+    printf '   Enterprise RAG Core: %s%s%s  (repo: %shttps://github.com/gsachin/enterprise-rag-core%s)\n' "$CYAN" "$ERC_ROOT" "$RESET" "$CYAN" "$RESET"
+    printf '     MCP server (optional): cd %s && .venv/bin/enterprise-rag-core serve --port 8010\n' "$ERC_ROOT"
 fi
-# macOS parity note: the ERC MCP service (:8010) is launched by the ERC
-# repo's own launcher (RAG_CORE_EMBED_BACKEND=mlx on Apple Silicon); the .sh
-# does not manage it yet — see doc/enterprizesolutions/
+# The ERC MCP service (:8010) is launched by the ERC repo's own launcher;
+# this script does not manage it — see doc/enterprizesolutions/
 # TRD_ERC_DECOUPLING_INTEGRATION.md (follow-up).
-printf '   LLM backend:      %s (%s)%s\n' "$CYAN" "$LLM_PROVIDER" "$RESET"
-if [ "$LLM_PROVIDER" = "mlx" ]; then
-    printf '   MLX server:       %shttp://127.0.0.1:%s/v1%s\n' "$CYAN" "$MLX_PORT" "$RESET"
-fi
+printf '   LLM backend:      %s%s%s (%s)\n' "$CYAN" "$LLM_PROVIDER" "$RESET" "${LLM_MODEL:-default}"
 if [ "$WITH_STREAMLIT" = "true" ]; then
     printf '   Dashboard:        %shttp://localhost:%s%s\n' "$CYAN" "$STREAMLIT_DASH_PORT" "$RESET"
     printf '   Main Streamlit:   %shttp://localhost:%s%s\n' "$CYAN" "$STREAMLIT_MAIN_PORT" "$RESET"
 fi
 printf '\n%sQuick API Test:%s\n' "$BOLD" "$RESET"
-printf '   curl https://%s/\n' "$TUNNEL_HOST"
+if [ "$LOCAL_ONLY" = "true" ]; then
+    printf '   curl http://127.0.0.1:%s/\n' "$FASTAPI_PORT"
+else
+    printf '   curl https://%s/\n' "$TUNNEL_HOST"
+fi
 printf '\n%sLogs:%s\n' "$BOLD" "$RESET"
 printf '   Server:  %s\n' "$SERVER_LOG"
-printf '   Tunnel:  %s\n' "$TUNNEL_LOG"
-if [ "$LLM_PROVIDER" = "mlx" ]; then
-    printf '   MLX:     %s/mlx_server.log\n' "$LOG_DIR"
+if [ "$LOCAL_ONLY" != "true" ]; then
+    printf '   Tunnel:  %s\n' "$TUNNEL_LOG"
 fi
 if [ "$WITH_STREAMLIT" = "true" ]; then
     printf '   Dash:    %s/dashboard.log\n' "$LOG_DIR"
     printf '   App:     %s/streamlit.log\n' "$LOG_DIR"
 fi
 printf '\n%s%sIMPORTANT:%s\n' "$YELLOW" "$BOLD" "$RESET"
-if [ "$NAMED_TUNNEL" = "true" ]; then
+if [ "$LOCAL_ONLY" = "true" ]; then
+    printf 'Local-only validation: no public URL was created and Twilio was not touched.\n'
+elif [ "$NAMED_TUNNEL" = "true" ]; then
     printf 'Named tunnel "%s" -- URL persists across restarts.\n' "$TUNNEL_NAME"
 else
     printf '%sThis tunnel is ephemeral. If you close this terminal, the\n' "$YELLOW"

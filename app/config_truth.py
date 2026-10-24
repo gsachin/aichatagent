@@ -160,7 +160,13 @@ def is_read_anywhere(key: str, corpus: str | None = None) -> bool:
 #: PowerShell launcher reads the host/port pair. Reported separately so a real
 #: inert key is not buried among them.
 _EXTERNALLY_CONSUMED_PREFIXES = ("PYTHON", "STREAMLIT")
-_EXTERNALLY_CONSUMED = ("FASTAPI_HOST", "FASTAPI_PORT")
+_EXTERNALLY_CONSUMED = (
+    "FASTAPI_HOST",
+    "FASTAPI_PORT",
+    # app/kb_entities.py reads this through a module constant rather than a
+    # literal os.environ lookup; the entity corpus is still loaded from it.
+    "VOICE_KB_PATH",
+)
 
 
 def is_externally_consumed(key: str) -> bool:
