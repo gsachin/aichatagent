@@ -5,8 +5,8 @@ pages and PDFs. It is a **draft**: no university official has signed the facts,
 and the PG admission dates come from OCR and are marked for review.
 
 The build is deliberately outside the request path. It proves the crawl,
-extraction, parser compatibility, prompt split and voice guard. `CONTEXT_MODE=site`
-now consumes the bundle; the selective router is still pending.
+extraction, parser compatibility, prompt split, selective router and voice
+guard. `CONTEXT_MODE=site` now selects a route-specific bundle.
 
 ## Files
 
@@ -53,7 +53,7 @@ correct PG date are accepted; a wrong fee, an invented programme and a numeric
 roll number are rejected. The existing test suite runs with:
 
 ```bash
-.venv/bin/python -m pytest tests/test_dspmu_siteindex.py -q
+.venv/bin/python -m pytest tests/test_dspmu_siteindex.py tests/test_site_router.py -q
 ```
 
 ## Prompt split
@@ -62,9 +62,10 @@ roll number are rejected. The existing test suite runs with:
   order. The first two are stable; the notice tail changes daily.
 - `VOICE_KB_PATH` points at `voice_kb.md` only. `app.kb_entities` needs the full
   43-programme entity corpus; the model does not.
-- `CONTEXT_MODE=site` builds a `ContextBundle` from the prompt text plus
-  `prompt_manifest.json`: 48 fact IDs, 3 node IDs, 15 source URLs and
-  `valid_until`. `voice_handler` records that bundle as the guard evidence
+- `CONTEXT_MODE=site` uses `app/site_router.py`: the stable `core_cards.md`
+  prefix plus the exact fee fact, about/vision/glance node, syllabus links or
+  matching non-PII notices. Unknown questions fall back to the full compact
+  bundle. `voice_handler` records the selected bundle as the guard evidence
   instead of re-reading the document.
 - The build measures the **real** voice prompt through
   `build_voice_system_prompt(...)` plus the question and output reserve. It
@@ -84,6 +85,10 @@ DOC_MAX_BYTES=2000000
 DOC_MAX_TOKENS=4000
 VOICE_KB_PATH=content/dspmu/voice_kb.md
 CONTEXT_MANIFEST_PATH=content/dspmu/prompt_manifest.json
+SITE_FACTS_PATH=content/dspmu/facts.json
+SITE_NOTICES_PATH=content/dspmu/notices.jsonl
+SITE_NODES_DIR=content/dspmu/nodes
+SITE_ROUTER_MAX_NOTICES=5
 LLM_PROMPT_CACHE_KEY=dspmu-kb-v3
 COMPANY_NAME=Dr. Shyama Prasad Mukherjee University
 COMPANY_SHORT_NAME=DSPMU
@@ -117,11 +122,11 @@ nothing in this directory's configuration points at them.
 
 ## Next milestone
 
-Add the signed fact store and the deterministic router. `CONTEXT_MODE=site`
-and the bundle-based evidence reads are in place; the router still returns the
-whole compact bundle. The remaining P1 work is the PG programme list and fees,
-a PII text scan, the golden set and university sign-off, and the Hindi OCR
-quality gate.
+The deterministic router is in place for fees, programme facts, about/vision/
+glance nodes, syllabus links and matching non-PII notices; unknown questions
+still return the full compact bundle. The remaining P1 work is the signed fact
+store, the PG programme list and fees, a PII text scan, the golden set and
+university sign-off, and the Hindi OCR quality gate.
 
 This build extracts two department pages (History and the Faculty of Science)
 and lists the sitemap's department pages. It does not fetch every department

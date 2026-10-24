@@ -560,6 +560,26 @@ class Settings:
     CONTEXT_MANIFEST_PATH: str = field(
         default_factory=lambda: _env("CONTEXT_MANIFEST_PATH", "").strip()
     )
+    #: Selective router inputs (CONTEXT_MODE=site). These are read only when
+    #: the router is active; a missing file falls back to the full prompt.
+    SITE_FACTS_PATH: str = field(
+        default_factory=lambda: _env(
+            "SITE_FACTS_PATH", "content/dspmu/facts.json"
+        ).strip()
+    )
+    SITE_NOTICES_PATH: str = field(
+        default_factory=lambda: _env(
+            "SITE_NOTICES_PATH", "content/dspmu/notices.jsonl"
+        ).strip()
+    )
+    SITE_NODES_DIR: str = field(
+        default_factory=lambda: _env(
+            "SITE_NODES_DIR", "content/dspmu/nodes"
+        ).strip()
+    )
+    SITE_ROUTER_MAX_NOTICES: int = field(
+        default_factory=lambda: _env_int("SITE_ROUTER_MAX_NOTICES", 5)
+    )
     DEFAULT_LANGUAGE: str = field(
         default_factory=lambda: _env("DEFAULT_LANGUAGE", "en").strip().lower()
     )

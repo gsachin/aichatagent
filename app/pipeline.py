@@ -96,10 +96,12 @@ def build_rag_prompt_parts(transcript: str, language: str | None = None) -> tupl
     system + document prefix, so the cacheable prefix does not change with the
     language.
     """
-    from app.rag import context_for_query
+    from app.rag import bind_context_bundle, context_bundle_for_query
     from app.voice_system_prompt import build_voice_system_prompt, language_instruction
 
-    context = context_for_query(transcript)
+    bundle = context_bundle_for_query(transcript)
+    bind_context_bundle(bundle)
+    context = bundle.text
     user = f"Student's question: {transcript}"
     if language:
         user = f"{user}\n\n{language_instruction(language)}"

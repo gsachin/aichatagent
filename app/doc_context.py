@@ -274,6 +274,7 @@ def document_bundle() -> ContextBundle:
         text=text,
         fact_ids=_strings(manifest.get("fact_ids")),
         node_ids=node_ids,
+        notice_ids=_strings(manifest.get("notice_ids")),
         source_urls=_strings(manifest.get("source_urls")),
         valid_until=str(valid_until) if valid_until else None,
     )

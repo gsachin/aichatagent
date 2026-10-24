@@ -564,8 +564,8 @@ def build(
     # Parser and guard checks. This is the reason the file exists. The entity
     # corpus is voice_kb.md; the prompt/evidence corpus is document_text. A
     # claim may be grounded only if it is in the prompt; the index knows the
-    # full programme list, which is why non-top fees are refused until the
-    # router injects the specific fact.
+    # full programme list. The runtime site router injects the exact fee fact
+    # for a non-top programme before the guard judges the turn.
     from app.kb_entities import EntityIndex
     from app.voice_grounding import is_grounded, ungrounded_claims
 

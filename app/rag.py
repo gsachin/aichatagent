@@ -5,9 +5,10 @@ and no similarity gate. The configured prompt bundle (``app.doc_context``) is
 passed to OpenAI on every turn. ``CONTEXT_MODE=off`` remains as a
 test/rollback switch that sends the explicit no-context marker.
 
-``CONTEXT_MODE=site`` is the explicit seam for the future selective router.
-Until the router selects nodes, it returns the same bundle as ``doc``, so the
-prompt and the guard cannot diverge.
+``CONTEXT_MODE=site`` uses the deterministic router in
+``app.site_router``: the stable core cards plus the fee fact, page node or
+non-PII notices the query needs. An unrecognised query falls back to the full
+compact bundle, so routing can only narrow what it is confident about.
 
 The public functions (``query_rag``, ``query_rag_stream``,
 ``last_retrieved_context``) keep their names because the voice handler and the
@@ -77,9 +78,10 @@ def last_context_bundle() -> ContextBundle | None:
     """The bundle for THIS turn, or the configured bundle when none was set.
 
     The fallback keeps the guard working when a caller reaches it before
-    ``query_rag``/``query_rag_stream`` has set the per-turn value. In the
-    future selective router, the router must set the bundle before the guard;
-    until then the fallback is the same full prompt the model received.
+    ``query_rag``/``query_rag_stream`` has set the per-turn value. That
+    fallback is deliberately the full configured bundle: until a turn has
+    selected a smaller one, the safe evidence set is everything the prompt
+    corpus carries.
     """
     bundle = _LAST_BUNDLE.get()
     if bundle is not None:
@@ -94,13 +96,20 @@ def last_context_bundle() -> ContextBundle | None:
 def context_bundle_for_query(query: str = "") -> ContextBundle:
     """The bundle for one turn.
 
-    ``doc`` (default) and ``site`` — the configured prompt bundle. ``site`` is
-    explicit so the future router can replace this body with a selective
-    bundle without changing call sites.
+    ``doc`` (default) — the full configured prompt bundle.
+    ``site`` — the deterministic selective router; it falls back to the full
+    compact bundle when it has no confident route.
     ``off`` — an empty bundle (the system prompt gets the explicit marker).
     """
     if settings.CONTEXT_MODE == "off":
         return ContextBundle(text="")
+    if settings.CONTEXT_MODE == "site":
+        try:
+            from app.site_router import route_query
+
+            return route_query(query)
+        except Exception:  # noqa: BLE001 - a router fault must not drop the turn
+            logger.exception("site router failed; using the full bundle")
     if settings.CONTEXT_MODE not in ("doc", "site", ""):
         logger.warning(
             "CONTEXT_MODE=%r is not supported after RAG removal; using doc",
@@ -114,6 +123,23 @@ def context_bundle_for_query(query: str = "") -> ContextBundle:
 def context_for_query(query: str = "") -> str:
     """The context text for one turn (backward-compatible wrapper)."""
     return context_bundle_for_query(query).text
+
+
+def clear_turn_context() -> None:
+    """Drop this context's prompt/evidence (tests and worker teardown)."""
+    _LAST_BUNDLE.set(None)
+    _LAST_CONTEXT.set("")
+
+
+def bind_context_bundle(bundle: ContextBundle) -> None:
+    """Publish *bundle* as this turn's prompt and guard evidence.
+
+    The pipeline's text path builds its own prompt; without this binding the
+    guard would fall back to the full configured bundle while the model saw a
+    selective one. The two must stay the same text.
+    """
+    _LAST_BUNDLE.set(bundle)
+    _LAST_CONTEXT.set(bundle.text)
 
 
 def _temperature() -> float | None:
@@ -160,8 +186,7 @@ def query_rag(question: str, *, mode: str = "voice",
 
     bundle = context_bundle_for_query(question)
     context = bundle.text
-    _LAST_BUNDLE.set(bundle)
-    _LAST_CONTEXT.set(context)
+    bind_context_bundle(bundle)
     system = _build_system(mode, context)
 
     # The student's own record and the conversation so far belong to the turn,
@@ -219,8 +244,7 @@ async def query_rag_stream(
     context = bundle.text
     # Set on the loop so the grounding boundary sees it (the old to_thread
     # retrieval seam discarded context-var writes made in the worker).
-    _LAST_BUNDLE.set(bundle)
-    _LAST_CONTEXT.set(context)
+    bind_context_bundle(bundle)
     system = _build_system(mode, context)
     prompt = (
         f"Student's question: {question}" + _language_suffix(language)
@@ -245,10 +269,12 @@ def warmup() -> None:
         stats = document_stats()
         bundle = document_bundle()
         logger.info(
-            "Context warmup: %s — %d bytes, %d tokens%s; facts=%d nodes=%d sources=%d",
+            "Context warmup: %s — %d bytes, %d tokens%s; "
+            "facts=%d nodes=%d notices=%d sources=%d",
             source_label(), stats.bytes_read, stats.tokens,
             " [TRUNCATED]" if (stats.truncated_bytes or stats.truncated_tokens) else "",
-            len(bundle.fact_ids), len(bundle.node_ids), len(bundle.source_urls),
+            len(bundle.fact_ids), len(bundle.node_ids), len(bundle.notice_ids),
+            len(bundle.source_urls),
         )
     except Exception:
         logger.exception("Context warmup failed")

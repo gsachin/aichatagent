@@ -3,8 +3,8 @@
 The prompt split gives the model a compact corpus and the guard a full entity
 corpus. These tests pin the seam that keeps the two from drifting: the bundle
 text is the prompt text, the sidecar metadata is attached only when it matches
-the configured DOC_PATHS, and site mode and doc mode share the same bundle
-until the selective router replaces it.
+the configured DOC_PATHS, and site mode routes to a smaller bundle while doc
+mode keeps the full compact prompt.
 """
 
 from __future__ import annotations
@@ -23,8 +23,9 @@ PROMPT_PATHS = (
 )
 MANIFEST = "content/dspmu/prompt_manifest.json"
 
-from app import doc_context  # noqa: E402
+from app import doc_context, site_router  # noqa: E402
 from app.rag import (  # noqa: E402
+    clear_turn_context,
     context_bundle_for_query,
     context_for_query,
     last_context_bundle,
@@ -36,8 +37,12 @@ pytestmark = pytest.mark.usefixtures("_clear_doc_cache")
 @pytest.fixture(autouse=True)
 def _clear_doc_cache():
     doc_context.clear_cache()
+    site_router.clear_cache()
+    clear_turn_context()
     yield
     doc_context.clear_cache()
+    site_router.clear_cache()
+    clear_turn_context()
 
 
 def _require() -> None:
@@ -60,6 +65,7 @@ def _activate(override_settings, mode: str = "site") -> None:
         CONTEXT_MANIFEST_PATH=MANIFEST,
     )
     doc_context.clear_cache()
+    site_router.clear_cache()
 
 
 def test_document_bundle_reads_prompt_manifest(override_settings):
@@ -70,20 +76,40 @@ def test_document_bundle_reads_prompt_manifest(override_settings):
     assert bundle.node_ids == ("core_cards", "site_map", "recent_notices")
     assert "fee.ug.political-science.2026.gen" in bundle.fact_ids
     assert bundle.source_urls
+    assert bundle.notice_ids
     assert bundle.valid_until == "2027-06-30"
 
 
-def test_site_and_doc_modes_share_the_same_bundle_text(override_settings):
+def test_site_mode_selects_a_smaller_bundle_than_doc(override_settings):
     _activate(override_settings, "site")
-    site = context_bundle_for_query("What is the fee?")
-    site_text = context_for_query("What is the fee?")
+    question = "What is the annual fee for BA Political Science?"
+    site = context_bundle_for_query(question)
+    site_text = context_for_query(question)
 
     _activate(override_settings, "doc")
-    doc = context_bundle_for_query("What is the fee?")
+    doc = context_bundle_for_query(question)
 
-    assert site.text == doc.text == site_text
+    assert site.text == site_text
+    assert site.text != doc.text
+    assert len(site.text) < len(doc.text)
+    assert "Programme fee fact" in site.text
+    assert "fee.ug.political-science.2026.gen" in site.fact_ids
+    assert site.fact_ids != doc.fact_ids
+    assert site.node_ids == ("core_cards",)
+
+
+def test_site_mode_falls_back_to_the_full_bundle_for_an_unknown_query(
+    override_settings,
+):
+    _activate(override_settings, "site")
+    site = context_bundle_for_query("hello there")
+    _activate(override_settings, "doc")
+    doc = context_bundle_for_query("hello there")
+
+    assert site.text == doc.text
     assert site.fact_ids == doc.fact_ids
     assert site.node_ids == doc.node_ids
+    assert site.notice_ids == doc.notice_ids
 
 
 def test_off_mode_returns_an_empty_bundle(override_settings):
@@ -119,6 +145,7 @@ def test_a_stale_manifest_does_not_attach_provenance_to_other_text(
     assert bundle.text == "A different prompt."
     assert bundle.fact_ids == ()
     assert bundle.node_ids == ()
+    assert bundle.notice_ids == ()
     assert bundle.valid_until is None
 
 
