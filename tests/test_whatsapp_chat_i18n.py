@@ -248,6 +248,82 @@ def test_english_docs_prompt_is_byte_identical(harness):
     assert reply == expected
 
 
+def test_hindi_intent_starts_the_document_flow(harness):
+    """A natural Hindi sentence must reach the flow, not the knowledge base."""
+    session, lead, calls = harness
+    _use(session, "hi")
+    lead.update(name="Asha", email="asha@example.com")
+
+    reply, _bg = send("मैं एम.कॉम में एडमिशन लेना चाहता हूँ")
+
+    expected = whatsapp_text(
+        "admission_docs_prompt",
+        "hi",
+        "Great! To process your admission for *{program}*, please upload the "
+        "following documents:\n\n📄 Transcript / Mark Sheet\n🆔 ID Proof "
+        "(Passport, Aadhaar, or Driver's License)\n📝 Any additional "
+        "certificates (optional)\n\nJust send clear photos or PDFs right here "
+        "in WhatsApp. Type 'done' when you've sent everything.",
+        program="M.Com",
+    )
+    assert reply == m._strip_markdown(expected)
+    assert lead["program_interest"] == "M.Com"
+    assert calls["rag"] == []
+
+
+def test_gujarati_intent_starts_the_document_flow(harness):
+    session, lead, calls = harness
+    _use(session, "gu")
+    lead.update(name="Asha", email="asha@example.com")
+
+    reply, _bg = send("મને એમ.કોમમાં એડમિશન લેવું છે")
+
+    expected = whatsapp_text(
+        "admission_docs_prompt",
+        "gu",
+        "Great! To process your admission for *{program}*, please upload the "
+        "following documents:\n\n📄 Transcript / Mark Sheet\n🆔 ID Proof "
+        "(Passport, Aadhaar, or Driver's License)\n📝 Any additional "
+        "certificates (optional)\n\nJust send clear photos or PDFs right here "
+        "in WhatsApp. Type 'done' when you've sent everything.",
+        program="M.Com",
+    )
+    assert reply == m._strip_markdown(expected)
+    assert calls["rag"] == []
+
+
+def test_hindi_process_question_stays_a_knowledge_question(harness, monkeypatch):
+    """``प्रवेश प्रक्रिया`` is a question, not intent to start the flow."""
+    session, lead, calls = harness
+    _use(session, "hi")
+    lead.update(name="Asha", email="asha@example.com")
+
+    import app.llm_backend as backend
+
+    monkeypatch.setattr(backend, "chat", lambda **kwargs: "no")
+
+    question = "मैं प्रवेश प्रक्रिया जानना चाहता हूँ"
+    reply, _bg = send(question)
+
+    assert calls["rag"] and calls["rag"][0]["question"] == question
+    assert "[RAG:hi]" in reply
+
+
+def test_hindi_done_reply_triggers_offer_generation(harness, monkeypatch):
+    session, lead, _calls = harness
+    _use(session, "hi")
+    lead.update(name="Asha", email="asha@example.com", program_interest="M.Com")
+
+    async def fake_offer(lead_id, lead_name, conversation_id="", *, language=""):
+        return f"[OFFER:{language}]"
+
+    monkeypatch.setattr(m, "_whatsapp_offer_on_done", fake_offer)
+
+    reply, _bg = send("हो गया")
+
+    assert reply == "[OFFER:hi]"
+
+
 def test_unknown_language_falls_back_to_english(harness):
     session, _lead, _calls = harness
     _use(session, "de")

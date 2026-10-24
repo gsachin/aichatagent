@@ -72,9 +72,12 @@ from fastapi.staticfiles import StaticFiles
 from app import audio_format
 from app.config import settings
 from app.languages import (
+    admission_intent_phrases,
     configured_foreign_languages,
+    is_done_reply,
     is_supported_language,
     language_from_command,
+    looks_like_question,
     normalize_language_code,
     resolve_answer_language,
 )
@@ -2547,6 +2550,56 @@ async def _log_whatsapp_conversation(
         logger.exception("Failed to log WhatsApp conversation (non-fatal)")
 
 
+async def _link_crm_and_log(
+    *,
+    lead: dict | None,
+    phone_number: str,
+    conversation_id: str,
+    transcript: str,
+    language: str,
+    language_source: str,
+    email: str,
+    name: str,
+    course: str,
+) -> None:
+    """Link this student to the CRM, then log the turn with the userId.
+
+    Runs as a BackgroundTask, after the TwiML response has gone back to
+    Twilio. The link used to be awaited inline and cost 0.9-1.9 s on the turns
+    that created or updated a CRM record — time the WhatsApp student spent
+    waiting for an answer that does not depend on it. The conversation row is
+    the only consumer of the userId, so both now run together once the reply is
+    on its way. A failure still logs the turn, just without the link.
+    """
+    crm_user_id = ""
+    try:
+        from app.crm import sync as crm_sync
+
+        crm_user_id = await crm_sync.link_conversation(
+            channel="whatsapp",
+            conversation_id=conversation_id,
+            lead=lead,
+            phone_number=phone_number,
+            email=email,
+            name=name,
+            course=course,
+            # The registry key, verbatim — the WhatsApp session is registered
+            # under the raw `From` ("whatsapp:+1415..."), not the bare number.
+            session_key=phone_number,
+        ) or ""
+    except Exception:
+        logger.exception("CRM link failed (non-fatal)")
+
+    await _log_whatsapp_conversation(
+        phone_number=phone_number,
+        transcript=transcript,
+        conversation_id=conversation_id,
+        crm_user_id=crm_user_id,
+        language=language,
+        language_source=language_source,
+    )
+
+
 # ── HTTP: Twilio WhatsApp webhook ─────────────────────────────────────
 
 WHATSAPP_TWIML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -2974,16 +3027,28 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
     Uses keyword fast-path first (free), then falls back to LLM for
     semantic matching.  Catches all variations like:
     "i am ready to take admission", "let's go ahead", "sign me up",
-    "yes apply now", "proceed with enrollment", etc.
+    "yes apply now", "proceed with enrollment", etc. Localized phrases
+    (Hindi, Gujarati, Spanish, French, Italian, Japanese, Portuguese,
+    Chinese) hit the same fast path, so a natural non-English request starts
+    the document flow without a model call.
     """
+    # Curly apostrophes are common on mobile keyboards; the French phrases are
+    # written with the straight form.
+    text = (msg_lower or "").lower().replace("’", "'").replace("‘", "'")
+
     # ── Extract program from message ───────────────────────────────
-    detected_program = _detect_meridian_program(msg_lower)
+    detected_program = _detect_meridian_program(text)
 
     # ── Fast path: strong admission keywords ────────────────────────
     # Misspellings are listed explicitly because they are the common case in
     # the wild, and a miss sends the turn to the knowledge base instead of the
     # admission flow: "I would like to take admision on M.Tech" was answered
     # with eligibility prose and never registered the program at all.
+    #
+    # The localized phrases are checked in every language, not just the
+    # thread's: a student may type Hindi in an English thread (and vice versa),
+    # and the scripts are distinct enough that the lists cannot collide.
+    localized_strong, localized_medium = admission_intent_phrases()
     strong = [
         "i want to take admission",
         "i want admission",
@@ -2999,9 +3064,10 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
         "i want to enroll",
         "ready to enroll",
         "sign me up",
+        *localized_strong,
     ]
     for kw in strong:
-        if kw in msg_lower:
+        if kw in text:
             logger.info(f"Admission intent: strong keyword '{kw}'")
             return True, detected_program
 
@@ -3011,12 +3077,22 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
         "i am ready", "let's proceed", "go ahead", "i'm interested",
         "join the program", "confirm my", "i want to study",
         "proceed with", "i'd like to apply",
+        *localized_medium,
     ]
-    has_medium = any(kw in msg_lower for kw in medium)
+    has_medium = any(kw in text for kw in medium)
     if not has_medium:
         return False, ""
 
+    # A question is a question. "What are the requirements to apply for MBA?"
+    # mentions a medium keyword but asks for information — the classifier's own
+    # prompt says that is not intent. Skipping it here removes a blocking model
+    # call (~1.2-1.6 s measured) from every such turn.
+    if looks_like_question(text):
+        logger.info("Admission intent: question shape — skipping the classifier")
+        return False, ""
+
     # LLM confirmation
+    _classifier_started = _time.perf_counter()
     try:
         from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
@@ -3040,13 +3116,24 @@ async def _detect_admission_intent_whatsapp(msg_lower: str) -> tuple[bool, str]:
                     "'let's go ahead', 'i want to join', 'sign me up', 'yes apply now', "
                     "'proceed with enrollment', 'i'd like to study here', 'confirm my seat', "
                     "'let's do it', 'i'm interested in joining', etc.\n\n"
+                    "The message may be written in English, Hindi, Gujarati, Spanish, "
+                    "French, Italian, Japanese, Portuguese or Chinese; judge its "
+                    "meaning, not its language.\n\n"
+                    "A request for INFORMATION about admission (fees, eligibility, "
+                    "documents, deadlines, 'how does admission work', 'tell me about "
+                    "the admission process') is NOT intent to proceed. Answer 'no'.\n\n"
                     "Answer ONLY 'yes' or 'no'.\n\n"
-                    f"User message:\n{msg_lower[-800:]}"
+                    f"User message:\n{text[-800:]}"
                 ),
             }],
             preferred=default_model(["qwen2.5:7b-instruct-q3_K_M", "qwen2.5:7b"]),
             num_ctx=small_task_num_ctx(),
         )).strip().lower()
+        logger.info(
+            "Admission intent: LLM check %.0f ms -> %s",
+            (_time.perf_counter() - _classifier_started) * 1000,
+            raw[:20],
+        )
         if raw.startswith("yes"):
             logger.info("Admission intent: LLM confirmed")
             return True, detected_program
@@ -3098,6 +3185,23 @@ async def _publish_offer_response(lead_id: str, status: str) -> None:
         logger.exception("Could not publish the offer response to the CRM")
 
 
+@app.get("/twilio/whatsapp")
+async def twilio_whatsapp_health():
+    """Reachability check for the tunnel in front of the WhatsApp webhook.
+
+    Twilio POSTs to this path; a browser or the demo scripts can GET it to
+    confirm that the hostname currently registered with the WhatsApp Sandbox
+    actually reaches this process. A stale tunnel host is the reason the first
+    "hi" after a restart is lost (Twilio error 11210), so this makes that
+    failure checkable without sending a message.
+    """
+    return HTMLResponse(
+        "WhatsApp webhook is reachable. Twilio must POST to "
+        "https://<this-host>/twilio/whatsapp.",
+        status_code=200,
+    )
+
+
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(
     background_tasks: BackgroundTasks,
@@ -3121,6 +3225,7 @@ async def twilio_whatsapp_webhook(
     Configure this URL in Twilio Console:
         https://<your-tunnel>/twilio/whatsapp
     """
+    _turn_started = _time.perf_counter()
 
     # ── Resolve the conversation this message belongs to ─────────
     # WhatsApp has no session object and no end event — every message is an
@@ -3144,6 +3249,16 @@ async def twilio_whatsapp_webhook(
         conversation_id = wa_session.conversation_id
     except Exception:
         logger.exception("WhatsApp conversation session resolution failed (non-fatal)")
+        # A local session keeps the language menu and the held-message replay
+        # working even when the conversation store is unavailable; only the
+        # cross-restart identity is lost.
+        try:
+            from app.crm import session as crm_session
+
+            wa_session = crm_session.start("whatsapp", From, phone_number=From)
+            conversation_id = wa_session.conversation_id
+        except Exception:
+            logger.exception("Could not create a local WhatsApp session")
 
     # The early media/empty acknowledgements return before the full answer
     # language is resolved. Use the guarded form field / saved session language
@@ -3240,6 +3355,9 @@ async def twilio_whatsapp_webhook(
         if wa_session is not None:
             wa_session.language = _command
             wa_session.language_source = "selected"
+            # An explicit command answers the language question, so the menu
+            # is not offered again in this conversation.
+            wa_session.language_menu_done = True
         _language_source = "selected"
         from app.localized_text import WHATSAPP_LANGUAGE_CONFIRMATIONS
 
@@ -3270,11 +3388,23 @@ async def twilio_whatsapp_webhook(
             return Response(content=twiml, media_type="application/xml")
 
     if not _replayed_from_menu and Body.strip().lower() in ("/language", "/languages"):
-        from app.localized_text import WHATSAPP_LANGUAGE_HELP
-
-        twiml = WHATSAPP_TWIML_TEMPLATE.format(
-            answer=escape(WHATSAPP_LANGUAGE_HELP)
+        from app.languages import whatsapp_language_menu_options
+        from app.localized_text import (
+            WHATSAPP_LANGUAGE_HELP,
+            whatsapp_language_menu,
         )
+
+        # With the menu feature on, /language shows the numbered menu itself —
+        # the same list the conversation starts with — and keeps the command
+        # help underneath. That makes the menu requestable at any time without
+        # touching the remembered language.
+        language_reply = WHATSAPP_LANGUAGE_HELP
+        if settings.WHATSAPP_LANGUAGE_MENU:
+            language_reply = (
+                f"{whatsapp_language_menu(whatsapp_language_menu_options())}"
+                f"\n\n{WHATSAPP_LANGUAGE_HELP}"
+            )
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(language_reply))
         return Response(content=twiml, media_type="application/xml")
 
     # ── Lead info collection — check if lead has name/email ─────
@@ -3288,52 +3418,36 @@ async def twilio_whatsapp_webhook(
     lead_email = (lead or {}).get("email", "")
     lead_program = (lead or {}).get("program_interest", "")
 
-    # The saved language may be older than the in-process/DB-resumed session
-    # (the 6 h idle window): the lead row derives it from the latest non-empty
-    # conversation, so a returning number resumes in its chosen language even
-    # after the window. With the menu feature off, today's session-only
-    # precedence is preserved.
+    # The lead row's saved language is the fallback for a new conversation:
+    # the menu is offered first, and a student who ignores it has the held
+    # message answered in the language they chose last time. The conversation
+    # row is no longer consulted to decide whether to ask — the menu is offered
+    # once per conversation regardless (see `language_menu_done`), and the
+    # saved language only makes ignoring it safe.
     _lead_language = normalize_language_code((lead or {}).get("language") or "")
-    if (
-        settings.WHATSAPP_LANGUAGE_MENU
-        and not _language_source
-        and (_thread_language or _lead_language)
-    ):
-        # Legacy rows predate explicit-choice tracking and carry language="en"
-        # from the default. Read the latest row's source (no time window) so a
-        # language chosen once is not asked again after the idle window, while
-        # an old implicit English still gets the one-time menu.
-        from app.leads.models import get_recent_conversation_for_phone
-
-        _stored_language = await get_recent_conversation_for_phone(
-            From, within_seconds=None
-        ) or {}
-        _language_source = (
-            str(_stored_language.get("language_source") or "").strip().lower()
-        )
-        if not _thread_language and _lead_language:
-            _thread_language = _lead_language
-            if wa_session is not None:
-                wa_session.language = _lead_language
+    if not _thread_language and _lead_language:
+        _thread_language = _lead_language
         if wa_session is not None:
-            wa_session.language_source = _language_source
+            wa_session.language = _lead_language
 
-    _saved_language_explicit = bool(_thread_language) and _language_source in (
-        "selected", "command",
-    )
-
-    # ── WhatsApp first-contact language menu ────────────────────
-    # No explicit choice yet: hold this first message, ask which language to
-    # continue in, and replay the message through the state machine once the
-    # choice arrives. A legacy saved language (typically the implicit English
-    # default) is still worth asking about once. The branch is after the
-    # command/help paths (an explicit language action wins) and before every
-    # name/question branch (so the held text can never be stored as a name).
+    # ── WhatsApp conversation-start language menu ───────────────
+    # Hold this first message, ask which language to continue in, and replay
+    # the message through the state machine once the choice arrives. The menu
+    # is offered once at the start of every conversation — including a number
+    # whose language is already remembered — because the demo's conversations
+    # start on every restart. Remembering is preserved in two ways: the saved
+    # language answers the held message if the student ignores the menu, and
+    # it is what a returning conversation continues in without asking. Within
+    # a conversation an explicit choice (menu or /command) sets
+    # `language_menu_done`, so "hi" later does not re-open the menu.
+    # The branch is after the command/help paths (an explicit language action
+    # wins) and before every name/question branch (so the held text can never
+    # be stored as a name).
     if (
         settings.WHATSAPP_LANGUAGE_MENU
         and not _replayed_from_menu
-        and not _saved_language_explicit
         and wa_session is not None
+        and not wa_session.language_menu_done
     ):
         from app.languages import (
             language_from_menu_reply,
@@ -3354,6 +3468,7 @@ async def twilio_whatsapp_webhook(
             _menu_selection = Body.strip()
             wa_session.language = _choice
             wa_session.language_source = "selected"
+            wa_session.language_menu_done = True
             _language_source = "selected"
             _thread_language = _choice
             if _pending_language_text:
@@ -3382,7 +3497,7 @@ async def twilio_whatsapp_webhook(
             # Not a choice: hold the first message and ask. A reply that is
             # clearly a new question replaces the held text; a stray token
             # does not.
-            _is_question = "?" in Body or any(
+            _is_question = looks_like_question(Body) or any(
                 k in Body.lower() for k in _KB_QUESTION_KEYWORDS
             )
             if not _pending_language_text or _is_question:
@@ -3399,6 +3514,9 @@ async def twilio_whatsapp_webhook(
                 _thread_language = _fallback_language
                 wa_session.language = _fallback_language
                 wa_session.language_source = ""
+                # The menu was asked and deliberately skipped: do not open it
+                # again on the next message of this conversation.
+                wa_session.language_menu_done = True
                 _language_source = ""
                 Body = _pending_language_text or Body
                 _pending_language_text = ""
@@ -3410,7 +3528,8 @@ async def twilio_whatsapp_webhook(
                 menu = whatsapp_language_menu(_menu_options)
                 logger.info(
                     f"WhatsApp language menu from {From} "
-                    f"(prompt {_prompts}, options {len(_menu_options)})"
+                    f"(prompt {_prompts}, options {len(_menu_options)}, "
+                    f"{(_time.perf_counter() - _turn_started) * 1000:.0f} ms)"
                 )
                 twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(menu))
                 return Response(content=twiml, media_type="application/xml")
@@ -3531,7 +3650,7 @@ async def twilio_whatsapp_webhook(
                 "Hello! 👋 I'm the Meridian University admissions assistant. "
                 "What's your name?",
             )
-    elif "?" in Body or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
+    elif looks_like_question(Body) or any(k in msg_lower for k in _KB_QUESTION_KEYWORDS):
         answer = await _chat(Body)
     # ── Replies to a question the bot actually asked (see `awaiting`) ────
     elif awaiting == "name":
@@ -3630,7 +3749,7 @@ async def twilio_whatsapp_webhook(
         not lead_name
         and is_name_like
         and not has_email
-        and msg_lower not in ("done", "finish", "finished")
+        and not is_done_reply(msg_lower)
         # A short message that names a program is a program, not a person —
         # "M.Tech" as a first message used to be stored as the student's name.
         and not _detect_meridian_program(msg_lower)
@@ -3774,7 +3893,7 @@ async def twilio_whatsapp_webhook(
                 "No problem! What would you like to update? Your name, email, "
                 "or program interest?",
             )
-        elif msg_lower in ("done", "finish", "finished"):
+        elif is_done_reply(msg_lower):
             # All documents uploaded — generate the offer letter now.
             if not lead_program:
                 awaiting_next = "program"
@@ -3833,48 +3952,32 @@ async def twilio_whatsapp_webhook(
     # WhatsApp renders plain text — strip LLM Markdown before sending.
     answer = _strip_markdown(answer)
 
-    # ── CRM: make sure this student exists in Salesforce ─────────
-    # Runs once per turn and is cheap when it has nothing to do — a lead that is
-    # already linked returns without touching the network. It declines until the
-    # identity is complete enough to be safe (a name is required: the API raises
-    # IndexError on an empty one, R17) and tries again on the next message.
+    # ── CRM link + conversation log (background) ─────────────────
+    # Both happen after the reply is returned. The link declines until the
+    # identity is complete enough to be safe (a name is required: the API
+    # raises IndexError on an empty one, R17) and tries again on the next
+    # message. Note the local name/email/program are passed explicitly rather
+    # than read from `lead`, which was fetched before the state machine updated
+    # the row.
     #
-    # Note the local name/email/program are passed explicitly rather than read
-    # from `lead`, which was fetched before the state machine updated the row.
-    crm_user_id = ""
-    try:
-        from app.crm import sync as crm_sync
-
-        crm_user_id = await crm_sync.link_conversation(
-            channel="whatsapp",
-            conversation_id=conversation_id,
-            lead=lead,
-            phone_number=From,
-            email=lead_email,
-            name=lead_name,
-            course=lead_program,
-            # The registry key, verbatim — the WhatsApp session is registered
-            # under the raw `From` ("whatsapp:+1415..."), not the bare number.
-            session_key=From,
-        ) or ""
-    except Exception:
-        logger.exception("CRM link failed (non-fatal)")
-
-    # Log conversation. When the turn replayed a question held by the language
-    # menu, keep both the question and the choice in the transcript.
+    # When the turn replayed a question held by the language menu, keep both
+    # the question and the choice in the transcript.
     _logged_body = (
         f"{Body}\nUser: {_menu_selection}"
         if _menu_selection and _menu_selection != Body.strip()
         else Body
     )
     background_tasks.add_task(
-        _log_whatsapp_conversation,
+        _link_crm_and_log,
+        lead=lead,
         phone_number=From,
-        transcript=f"User: {_logged_body}\nAssistant: {answer}",
         conversation_id=conversation_id,
-        crm_user_id=crm_user_id,
+        transcript=f"User: {_logged_body}\nAssistant: {answer}",
         language=_answer_language,
         language_source=_language_source,
+        email=lead_email,
+        name=lead_name,
+        course=lead_program,
     )
 
     # Escape exactly once, here at the XML boundary and after the Markdown
@@ -3883,7 +3986,19 @@ async def twilio_whatsapp_webhook(
     # document raw: a student called "Tom & Jerry" produced malformed TwiML and
     # Twilio rejected the whole reply.
     twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
-    logger.info(f"WhatsApp response ({len(answer)} chars): {answer[:80]}...")
+    _elapsed_ms = (_time.perf_counter() - _turn_started) * 1000
+    logger.info(
+        f"WhatsApp response ({len(answer)} chars, {_elapsed_ms:.0f} ms): "
+        f"{answer[:80]}..."
+    )
+    if _elapsed_ms >= 5000:
+        # Twilio gives the webhook 15 s; a turn this slow is one provider
+        # hiccup away from being dropped (error 11200). Name it loudly so the
+        # slow leg is visible in logs/voice_assistant.log.
+        logger.warning(
+            f"WhatsApp slow turn from {From}: {_elapsed_ms:.0f} ms "
+            f"(LLM + retrieval; CRM link now runs after the response)"
+        )
     return Response(content=twiml, media_type="application/xml")
 
 

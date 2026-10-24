@@ -206,6 +206,12 @@ if ($Restore) {
 
 if ($Status) {
     Show-TwilioNumber $number "Current Twilio values"
+    $waCheck = Join-Path $DemoRoot 'check_whatsapp_webhook.py'
+    $venvPy = Join-Path $DemoRoot '.venv\Scripts\python.exe'
+    if ((Test-Path -LiteralPath $waCheck) -and (Test-Path -LiteralPath $venvPy)) {
+        Write-Host ""
+        & $venvPy $waCheck --minutes 60
+    }
     if (Test-Path -LiteralPath $backupPath) {
         $backup = Get-Content -LiteralPath $backupPath -Raw | ConvertFrom-Json
         Write-Host ""

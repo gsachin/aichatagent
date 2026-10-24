@@ -73,6 +73,7 @@ DEMO_TEMPLATES: dict[str, str] = {
     "scripts/demo/demo_stop.ps1": "demo_stop.ps1",
     "scripts/demo/demo_seed.ps1": "demo_seed.ps1",
     "scripts/demo/demo_twilio.ps1": "demo_twilio.ps1",
+    "scripts/demo/check_whatsapp_webhook.py": "check_whatsapp_webhook.py",
     "scripts/demo/env.demo.example": "env.demo.example",
     "scripts/demo/README_DEMO.md": "README_DEMO.md",
     "scripts/demo/gitignore.demo": ".gitignore",

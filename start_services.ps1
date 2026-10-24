@@ -842,6 +842,16 @@ if ($SkipTwilio) {
     }
 }
 
+# ==== Step 9b: WhatsApp Sandbox webhook check ============================
+# The Sandbox URL is console-only, so a restarted tunnel silently leaves it
+# pointing at a dead host (Twilio 11210; the first message looks lost). Show
+# the URL to set and any recent webhook failures before the demo starts.
+$WaCheck = Join-Path $ProjectRoot "scripts\demo\check_whatsapp_webhook.py"
+if (Test-Path $WaCheck) {
+    Write-Step "Step 9b: WhatsApp Sandbox webhook check"
+    & $PythonExe $WaCheck --minutes 60
+}
+
 # ==== Step 10: Verify URLs ================================================
 Write-Step "Step 10: Verifying URLs"
 

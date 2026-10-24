@@ -95,13 +95,21 @@ class ConversationSession:
     # chose it (WhatsApp menu or command); empty means it is a legacy/default
     # value. Restored with the language so an explicit choice is not re-asked.
     language_source: str = ""
-    # WhatsApp first-contact menu state. The first message is held here while
-    # the student picks a language, then replayed through the normal state
-    # machine in that language. Both fields are process-local and deliberately
-    # not persisted: a restart loses only the held message, and a valid menu
-    # reply is still recognized by its content.
+    # WhatsApp language-menu state. The first message is held here while the
+    # student picks a language, then replayed through the normal state machine
+    # in that language. Both fields are process-local and deliberately not
+    # persisted: a restart loses only the held message, and a valid menu reply
+    # is still recognized by its content.
     pending_language_text: str = ""
     language_menu_prompts: int = 0
+    # Has the menu been answered (or deliberately skipped by the two-invalid-
+    # replies fallback) in THIS process? False on every session creation,
+    # including one resumed from the database after a restart — so the menu is
+    # offered once at the start of each WhatsApp conversation while the saved
+    # language still answers the held message. It is set on a successful
+    # choice, a language command, or the fallback, and is never re-asked for
+    # the life of the session.
+    language_menu_done: bool = False
 
     def touch(self) -> None:
         """Mark activity now — resets the idle window for channels without an end event."""

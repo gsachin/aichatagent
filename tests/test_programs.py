@@ -49,6 +49,14 @@ KB_PATH = (
         ("i want m.com", "M.Com"),
         ("i want to study bba", "BBA"),
         ("b.com admission", "B.Com"),
+        # Devanagari / Gujarati spellings (WhatsApp multilingual flow).
+        ("मैं एम.कॉम में एडमिशन लेना चाहता हूँ", "M.Com"),
+        ("મને એમ.કોમમાં એડમિશન લેવું છે", "M.Com"),
+        ("बी.टेक कंप्यूटर साइंस", "B.Tech Computer Science"),
+        ("એમ.ટેક", "M.Tech"),
+        ("मुझे बी.एससी चाहिए", "B.Sc"),
+        ("મને બી.એસસી જોઈએ છે", "B.Sc"),
+        ("एमबीए", "MBA"),
     ],
 )
 def test_detects_every_spelling(text, expected):
@@ -65,6 +73,8 @@ def test_detects_every_spelling(text, expected):
         "master of science is not offered",
         "i am a bachelor of arts graduate",
         "tell me about the campus",
+        "मैं मुंबई से हूँ",
+        "મુંબઈ શહેર છે",
     ],
 )
 def test_no_false_positives(text):
@@ -81,6 +91,9 @@ def test_no_false_positives(text):
         "computer science",
         "i want m.tech",
         "i want to take admission in mtech",
+        "एम.कॉम",
+        "मुझे एम.कॉम चाहिए",
+        "મને એમ.કોમ જોઈએ છે",
     ],
 )
 def test_a_choice_is_recognised(text):
@@ -98,6 +111,8 @@ def test_a_choice_is_recognised(text):
         "mtech hard",
         "mba fees",
         "tell me about mba",
+        "एम.कॉम के बारे में बताइए",
+        "એમ.કોમ કેવું છે",
     ],
 )
 def test_a_mention_is_not_a_choice(text):

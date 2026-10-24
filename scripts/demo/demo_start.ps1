@@ -275,6 +275,23 @@ try {
             Write-Warn "The demo is still running. Run .\demo_twilio.ps1 -Enable -TunnelUrl $tunnelHost manually."
         }
 
+        # The WhatsApp Sandbox webhook is manual, so a restart leaves it on the
+        # previous tunnel host until someone fixes it — the first inbound
+        # message then dies with Twilio 11210 and looks like "hi did nothing".
+        # Check it before the demo rather than after.
+        $waCheck = Join-Path $DemoRoot 'check_whatsapp_webhook.py'
+        if (Test-Path -LiteralPath $waCheck) {
+            Write-Step "WhatsApp Sandbox webhook check"
+            try {
+                & $VenvPy $waCheck --minutes 60
+            } catch {
+                Write-Warn "WhatsApp webhook check could not run: $($_.Exception.Message)"
+            }
+            if ($LASTEXITCODE -eq 2) {
+                Write-Warn "Repoint the WhatsApp Sandbox webhook to the URL above before demoing."
+            }
+        }
+
         Write-Host ""
         Write-Host "WHATSAPP SANDBOX - set 'When a message comes in' to:" -ForegroundColor Yellow
         Write-Host "  https://$tunnelHost/twilio/whatsapp  (HTTP POST)" -ForegroundColor Yellow

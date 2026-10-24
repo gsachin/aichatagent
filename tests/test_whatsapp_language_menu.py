@@ -1,8 +1,10 @@
-"""WhatsApp first-contact language menu.
+"""WhatsApp conversation-start language menu.
 
-A number with no saved language is asked which language to continue in before
-its first message is interpreted. The held message is replayed through the
-normal state machine once a choice arrives; returning numbers skip the menu.
+Every new WhatsApp conversation opens with the numbered language menu, even
+when the number has a saved language — the demo starts a new conversation on
+every restart, and the operator needs the menu each time. Remembering is kept:
+the saved language answers the held message if the menu is ignored, and an
+explicit choice inside a conversation suppresses the menu for the rest of it.
 """
 
 from __future__ import annotations
@@ -217,10 +219,12 @@ def test_command_while_pending_replays_the_question(harness):
     assert bg.tasks[0].kwargs["language_source"] == "selected"
 
 
-def test_explicitly_selected_session_skips_the_menu(harness):
+def test_explicitly_selected_conversation_skips_the_menu(harness):
+    """Within a conversation, an answered menu is not reopened by a later text."""
     session, _lead, calls = harness
     session.language = "fr"
     session.language_source = "selected"
+    session.language_menu_done = True
 
     reply, _bg = send("What are the fees?")
 
@@ -228,16 +232,39 @@ def test_explicitly_selected_session_skips_the_menu(harness):
     assert calls["rag"][0]["language"] == "fr"
 
 
-def test_explicit_saved_language_skips_the_menu(harness):
-    """A language chosen once stays chosen, even after the idle window."""
+def test_saved_language_is_offered_the_menu_and_answers_if_it_is_ignored(harness):
+    """A new conversation asks again; remembering is the fallback, not a veto.
+
+    The demo restarts between conversations, so a returning number must still
+    see the menu. If the student ignores it twice, the held question is
+    answered in the language they chose last time.
+    """
     _session, lead, calls = harness
     lead["language"] = "gu"
     calls["stored"] = {"language": "gu", "language_source": "selected"}
 
-    reply, _bg = send("What are the fees?")
+    menu, _bg = send("What are the fees?")
+    assert "Please choose the language" in menu
+
+    send("xyz")
+    reply, _bg = send("abc")
 
     assert "Please choose the language" not in reply
-    assert calls["rag"][0]["language"] == "gu"
+    assert calls["rag"][0]["language"] == "gu", "saved language is the fallback"
+    assert calls["rag"][0]["question"] == "What are the fees?"
+
+
+def test_menu_is_not_reopened_after_a_choice_in_the_same_conversation(harness):
+    session, _lead, calls = harness
+
+    send("What are the fees?")
+    send("3")
+
+    reply, _bg = send("hi")
+
+    assert "Please choose the language" not in reply
+    assert session.language == "gu"
+    assert "નમસ્તે" in reply
 
 
 def test_legacy_saved_language_is_asked_once(harness):
@@ -336,10 +363,12 @@ def test_flag_off_keeps_the_old_first_message_flow(
     assert "What's your name?" in reply
 
 
-def test_help_lists_hindi_and_gujarati(harness):
+def test_language_command_shows_the_menu_and_the_help(harness):
     _session, _lead, _calls = harness
 
     reply, _bg = send("/language")
 
+    assert "Please choose the language" in reply
+    assert "9. 中文 (Chinese)" in reply
     assert "Hindi or /hi" in reply
     assert "Gujarati or /gu" in reply

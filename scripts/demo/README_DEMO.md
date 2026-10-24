@@ -158,6 +158,16 @@ After the demo, set it back to the development tunnel URL.
 `demo_stop.ps1` prints the restore URL. Dev and demo cannot both receive
 WhatsApp messages at the same time.
 
+`demo_start.ps1 -Live` runs `check_whatsapp_webhook.py` after the tunnel comes
+up. It prints the URL to register, checks that the host reaches the app, and
+lists recent inbound messages Twilio could not deliver (errors 11200/11210).
+A stale Sandbox URL is why the first "hi" seems to do nothing and the second
+one finally gets the language menu. To run the check alone:
+
+```powershell
+.\.venv\Scripts\python.exe check_whatsapp_webhook.py --minutes 60
+```
+
 ### One number, one stack
 
 There is one voice number and one sandbox webhook. Run development and the demo
@@ -262,6 +272,7 @@ demo working tree is clean and never runs `git add` or `git commit`.
 | CRM writes queue but never appear | Check the CRM API `/health` and its own `.env`; it must run from its own directory |
 | Twilio call has no audio | Check the tunnel is up and the voice webhook points at the demo host |
 | WhatsApp gets no reply | Check the sandbox webhook is set to `https://<tunnel>/twilio/whatsapp`, HTTP POST |
+| First "hi" does nothing, second gets the menu | Run `check_whatsapp_webhook.py`: Twilio error 11210 means the Sandbox still points at the previous tunnel host |
 | `cloudflared is not on PATH` | Install cloudflared or run without `-Live` |
 | Voice quality differs | Verify `.env` matches the development non-secret values; the demo uses the same model, voices, and prompts |
 | Model download warning | Check the HuggingFace cache or allow the first warmup to download |

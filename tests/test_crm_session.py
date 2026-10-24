@@ -219,6 +219,32 @@ async def test_whatsapp_resumes_from_the_database_when_the_registry_is_cold(monk
 
 
 @pytest.mark.anyio
+async def test_whatsapp_db_resume_restores_the_language_and_reopens_the_menu(monkeypatch):
+    """A restart keeps the conversation id and language but re-offers the menu.
+
+    The menu is per conversation start, not per phone forever: the demo
+    restarts between conversations, and the operator needs the menu on the
+    first message after each restart. The saved language is still restored as
+    the fallback.
+    """
+    async def fake_lookup(phone_number, within_seconds, channel="whatsapp"):
+        return {
+            "conversation_id": "conv-survived-restart",
+            "language": "gu",
+            "language_source": "selected",
+        }
+
+    monkeypatch.setattr(
+        "app.leads.models.get_recent_conversation_for_phone", fake_lookup, raising=True
+    )
+
+    s = await crm_session.resolve_whatsapp_session("+15550100", idle_window_hours=6)
+    assert s.conversation_id == "conv-survived-restart"
+    assert s.language == "gu"
+    assert s.language_menu_done is False
+
+
+@pytest.mark.anyio
 async def test_whatsapp_db_failure_degrades_to_a_new_session(monkeypatch):
     """
     Running without Postgres is a supported mode in this app. A database error

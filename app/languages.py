@@ -323,6 +323,236 @@ def language_from_command(text: str, current: str = "") -> str | None:
     return None
 
 
+# ── Question shape (WhatsApp routing) ──────────────────────────────────────
+
+#: Characters that mark a question regardless of language. The full-width
+#: forms matter: a Chinese/Japanese question ("能列下具体的申请要求么？") carries
+#: ``？``, not ``?``, and the ASCII-only check sent it through the admission
+#: intent classifier — an extra model call on every such turn.
+#: The Devanagari danda (``।``) is deliberately absent: it ends declarative
+#: Hindi sentences too, so treating it as a question would divert
+#: "मैं एडमिशन लेना चाहता हूँ।" away from the admission flow.
+_QUESTION_MARKS = ("?", "？", "¿")
+
+#: Interrogative words per language. Deliberately conservative: only words
+#: that are unambiguously questions in their language are listed. Ambiguous
+#: Latin words ("que", "como", "come") are omitted because they collide with
+#: ordinary words and would turn an intent statement into a knowledge question.
+#: Non-Latin scripts have no such collision and are matched as substrings.
+_QUESTION_WORDS: dict[str, tuple[str, ...]] = {
+    "en": ("what", "how", "which", "when", "where", "who", "why",
+           "how much", "how many"),
+    "hi": ("क्या", "कैसे", "कैसा", "कौन", "कब", "कहाँ", "कहां", "कितना", "कितनी"),
+    "gu": ("શું", "કેવી", "કેવું", "કયો", "કઈ", "ક્યારે", "ક્યાં", "કેટલું", "કેટલી"),
+    "es": ("qué", "cómo", "cuál", "cuáles", "cuándo", "dónde", "cuánto", "cuánta"),
+    "fr": ("quel", "quelle", "quels", "quelles", "comment", "quand", "où",
+           "combien", "pourquoi"),
+    "it": ("quale", "quali", "quando", "dove", "quanto", "quanta", "perché"),
+    "ja": ("何", "どう", "どれ", "いつ", "どこ", "なぜ", "いくら", "ですか", "ますか"),
+    "pt": ("qual", "quais", "quando", "onde", "quanto", "quanta", "por que"),
+    "zh": ("什么", "怎麼", "怎么", "怎样", "哪", "何时", "為什麼", "为什么",
+           "多少", "是否", "吗", "呢", "请问", "請問"),
+}
+
+
+def looks_like_question(text: str | None) -> bool:
+    """True when *text* asks something, in any of the supported languages.
+
+    Used to route a WhatsApp message straight to the knowledge base instead of
+    spending a model call on admission-intent classification. A question is a
+    question: "what are the requirements to apply for MBA?" is not intent to
+    proceed, and the classifier's own prompt says so.
+
+    The check is intentionally cheap and conservative — a false positive costs
+    an informational answer (the student can still say "I want to take
+    admission", which hits the strong keyword path), while a false negative
+    costs ~1.2-1.6 s on every turn.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if any(mark in raw for mark in _QUESTION_MARKS):
+        return True
+
+    low = raw.lower()
+    for words in _QUESTION_WORDS.values():
+        for word in words:
+            if word.isascii():
+                if re.search(rf"\b{re.escape(word)}\b", low):
+                    return True
+            elif word in low:
+                return True
+    return False
+
+
+# ── Localized admission-intent phrases (WhatsApp state machine) ─────────────
+#
+# The deterministic admission flow used to match English keywords only, so a
+# Hindi/Gujarati (or Spanish/French/...) request for admission fell through to
+# the knowledge base: no document prompt, no offer letter. STRONG phrases are
+# unambiguous and skip the model; MEDIUM phrases only nominate a candidate and
+# main.py's existing classifier confirms them, so a question about the
+# admission *process* stays a question.
+ADMISSION_INTENT_STRONG: dict[str, tuple[str, ...]] = {
+    "hi": (
+        "एडमिशन लेना चाहता", "एडमिशन लेना चाहती", "एडमिशन लेना चाहते",
+        "एडमिशन लेनी है", "एडमिशन लेना है",
+        "प्रवेश लेना चाहता", "प्रवेश लेना चाहती", "प्रवेश लेना चाहते",
+        "प्रवेश लेना है", "प्रवेश लेनी है",
+        "दाखिला लेना चाहता", "दाखिला लेना चाहती", "दाखिला लेना है",
+        "एडमिशन करना चाहता", "एडमिशन करना चाहती",
+        "प्रवेश करना चाहता", "प्रवेश करना चाहती",
+        "एडमिशन चाहिए", "प्रवेश चाहिए", "दाखिला चाहिए",
+        "एडमिशन में रुचि", "प्रवेश में रुचि",
+        "मुझे एडमिशन लेना", "मुझे प्रवेश लेना",
+        "एडमिशन के लिए आवेदन करना चाहता",
+        "प्रवेश के लिए आवेदन करना चाहता",
+    ),
+    "gu": (
+        "એડમિશન લેવું છે", "એડમિશન લેવો છે", "એડમિશન લેવી છે",
+        "એડમિશન લેવા માટે", "એડમિશન કરવું છે", "એડમિશન કરવો છે",
+        "પ્રવેશ લેવો છે", "પ્રવેશ લેવું છે", "પ્રવેશ કરવો છે",
+        "દાખલો લેવો છે", "દાખલો લેવું છે",
+        "એડમિશન જોઈએ", "પ્રવેશ જોઈએ", "દાખલો જોઈએ",
+        "એડમિશનમાં રસ", "પ્રવેશમાં રસ",
+        "એડમિશન માટે અરજી કરવી છે",
+    ),
+    "es": (
+        "quiero inscribirme", "quiero matricularme", "quiero postularme",
+        "quiero postular", "quiero tomar la admisión", "quiero tomar admisión",
+        "quiero ingresar", "deseo inscribirme", "deseo matricularme",
+        "me gustaría inscribirme", "me gustaría matricularme",
+    ),
+    "fr": (
+        "je veux m'inscrire", "je souhaite m'inscrire",
+        "je voudrais m'inscrire", "je veux postuler", "je souhaite postuler",
+        "je voudrais postuler", "je veux être admis", "je souhaite être admis",
+        "je veux être admise", "je souhaite être admise",
+    ),
+    "it": (
+        "voglio iscrivermi", "vorrei iscrivermi", "desidero iscrivermi",
+        "voglio immatricolarmi", "vorrei immatricolarmi", "voglio candidarmi",
+    ),
+    "ja": (
+        "入学したい", "入学を希望", "出願したい", "申し込みたい",
+        "申し込む", "応募したい",
+    ),
+    "pt": (
+        "quero me inscrever", "quero inscrever-me", "quero matricular-me",
+        "quero me matricular", "desejo me inscrever",
+        "gostaria de me inscrever", "quero me candidatar",
+        "quero candidatar-me",
+    ),
+    "zh": (
+        "我想报名", "我要报名", "我想申请", "我要申请",
+        "我想入学", "我要入学",
+    ),
+}
+
+ADMISSION_INTENT_MEDIUM: dict[str, tuple[str, ...]] = {
+    "hi": ("एडमिशन", "प्रवेश", "दाखिला", "आवेदन"),
+    "gu": ("એડમિશન", "પ્રવેશ", "દાખલો", "અરજી"),
+    "es": (
+        "admisión", "admision", "inscripción", "inscripcion", "inscribirme",
+        "matrícula", "matricula", "matricularme", "postular", "aplicar",
+        "solicitud",
+    ),
+    "fr": (
+        "admission", "inscription", "inscrire", "candidature", "postuler",
+        "s'inscrire",
+    ),
+    "it": (
+        "ammissione", "iscrizione", "iscrivermi", "immatricolazione",
+        "immatricolarmi", "candidarmi",
+    ),
+    "ja": ("入学", "出願", "申し込み", "申し込む", "応募"),
+    "pt": (
+        "admissão", "admissao", "inscrição", "inscricao", "inscrever",
+        "matrícula", "matricula", "matricular", "candidatar", "candidatura",
+    ),
+    "zh": ("报名", "申请", "入学", "录取", "招生"),
+}
+
+
+def admission_intent_phrases() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Every localized (strong, medium) phrase, flattened with order preserved."""
+    def _flat(table: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            phrase for phrases in table.values() for phrase in phrases
+        ))
+
+    return _flat(ADMISSION_INTENT_STRONG), _flat(ADMISSION_INTENT_MEDIUM)
+
+
+# ── Localized "all documents sent" replies ─────────────────────────────────
+#
+# The prompts still ask for the English word "done" (the deterministic token),
+# but a student who answers naturally in their own language must not get stuck
+# after uploading everything.
+DONE_REPLIES: dict[str, tuple[str, ...]] = {
+    "hi": (
+        "हो गया", "हो गई", "हो गए", "पूरा हो गया", "पूरी हो गई",
+        "सब भेज दिया", "सब भेज दिए", "दस्तावेज़ भेज दिए", "मैंने भेज दिया",
+        "समाप्त", "खत्म",
+    ),
+    "gu": (
+        "થઈ ગયું", "થઈ ગયો", "બધું મોકલી દીધું", "મોકલી દીધું",
+        "પૂરું થઈ ગયું", "સમાપ્ત", "ખતમ",
+    ),
+    "es": (
+        "listo", "ya está", "ya esta", "terminé", "termine", "he terminado",
+        "ya terminé", "ya termine", "enviado", "ya envié",
+    ),
+    "fr": (
+        "terminé", "termine", "fini", "c'est fait", "j'ai terminé",
+        "j'ai fini", "envoyé",
+    ),
+    "it": ("fatto", "finito", "ho finito", "terminato", "inviato"),
+    "ja": (
+        "完了", "完了しました", "終わりました", "終了", "送りました",
+        "全部送りました",
+    ),
+    "pt": (
+        "pronto", "terminei", "acabei", "já enviei", "ja enviei",
+        "enviei tudo",
+    ),
+    "zh": ("完成", "完成了", "好了", "已经发送", "都发完了", "发送完了"),
+}
+
+_REPLY_PUNCT = ".,!?;:。！？、，؛।"
+
+
+def _reply_key(text: str | None) -> str:
+    raw = (text or "").strip().lower().replace("’", "'")
+    return " ".join(raw.strip(_REPLY_PUNCT + " ").split())
+
+
+def is_done_reply(text: str | None) -> bool:
+    """True when *text* signals that all the student's documents were sent.
+
+    English keeps its historical exact tokens (``done``/``finish``/``finished``).
+    A localized phrase is matched as a substring only when the whole message is
+    short (at most four words) *and* the phrase is multi-word or non-Latin; a
+    single ASCII word must be the whole message. That keeps Spanish ``listo``
+    or Hindi ``समाप्त`` from firing inside a longer unrelated sentence while
+    still accepting a natural short reply such as ``हो गया``.
+    """
+    compact = _reply_key(text)
+    if not compact:
+        return False
+    if compact in ("done", "finish", "finished"):
+        return True
+    short = len(compact.split()) <= 4
+    for phrases in DONE_REPLIES.values():
+        for phrase in phrases:
+            if compact == phrase:
+                return True
+            if short and (" " in phrase or any(ord(ch) > 127 for ch in phrase)):
+                if phrase in compact:
+                    return True
+    return False
+
+
 def whatsapp_language_menu_options() -> list[tuple[str, str, str]]:
     """The numbered options of the WhatsApp first-contact language menu.
 
