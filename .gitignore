@@ -70,5 +70,7 @@ content/dspmu/*.sqlite3-wal
 content/dspmu/*.sqlite3-shm
 # Extracted notice bodies can contain personal data until reviewed; never commit.
 content/dspmu/notice_bodies/
+# Tesseract language data (~12 MB); install with scripts/install_hindi_ocr.py.
+.tessdata/
 .siteindex-ocr-*/
 chroma_local_db_pre_c4/

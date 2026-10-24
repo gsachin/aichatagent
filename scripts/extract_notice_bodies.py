@@ -72,6 +72,16 @@ def main(argv: list[str] | None = None) -> int:
         help="enable OCR fallback; OCR bodies are review-only and not indexed",
     )
     parser.add_argument(
+        "--ocr-langs",
+        default="eng,hin",
+        help="comma-separated OCR language order (default: eng,hin)",
+    )
+    parser.add_argument(
+        "--tessdata-dir",
+        default="",
+        help="optional tessdata directory; defaults to .tessdata when present",
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="re-extract notices whose body file already exists",
@@ -96,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
         allow_network=args.allow_network,
         limit=args.limit or None,
         ocr=args.ocr,
+        ocr_langs=tuple(
+            part.strip() for part in args.ocr_langs.split(",") if part.strip()
+        ),
+        tessdata_dir=args.tessdata_dir or None,
         skip_existing=not args.no_skip_existing,
     )
     print(

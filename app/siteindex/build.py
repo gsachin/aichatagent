@@ -394,6 +394,8 @@ def build(
     out_dir: Path | str = PROJECT_ROOT / "content/dspmu",
     allow_network: bool = False,
     ocr: bool = True,
+    ocr_langs: tuple[str, ...] | None = None,
+    tessdata_dir: str | None = None,
     max_notices: int = 12,
     max_tokens: int = 8000,
     max_doc_tokens: int = 4000,
@@ -448,7 +450,14 @@ def build(
     fee_doc = extract_pdf(fee_result.body, ocr=False)
     counsel_doc = extract_pdf(counsel_result.body, ocr=False)
     docs_doc = extract_pdf(docs_result.body, ocr=False)
-    pg_doc = extract_pdf(pg_result.body, ocr=ocr)
+    # The PG admission notice is English. Keep its dates on the English model;
+    # Hindi/mixed OCR is used by the notice-body extractor.
+    pg_doc = extract_pdf(
+        pg_result.body,
+        ocr=ocr,
+        ocr_langs=ocr_langs or ("eng",),
+        tessdata_dir=tessdata_dir,
+    )
 
     for key, result, doc in (
         ("fee2026", fee_result, fee_doc),
@@ -794,6 +803,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--no-ocr", action="store_true", help="skip the OCR fallback")
+    parser.add_argument(
+        "--ocr-langs",
+        default="",
+        help="comma-separated OCR language order (default: eng for the PG notice)",
+    )
+    parser.add_argument(
+        "--tessdata-dir",
+        default="",
+        help="optional tessdata directory; defaults to .tessdata when present",
+    )
     parser.add_argument("--max-notices", type=int, default=12)
     parser.add_argument(
         "--max-tokens",
@@ -826,6 +845,12 @@ def main(argv: list[str] | None = None) -> int:
             out_dir=args.out_dir,
             allow_network=args.allow_network,
             ocr=not args.no_ocr,
+            ocr_langs=tuple(
+                part.strip()
+                for part in args.ocr_langs.split(",")
+                if part.strip()
+            ) or None,
+            tessdata_dir=args.tessdata_dir or None,
             max_notices=args.max_notices,
             max_tokens=args.max_tokens,
             max_doc_tokens=args.max_doc_tokens,

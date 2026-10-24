@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,10 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from PIL import Image
 
 logger = logging.getLogger("siteindex.extract")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_TESSDATA_DIR = PROJECT_ROOT / ".tessdata"
+DEFAULT_OCR_LANGS = ("eng", "hin")
 
 _SKIP = {"script", "style", "noscript", "svg", "canvas", "form", "iframe"}
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
@@ -197,13 +202,39 @@ def extract_html(html: str, base_url: str, url: str = "") -> HtmlDoc:
     )
 
 
-def _tesseract_langs() -> frozenset[str]:
+def default_tessdata_dir() -> str | None:
+    """The local or operator-supplied tessdata directory, if any."""
+    configured = (
+        os.environ.get("TESSERACT_TESSDATA_DIR")
+        or os.environ.get("TESSDATA_PREFIX")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+    if LOCAL_TESSDATA_DIR.is_dir():
+        return str(LOCAL_TESSDATA_DIR)
+    return None
+
+
+def requested_ocr_langs(explicit: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    """Languages to request, in fallback order."""
+    if explicit:
+        return tuple(lang.strip() for lang in explicit if lang.strip())
+    raw = os.environ.get("TESSERACT_OCR_LANGS", ",".join(DEFAULT_OCR_LANGS))
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _tesseract_langs(tessdata_dir: str | None = None) -> frozenset[str]:
     binary = shutil.which("tesseract")
     if not binary:
         return frozenset()
+    command = [binary]
+    if tessdata_dir:
+        command += ["--tessdata-dir", tessdata_dir]
+    command += ["--list-langs"]
     try:
         proc = subprocess.run(
-            [binary, "--list-langs"],
+            command,
             capture_output=True,
             text=True,
             timeout=10,
@@ -214,10 +245,49 @@ def _tesseract_langs() -> frozenset[str]:
     return frozenset(line for line in lines[1:] if line and not line.startswith("List"))
 
 
-def _ocr_image(binary: str, image: Path, lang: str) -> str:
+def select_ocr_langs(
+    available: frozenset[str] | set[str],
+    requested: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """Choose the languages Tesseract actually has.
+
+    Requested order is preserved. If none of the requested languages are
+    installed, fall back to English, then Hindi. An empty result means OCR is
+    unavailable.
+    """
+    wanted = requested or requested_ocr_langs()
+    chosen = [lang for lang in wanted if lang in available]
+    if chosen:
+        return tuple(chosen)
+    if "eng" in available:
+        return ("eng",)
+    if "hin" in available:
+        return ("hin",)
+    return ()
+
+
+def _ocr_image(
+    binary: str,
+    image: Path,
+    lang: str,
+    *,
+    tessdata_dir: str | None = None,
+) -> str:
+    command = [
+        binary,
+        str(image),
+        "stdout",
+        "--oem",
+        "1",
+        "--psm",
+        "3",
+    ]
+    if tessdata_dir:
+        command += ["--tessdata-dir", tessdata_dir]
+    command += ["-l", lang]
     try:
         proc = subprocess.run(
-            [binary, str(image), "stdout", "--psm", "3", "-l", lang],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -233,12 +303,31 @@ def _ocr_image(binary: str, image: Path, lang: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def _ocr_pdf(body: bytes, *, max_pages: int = 8) -> tuple[str, bool, str, str]:
+def _ocr_pdf(
+    body: bytes,
+    *,
+    max_pages: int = 8,
+    ocr_langs: tuple[str, ...] | None = None,
+    tessdata_dir: str | None = None,
+) -> tuple[str, bool, str, str]:
     binary = shutil.which("tesseract")
     if not binary:
         return "", False, "", "unavailable"
-    langs = _tesseract_langs()
-    lang = "eng+hin" if "hin" in langs else "eng"
+    tessdata_dir = tessdata_dir or default_tessdata_dir()
+    available = _tesseract_langs(tessdata_dir)
+    selected = select_ocr_langs(available, ocr_langs)
+    if not selected:
+        return "", False, "", "unavailable"
+    lang = "+".join(selected)
+    requested = requested_ocr_langs(ocr_langs)
+    missing = [item for item in requested if item not in available]
+    if missing:
+        logger.warning(
+            "OCR languages %s are not installed in %s; using %s",
+            ",".join(missing),
+            tessdata_dir or "the system tessdata directory",
+            lang,
+        )
     try:
         document = pymupdf.open(stream=body, filetype="pdf")
     except Exception as exc:  # noqa: BLE001
@@ -257,11 +346,11 @@ def _ocr_pdf(body: bytes, *, max_pages: int = 8) -> tuple[str, bool, str, str]:
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
                 image_path = temp / f"page-{index}.png"
                 pixmap.save(str(image_path))
-                text = _ocr_image(binary, image_path, lang)
+                text = _ocr_image(binary, image_path, lang, tessdata_dir=tessdata_dir)
                 if len(re.sub(r"\W", "", text)) < 40:
                     rotated = temp / f"page-{index}-rotated.png"
                     Image.open(image_path).rotate(180, expand=True).save(rotated)
-                    alternate = _ocr_image(binary, rotated, lang)
+                    alternate = _ocr_image(binary, rotated, lang, tessdata_dir=tessdata_dir)
                     if len(re.sub(r"\W", "", alternate)) > len(re.sub(r"\W", "", text)):
                         text = alternate
                 if text:
@@ -274,8 +363,19 @@ def _ocr_pdf(body: bytes, *, max_pages: int = 8) -> tuple[str, bool, str, str]:
     return joined, True, lang, quality
 
 
-def extract_pdf(body: bytes, *, ocr: bool = True, max_ocr_pages: int = 8) -> PdfDoc:
-    """Extract text and tables from a PDF, with an OCR fallback for scans."""
+def extract_pdf(
+    body: bytes,
+    *,
+    ocr: bool = True,
+    max_ocr_pages: int = 8,
+    ocr_langs: tuple[str, ...] | None = None,
+    tessdata_dir: str | None = None,
+) -> PdfDoc:
+    """Extract text and tables from a PDF, with an OCR fallback for scans.
+
+    ``ocr_langs`` defaults to ``eng,hin``; installed languages are selected in
+    that order. OCR text is always marked for human review.
+    """
     pages = 0
     text = ""
     tables: list[tuple[tuple[tuple[str, ...], ...], ...]] = []
@@ -316,7 +416,10 @@ def extract_pdf(body: bytes, *, ocr: bool = True, max_ocr_pages: int = 8) -> Pdf
 
     if ocr and len(re.sub(r"\W", "", text)) < 80:
         ocr_text, ocr_available, ocr_lang, ocr_quality = _ocr_pdf(
-            body, max_pages=max_ocr_pages
+            body,
+            max_pages=max_ocr_pages,
+            ocr_langs=ocr_langs,
+            tessdata_dir=tessdata_dir,
         )
         if ocr_text:
             text = ocr_text

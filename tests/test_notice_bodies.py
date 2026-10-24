@@ -135,7 +135,7 @@ def test_ocr_bodies_are_review_only(catalogue, tmp_path):
     _write_pdf(pdf_dir / "clean.pdf", "A clean extracted page.")
     _write_pdf(pdf_dir / "pii.pdf", "A second page.")
 
-    def fake_extractor(body: bytes, *, ocr: bool = False) -> PdfDoc:
+    def fake_extractor(body: bytes, *, ocr: bool = False, **kwargs) -> PdfDoc:
         return PdfDoc(
             pages=1,
             text="Scanned text that still needs review.",
@@ -160,6 +160,8 @@ def test_ocr_bodies_are_review_only(catalogue, tmp_path):
     assert stats.needs_review == 2
     assert not (bodies / "clean.txt").exists()
     assert not (bodies / "pii.txt").exists()
+    assert (bodies / "_review" / "clean.txt").is_file()
+    assert (bodies / "_review" / "pii.txt").is_file()
 
 
 def test_a_stale_body_is_removed_when_the_new_extraction_is_pii(

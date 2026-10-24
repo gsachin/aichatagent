@@ -110,12 +110,20 @@ def extract_notice_bodies(
     allow_network: bool = False,
     limit: int | None = None,
     ocr: bool = False,
+    ocr_langs: tuple[str, ...] | None = None,
+    tessdata_dir: str | None = None,
     skip_existing: bool = True,
     extractor: Callable[..., PdfDoc] = extract_pdf,
 ) -> NoticeBodyStats:
-    """Extract notice bodies and write a manifest; never persist flagged text."""
+    """Extract notice bodies and write a manifest; never persist flagged text.
+
+    ``ocr_langs`` defaults to ``eng,hin`` and is used only when ``ocr`` is
+    true. OCR/review-needed text is written to ``bodies_dir/_review`` (gitignored)
+    and is never read by :func:`app.notice_store.build_store`.
+    """
     body_root = _resolve(bodies_dir)
     body_root.mkdir(parents=True, exist_ok=True)
+    review_dir = body_root / "_review"
     pdf_root = _resolve(pdf_dir) if pdf_dir else None
     cache_root = _resolve(cache_dir)
     manifest_path = body_root / "manifest.jsonl"
@@ -155,6 +163,7 @@ def extract_notice_bodies(
         notice_id = str(row["id"])
         title = str(row.get("title") or "")
         body_path = body_root / f"{notice_id}.txt"
+        review_path = review_dir / f"{notice_id}.txt"
         record = {
             "id": notice_id,
             "url": str(row.get("url") or ""),
@@ -165,10 +174,12 @@ def extract_notice_bodies(
             "needs_review": False,
             "pii_reasons": [],
             "content_hash": "",
+            "review_path": "",
             "error": "",
         }
 
         if skip_existing and body_path.is_file():
+            review_path.unlink(missing_ok=True)
             counts["skipped_existing"] += 1
             record["status"] = "existing"
             manifest.append(record)
@@ -183,15 +194,22 @@ def extract_notice_bodies(
         )
         if body is None:
             body_path.unlink(missing_ok=True)
+            review_path.unlink(missing_ok=True)
             counts["missing_pdf"] += 1
             record["status"] = "missing_pdf"
             manifest.append(record)
             continue
 
         try:
-            doc = extractor(body, ocr=ocr)
+            doc = extractor(
+                body,
+                ocr=ocr,
+                ocr_langs=ocr_langs,
+                tessdata_dir=tessdata_dir,
+            )
         except Exception as exc:  # noqa: BLE001 - one bad PDF must not stop the run
             body_path.unlink(missing_ok=True)
+            review_path.unlink(missing_ok=True)
             counts["errors"] += 1
             record["status"] = "error"
             record["error"] = f"{type(exc).__name__}: {exc}"
@@ -206,6 +224,7 @@ def extract_notice_bodies(
 
         if not text:
             body_path.unlink(missing_ok=True)
+            review_path.unlink(missing_ok=True)
             counts["empty"] += 1
             record["status"] = "empty"
             manifest.append(record)
@@ -214,6 +233,7 @@ def extract_notice_bodies(
         scan = scan_text(text)
         if scan.flagged:
             body_path.unlink(missing_ok=True)
+            review_path.unlink(missing_ok=True)
             counts["pii_blocked"] += 1
             record["status"] = "pii_blocked"
             record["pii_reasons"] = list(scan.reasons)
@@ -221,9 +241,19 @@ def extract_notice_bodies(
             continue
 
         if doc.needs_review or doc.ocr:
-            # OCR text is not indexed until a human has verified it; the text
-            # is deliberately not written to the review queue.
+            # OCR text is not indexed until a human has verified it. Keep a
+            # copy in the gitignored _review directory so the review can
+            # actually happen; build_store only reads <id>.txt at the top
+            # level, so this text cannot enter the prompt by accident.
             body_path.unlink(missing_ok=True)
+            review_dir.mkdir(parents=True, exist_ok=True)
+            review_path.write_text(text + "\n", encoding="utf-8")
+            try:
+                record["review_path"] = str(
+                    review_path.relative_to(body_root)
+                )
+            except ValueError:
+                record["review_path"] = str(review_path)
             counts["needs_review"] += 1
             record["status"] = "needs_review"
             manifest.append(record)
@@ -231,6 +261,7 @@ def extract_notice_bodies(
 
         body_bytes = (text + "\n").encode("utf-8")
         body_path.write_bytes(body_bytes)
+        review_path.unlink(missing_ok=True)
         counts["indexed"] += 1
         record["status"] = "indexed"
         record["content_hash"] = hashlib.sha256(body_bytes).hexdigest()

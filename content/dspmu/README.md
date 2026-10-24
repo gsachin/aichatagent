@@ -20,7 +20,7 @@ guard. `CONTEXT_MODE=site` now selects a route-specific bundle.
 | `facts.json` | Structured facts with source URLs, `valid_from`, `valid_until`, `status: draft` and `approved_by: null`. |
 | `notices.jsonl` | Non-PII notice metadata. PII-heavy admission/result categories are excluded. |
 | `notices.sqlite3` | Rebuildable SQLite FTS5 index over the non-PII notices. Rebuilt by `scripts/build_notice_store.py`; the router falls back to the JSONL if it is missing. An extra title guard excludes selection/student-list rows that the category filter lets through. |
-| `notice_bodies/` | Optional PII-clean extracted notice text and review manifest. **Gitignored**; only text that passes `app.pii.scan_text` is written, and OCR/review bodies are not persisted. |
+| `notice_bodies/` | Optional PII-clean extracted notice text and review manifest. **Gitignored**. PII-flagged text is never written; OCR/review-needed clean text goes to `notice_bodies/_review/` and is not indexed. |
 | `build_report.json` | Sources, counts, real voice/chat prompt budgets, OCR status, warnings and validation results. |
 | `nodes/` | Extracted page/PDF text for auditing (no PII-category notices). |
 | `cache/` | Raw public sources. **Gitignored**; regenerate rather than commit. |
@@ -39,17 +39,25 @@ Rebuild only the notice search index from the committed JSONL:
 .venv/bin/python scripts/build_notice_store.py
 ```
 
+Install Hindi OCR data once (repo-local, gitignored):
+
+```bash
+.venv/bin/python scripts/install_hindi_ocr.py
+```
+
 Extract notice bodies offline from a local PDF directory (recommended until the
 university's written permission is on file):
 
 ```bash
 .venv/bin/python scripts/extract_notice_bodies.py \
-  --pdf-dir /path/to/authorised/notice-pdfs --limit 5
+  --pdf-dir /path/to/authorised/notice-pdfs --limit 5 --ocr --ocr-langs eng,hin
 ```
 
-The extractor writes only PII-clean text and never persists a PII-flagged or
-OCR/review-needed body. After a full extraction, rebuild the body index with
-`--rebuild-db`. Live fetching is opt-in and robots-aware:
+The extractor never persists PII-flagged text. OCR/review-needed text is kept
+only in the gitignored `notice_bodies/_review/` directory; it is not indexed
+until a human moves it to the top-level body directory. After a full extraction,
+rebuild the body index with `--rebuild-db`. Live fetching is opt-in and
+robots-aware:
 
 ```bash
 .venv/bin/python scripts/extract_notice_bodies.py --allow-network --rebuild-db
@@ -148,18 +156,22 @@ nothing in this directory's configuration points at them.
 - The 2026 fee PDF has 43 numbered programme rows. pdfplumber loses row 33
   (`Electronics`) at the page break; a text fallback recovers it, so
   `facts.json` carries 43 programmes.
-- Tesseract on the build machine has `eng`, not `hin`. Hindi notices will need
-  the `hin` traineddata and a quality gate.
+- Hindi OCR uses `.tessdata/hin.traineddata` (gitignored; install with
+  `scripts/install_hindi_ocr.py`). The extractor runs Tesseract LSTM mode
+  (`--oem 1`) with `eng+hin` for notice bodies; the English PG admission
+  notice stays on `eng`. Every OCR body is copied to the gitignored
+  `notice_bodies/_review/` directory and is not indexed until a human checks it.
 
 ## Next milestone
 
 The deterministic router is in place for fees, programme facts, about/vision/
 glance nodes, syllabus links and matching non-PII notices. The FTS5 notice
-store ranks title/category matches. The PDF body extractor and PII text gate
-are implemented; the mass PDF fetch is still waiting for written permission,
-and OCR/Hindi review is pending. The remaining P1 work is the signed fact
-store, the golden set and university sign-off, and the Hindi OCR quality gate.
-PG programme/fee questions are handled by the explicit out-of-scope boundary.
+store ranks title/category matches. The PDF body extractor, PII text gate and
+Hindi OCR (`eng+hin`, LSTM, review-only) are implemented; the mass PDF fetch is
+still waiting for written permission, and human review of OCR bodies is
+pending. The remaining P1 work is the signed fact store, the golden set and
+university sign-off. PG programme/fee questions are handled by the explicit
+out-of-scope boundary.
 
 This build extracts two department pages (History and the Faculty of Science)
 and lists the sitemap's department pages. It does not fetch every department
