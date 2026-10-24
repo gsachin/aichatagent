@@ -59,4 +59,9 @@ data/
 # Env backups (a plain .env pattern does NOT cover .env.bak-*) — these hold secrets
 .env.*
 *.env.bak*
+
+# DSPMU site-index raw cache (regenerate with scripts/build_site_index.py).
+# The generated markdown/JSON in content/dspmu/ is tracked.
+content/dspmu/cache/
+.siteindex-ocr-*/
 chroma_local_db_pre_c4/

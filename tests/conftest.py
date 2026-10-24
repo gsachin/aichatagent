@@ -37,6 +37,13 @@ os.environ.setdefault("USE_MCP_RAG", "off")
 # with the `override_settings` fixture or monkeypatch.
 os.environ.setdefault("CONTEXT_MODE", "rag")
 
+# Milestone 1 points the demo .env at content/dspmu. The existing guard tests
+# use the Meridian fixtures, so pin the document and entity sources to the
+# Meridian KB for the suite. The new DSPMU tests construct EntityIndex directly.
+os.environ.setdefault("VOICE_KB_PATH", "content/meridian/meridian_knowledge_base.md")
+os.environ.setdefault("DOC_PATHS", "content/meridian/meridian_knowledge_base.md")
+os.environ.setdefault("DOC_MAX_TOKENS", "500000")
+
 # The demo .env also sets LLM_PROVIDER=openai. Tests must stay hermetic and
 # must not require LLM_API_KEY; the OpenAI adapter tests inject a fake client
 # and set the provider explicitly. Pre-setting auto here wins over .env because

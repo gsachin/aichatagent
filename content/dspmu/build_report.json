@@ -1,0 +1,175 @@
+{
+  "generated_at": "2026-10-24T19:07:33.943775+00:00",
+  "generator": "app/siteindex",
+  "mode": "offline-cache",
+  "cache_dir": "/Users/aiwork/codebase/aichatagent/content/dspmu/cache",
+  "output_dir": "/Users/aiwork/codebase/aichatagent/content/dspmu",
+  "sources": {
+    "home": {
+      "url": "https://dspmuranchi.ac.in/",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 241366
+    },
+    "sitemap": {
+      "url": "https://dspmuranchi.ac.in/sitemap.xml",
+      "from_cache": true,
+      "content_type": "application/xml",
+      "bytes": 46257
+    },
+    "merit": {
+      "url": "https://dspmuranchi.ac.in/news/admission-merit-list",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 123203
+    },
+    "news": {
+      "url": "https://oldsite.dspmuranchi.ac.in/News.aspx",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 3462251
+    },
+    "about": {
+      "url": "https://dspmuranchi.ac.in/cms/about-the-university",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 122558
+    },
+    "vision": {
+      "url": "https://dspmuranchi.ac.in/cms/vision-mission",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 121482
+    },
+    "glance": {
+      "url": "https://dspmuranchi.ac.in/university-at-a-glance",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 143963
+    },
+    "contact": {
+      "url": "https://dspmuranchi.ac.in/cms/contact-us",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 120036
+    },
+    "syllabus": {
+      "url": "https://dspmuranchi.ac.in/syllabus",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 348917
+    },
+    "dept-history": {
+      "url": "https://dspmuranchi.ac.in/departments/history",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 139096
+    },
+    "faculty-science": {
+      "url": "https://dspmuranchi.ac.in/faculties/science",
+      "from_cache": true,
+      "content_type": "text/html",
+      "bytes": 122905
+    },
+    "fee2026": {
+      "url": "https://dspmuranchi.ac.in/uploads/news/gallery/1785318304_034b0538cc479c48018a.pdf",
+      "from_cache": true,
+      "content_type": "application/pdf",
+      "bytes": 180402
+    },
+    "counsel2026": {
+      "url": "https://dspmuranchi.ac.in/uploads/news/gallery/1785318278_a631ff259f9905bd2a6e.pdf",
+      "from_cache": true,
+      "content_type": "application/pdf",
+      "bytes": 84118
+    },
+    "docs2026": {
+      "url": "https://dspmuranchi.ac.in/uploads/news/gallery/1785318254_f3dbe4086bc6fe3257e9.pdf",
+      "from_cache": true,
+      "content_type": "application/pdf",
+      "bytes": 83761
+    },
+    "pgadm2026": {
+      "url": "https://dspmuranchi.ac.in/uploads/news/gallery/1792744350_a0675b680257e2c88191.pdf",
+      "from_cache": true,
+      "content_type": "application/pdf",
+      "bytes": 701088
+    }
+  },
+  "sitemap_urls": 257,
+  "nav_nodes": 68,
+  "nav_links": 137,
+  "departments": 51,
+  "notices": {
+    "manifest_rows": 4293,
+    "non_pii": 1560,
+    "pii_excluded": 2733,
+    "pii_by_category": {
+      "Admission": 1740,
+      "Examination": 153,
+      "Miscellaneous": 29,
+      "Result": 811
+    },
+    "included_latest": 12,
+    "source_manifest": "https://oldsite.dspmuranchi.ac.in/News.aspx"
+  },
+  "fees": {
+    "programmes": 43,
+    "source": "https://dspmuranchi.ac.in/uploads/news/gallery/1785318304_034b0538cc479c48018a.pdf"
+  },
+  "counselling_rounds": 5,
+  "documents": 16,
+  "pg_dates": [
+    {
+      "date": "2026-10-25",
+      "date_text": "25.10.2026",
+      "activity": "Last Date of Application",
+      "needs_review": true,
+      "source": "OCR of the PG admission PDF"
+    },
+    {
+      "date": "2026-10-27",
+      "date_text": "27.10.2026",
+      "activity": "Publication of First Selection List",
+      "needs_review": true,
+      "source": "OCR fallback, checked visually"
+    },
+    {
+      "date": "2026-10-30",
+      "date_text": "30.10.2026",
+      "activity": "Last date for payment of online fees - First Selection List",
+      "needs_review": true,
+      "source": "OCR fallback, checked visually"
+    }
+  ],
+  "ocr": {
+    "used": true,
+    "available": true,
+    "lang": "eng",
+    "quality": "good",
+    "pages": 2,
+    "needs_review": true
+  },
+  "tokens": {
+    "site_map": 6503,
+    "core_cards": 1323,
+    "combined": 7826,
+    "budget": 8000
+  },
+  "validation": {
+    "parser": "ok",
+    "probe": "Bachelor of Arts in Political Science",
+    "probe_numbers": [
+      "0",
+      "3",
+      "3185",
+      "3410"
+    ],
+    "no_meridian": true,
+    "no_pii_titles": true
+  },
+  "warnings": [
+    "PG admission PDF required OCR (good, eng); its dates are marked needs_review"
+  ],
+  "current_archive_note": "The current /archive-notice page lists 4,325 rows, but its PDF links return the site's 404 page on the new host. The old-site News.aspx manifest is the working source."
+}
