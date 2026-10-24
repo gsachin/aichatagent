@@ -54,6 +54,7 @@ REPO = HERE.parent
 GOLDEN_PATH = HERE / "golden_set.jsonl"
 HELDOUT_PATH = HERE / "heldout.txt"
 KB_PATH = REPO / "content" / "meridian" / "meridian_knowledge_base.md"
+KB_LABEL = "meridian_knowledge_base.md"
 CATALOG_PATH = REPO / "doc" / "sdlc" / "09-intent-catalog.md"
 
 #: Fallback intent catalog, used only if `09-intent-catalog.md` cannot be parsed.
@@ -577,7 +578,8 @@ def self_test(cases: Sequence[dict[str, Any]]) -> tuple[list[str], dict[str, int
 
 def validate_fixture(cases: Sequence[dict[str, Any]], kb_loose: str,
                      kb_headings: set[str], intents: Sequence[str],
-                     po_signoff: frozenset[str]) -> list[str]:
+                     po_signoff: frozenset[str],
+                     kb_label: str = KB_LABEL) -> list[str]:
     """Structural + traceability problems. An empty list means the fixture is well-formed."""
     problems: list[str] = []
     known = set(intents)
@@ -630,7 +632,7 @@ def validate_fixture(cases: Sequence[dict[str, Any]], kb_loose: str,
             if not isinstance(spec.get(key), int) or spec[key] <= 0:
                 problems.append(f"{cid}: spoken_format.{key} must be a positive integer")
         if case["ground_truth_status"] == "verified":
-            if not case["ground_truth_source"].startswith("meridian_knowledge_base.md"):
+            if not case["ground_truth_source"].startswith(kb_label):
                 problems.append(f"{cid}: marked verified but its source is not the knowledge base")
             sections = [normalize(p.split("§", 1)[1]) for p in case["ground_truth_source"].split(";")
                         if "§" in p]
@@ -738,10 +740,16 @@ def _is_blocked(cov: IntentCoverage, po_signoff: frozenset[str]) -> bool:
 # ─────────────────────────────── main ───────────────────────────────
 
 def main(argv: Sequence[str] | None = None) -> int:
-    global min_cases
+    global min_cases, GOLDEN_PATH, HELDOUT_PATH, KB_PATH, KB_LABEL, CATALOG_PATH
     ap = argparse.ArgumentParser(description="Deterministic checks for the DG-03 golden set.")
     ap.add_argument("--golden", type=Path, default=GOLDEN_PATH)
     ap.add_argument("--heldout", type=Path, default=HELDOUT_PATH)
+    ap.add_argument("--kb", type=Path, default=KB_PATH,
+                    help="knowledge base used for verified-fact traceability")
+    ap.add_argument("--kb-label", default=KB_LABEL,
+                    help="prefix in ground_truth_source that names the KB")
+    ap.add_argument("--catalog", type=Path, default=CATALOG_PATH,
+                    help="intent catalog used for intent names and critical flags")
     ap.add_argument("--answers", type=Path, default=None,
                     help="JSONL of {case_id, answer} to score; omit to validate the fixture only")
     ap.add_argument("--min-cases", type=int, default=DEFAULT_MIN_CASES,
@@ -751,12 +759,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--no-self-test", action="store_true")
     args = ap.parse_args(argv)
     min_cases = args.min_cases
+    GOLDEN_PATH = args.golden
+    HELDOUT_PATH = args.heldout
+    KB_PATH = args.kb
+    KB_LABEL = args.kb_label
+    CATALOG_PATH = args.catalog
 
     try:
         cases = load_cases(args.golden)
         held = load_heldout(args.heldout)
-        intents, po_signoff, cat_note = load_catalog()
-        crit, crit_note = catalog_critical()
+        intents, po_signoff, cat_note = load_catalog(args.catalog)
+        crit, crit_note = catalog_critical(args.catalog)
         catalog_critical_cache.clear()
         catalog_critical_cache.update(crit)
     except FixtureError as exc:
@@ -768,7 +781,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     kb_headings = {normalize(m.group(2)) for m in
                    re.finditer(r"(?m)^(#{2,3})\s+(.+?)\s*$", kb_text)}
 
-    problems = validate_fixture(cases, kb_loose, kb_headings, intents, po_signoff)
+    problems = validate_fixture(
+        cases, kb_loose, kb_headings, intents, po_signoff, kb_label=KB_LABEL
+    )
     problems.extend(_check_heldout(cases, held))
 
     report_fixture(cases, held, intents, po_signoff, crit_note, problems)
@@ -887,7 +902,7 @@ def _report_scores(cases, verdicts: Sequence[Verdict], intents: Sequence[str]) -
 
 
 def _write_json(args, cases, held, intents, problems, verdicts) -> None:
-    _, po_signoff, _ = load_catalog()
+    _, po_signoff, _ = load_catalog(CATALOG_PATH)
     still_blocked = sorted(k for k, v in coverage(cases).items() if _is_blocked(v, po_signoff))
     payload = {
         "golden_set": str(GOLDEN_PATH),

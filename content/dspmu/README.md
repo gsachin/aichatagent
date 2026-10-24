@@ -162,6 +162,11 @@ nothing in this directory's configuration points at them.
   notice stays on `eng`. Every OCR body is copied to the gitignored
   `notice_bodies/_review/` directory and is not indexed until a human checks it.
 
+## Evaluation
+
+The draft DSPMU golden set, held-out split and deterministic checks live in
+`eval/`; see `eval/DSPMU_README.md`. It is not university-approved.
+
 ## Next milestone
 
 The deterministic router is in place for fees, programme facts, about/vision/
