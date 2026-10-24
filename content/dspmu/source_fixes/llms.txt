@@ -1,0 +1,30 @@
+# Dr. Shyama Prasad Mukherjee University (DSPMU)
+
+> Official public pages for admissions, fees and examination notices at DSPMU, Ranchi.
+
+## Start here
+
+- [University home](https://dspmuranchi.ac.in/)
+- [About DSPMU](https://dspmuranchi.ac.in/cms/about-the-university)
+- [Admissions and merit lists](https://dspmuranchi.ac.in/news/admission-merit-list)
+- [Fee structure 2026–27 (PDF)](https://dspmuranchi.ac.in/uploads/news/gallery/1785318304_034b0538cc479c48018a.pdf)
+- [All notices](https://dspmuranchi.ac.in/archive-notice)
+- [Examination notices](https://dspmuranchi.ac.in/cms/examination-notices)
+- [Contact the university](https://dspmuranchi.ac.in/cms/contact-us)
+
+## Machine-readable
+
+- [Notice feed (JSON Feed 1.1)](https://dspmuranchi.ac.in/notices.json)
+- [Sitemap](https://dspmuranchi.ac.in/sitemap.xml)
+
+## Contact
+
+- Phone: +91 930 455 261
+- Email: registrar@dspmuranchi.ac.in
+- Address: P.O. - Ranchi University, Morabadi, Ranchi - 834008, Jharkhand
+
+## Use
+
+These pages are public. Automated clients should follow the site's
+[robots.txt](https://dspmuranchi.ac.in/robots.txt) and any written permission from the
+university. This file is an index, not a grant of additional rights.
