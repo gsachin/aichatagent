@@ -23,23 +23,21 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# Exact strings as of the baseline (commit d674b3e, 2026-10-18), except hi:
-# the 2026-10-20 Hindi voice fix adds the explicit "degree abbreviations in
-# Latin letters, never Devanagari transliterations" rule. That change is
-# deliberate; the English and Gujarati instructions remain byte-identical.
+# Exact DSPMU strings as of 2026-10-25. These guard byte-identity for the
+# English, Hindi and Gujarati outputs while foreign languages are added.
 _INSTRUCTION_HASHES = {
-    "en": "0fb5e8a6a794a5228106d3f1bea34151504ce92740ca3e9a8d0c05126aab7fe7",
-    "hi": "83ec3a118ac191443d7609d95b4490d9fc3c21670c4af9c7ee9a6227faed27b1",
-    "gu": "654fd81994d0d073dfd66b3eae3b646c14aec365a7f32f1095f971ba1a30f1c6",
+    "en": "a54cf2d501bda113a8c9a8675309682364caa1299a574db8bf9ce928b5b4549f",
+    "hi": "1c59842ad342be07a39948e20fbf0f07103c640481d3ca2a5d46e3cb40abe5a1",
+    "gu": "610ea6ca2caad2b7e7b274f13fa3292b9f48a9d6aafe626f41bd90cfe251cece",
 }
 
 _GREETING_HASHES = {
-    ("inbound", "en"): "2cbbffd1e099991d1fbdc5533db4db9f4a9295459db50737bc1510a4154ba02c",
-    ("inbound", "hi"): "b62f848cbc441e4ceb62ac9c334f0bca4256cda0032bf3b3a9e07858560d8f7a",
-    ("inbound", "gu"): "1c3a86482ece5e7c16e9217f4551ef45a213aed4d40706d306aad63ce4bd38b7",
-    ("outbound", "en"): "18e877306a0a9f30425993dc7b19640717f32c9cb551a245e0806c0cbfb1735c",
-    ("outbound", "hi"): "afa6609843977bd8ce204cbcd2dc3397ede4f5220ec61510e4332925666a93bd",
-    ("outbound", "gu"): "0447817ada5733eff24e6769d085384061296dbf63ab9ee7848590eb6b3a77be",
+    ("inbound", "en"): "d007a5a300ce68f4f45cb3ffc97ffa78eb873c5a0759ccc8d8e04e951c8d921b",
+    ("inbound", "hi"): "c28ae9d6fd100a0b9ba6e8bfc1dd910ee7437277a403939fb2a11db752aa7a03",
+    ("inbound", "gu"): "7934023b1a1ce30e8ec636c2010afa1f9218dcd2c2ffa36410df5f442ca86e92",
+    ("outbound", "en"): "0962aa33a94dfba29c80bf16447c4142c876d744527b2b00290b06cd3587e012",
+    ("outbound", "hi"): "1daabbccaf17502332c9ababa140330575fd914fd9eb35bac6bb9f16c0a5c47e",
+    ("outbound", "gu"): "e67ff67b0a28936abfccc3e76fe831b626691b90dc6ab8072a7dbd09ba3a1162",
 }
 
 # Deliberately includes Indic, Latin, punctuation-only and short sentences.
@@ -175,13 +173,13 @@ def test_english_assets_keep_their_shape():
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     busy = manifest["assets"]["busy.wav"]
-    assert busy["bytes"] == 152620
+    assert busy["bytes"] == 186412
     assert busy["language"] == "en"
     assert busy["voice"] == "af_heart"
 
     fixed = manifest["assets"]["fixed_response.wav"]
     assert fixed["sha256"] == (
-        "337ebb36616b2817aa9f877b184416a49e2b31568fceafd90c2f798d4c5f8375"
+        "8c77c09d95c137cafb18aca785fe5b578aba0339af4e85b76209d50d7f7df169"
     )
     assert fixed["language"] == "en"
     assert fixed["voice"] == "af_heart"

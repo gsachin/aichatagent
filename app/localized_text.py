@@ -46,15 +46,15 @@ WHATSAPP_LANGUAGE_RESEND = {
 #: Fixed closing line for the deterministic hangup path, in each foreign
 #: language. English keeps its existing constant in app/voice_handler.py.
 CLOSING_REPLIES = {
-    "es": "Gracias por llamar a Admisiones de Meridian University. ¡Que tenga un buen día!",
-    "fr": "Merci d'avoir appelé les admissions de Meridian University. Bonne journée !",
-    "it": "Grazie per aver chiamato l'ufficio ammissioni della Meridian University. Buona giornata!",
+    "es": "Gracias por llamar a Admisiones de Dr. Shyama Prasad Mukherjee University. ¡Que tenga un buen día!",
+    "fr": "Merci d'avoir appelé les admissions de Dr. Shyama Prasad Mukherjee University. Bonne journée !",
+    "it": "Grazie per aver chiamato l'ufficio ammissioni della Dr. Shyama Prasad Mukherjee University. Buona giornata!",
     "ja": (
-        "Meridian University 入学課にお電話いただき、ありがとうございました。"
+        "Dr. Shyama Prasad Mukherjee University 入学課にお電話いただき、ありがとうございました。"
         "よい一日をお過ごしください。"
     ),
-    "pt": "Obrigada por ligar para o setor de admissões da Meridian University. Tenha um ótimo dia!",
-    "zh": "感谢您致电 Meridian University 招生办。祝您愉快！",
+    "pt": "Obrigada por ligar para o setor de admissões da Dr. Shyama Prasad Mukherjee University. Tenha um ótimo dia!",
+    "zh": "感谢您致电 Dr. Shyama Prasad Mukherjee University 招生办。祝您愉快！",
 }
 
 #: Opening scripts. `call_greeting` formats these with agent_name/company_name.
@@ -187,31 +187,31 @@ FIXED_RESPONSE_TEXTS = {
 
 BUSY_TEXTS = {
     "es": (
-        "Gracias por llamar a Admisiones de la Meridian University. Todos "
+        "Gracias por llamar a Admisiones de la Dr. Shyama Prasad Mukherjee University. Todos "
         "nuestros asesores están en llamada en este momento. Vuelva a "
         "intentarlo en unos minutos y con gusto le ayudaremos."
     ),
     "fr": (
-        "Merci d'avoir appelé les admissions de Meridian University. Tous nos "
+        "Merci d'avoir appelé les admissions de Dr. Shyama Prasad Mukherjee University. Tous nos "
         "conseillers sont en ligne pour le moment. Réessayez dans quelques "
         "minutes, nous serons ravis de vous aider."
     ),
     "it": (
-        "Grazie per aver chiamato l'ufficio ammissioni della Meridian "
+        "Grazie per aver chiamato l'ufficio ammissioni della DSPMU "
         "University. Tutti i nostri consulenti sono al telefono in questo "
         "momento. Riprovi tra qualche minuto, saremo felici di aiutarla."
     ),
     "ja": (
-        "Meridian University 入学課です。ただいま電話対応中です。"
+        "Dr. Shyama Prasad Mukherjee University 入学課です。ただいま電話対応中です。"
         "後ほどおかけ直しください。"
     ),
     "pt": (
-        "Obrigada por ligar para o setor de admissões da Meridian University. "
+        "Obrigada por ligar para o setor de admissões da Dr. Shyama Prasad Mukherjee University. "
         "Todos os nossos consultores estão em ligação no momento. Tente "
         "novamente em alguns minutos e teremos prazer em ajudar."
     ),
     "zh": (
-        "感谢您致电 Meridian University 招生办。我们的顾问目前都在通话中。"
+        "感谢您致电 Dr. Shyama Prasad Mukherjee University 招生办。我们的顾问目前都在通话中。"
         "请过几分钟再拨，我们将很乐意为您服务。"
     ),
 }
@@ -232,17 +232,17 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "Eso es todo lo que el perfil de la universidad tiene sobre ese "
             "tema. La oficina de admisiones puede ayudarle más: "
-            "admissions@meridian.edu o +1 (555) 204-7890.",
+            "registrar@dspmuranchi.ac.in o +91 930 455 261.",
             "Hasta aquí puedo llegar con ese tema, y prefiero decírselo antes "
             "que seguir dando vueltas. Admisiones puede ayudarle en "
-            "admissions@meridian.edu o +1 (555) 204-7890. ¿Hay algo más en lo "
+            "registrar@dspmuranchi.ac.in o +91 930 455 261. ¿Hay algo más en lo "
             "que pueda ayudarle?",
         ),
         "unoffered": (
-            "Meridian University no ofrece {subject}. Puedo hablarle de los "
+            "Dr. Shyama Prasad Mukherjee University no ofrece {subject}. Puedo hablarle de los "
             "programas que sí ofrecemos o ponerle en contacto con la oficina "
             "de admisiones.",
-            "{subject_cap} no es uno de los programas de Meridian University. "
+            "{subject_cap} no es uno de los programas de Dr. Shyama Prasad Mukherjee University. "
             "Con gusto le explico lo que sí ofrecemos, o la oficina de "
             "admisiones puede ayudarle.",
         ),
@@ -261,17 +261,17 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "C'est tout ce que le profil de l'université contient sur ce "
             "sujet. Le service des admissions peut aller plus loin : "
-            "admissions@meridian.edu ou +1 (555) 204-7890.",
+            "registrar@dspmuranchi.ac.in ou +91 930 455 261.",
             "Je ne peux pas aller plus loin sur ce point, et je préfère vous "
             "le dire plutôt que de tourner en rond. Les admissions peuvent "
-            "vous aider à admissions@meridian.edu ou au +1 (555) 204-7890. "
+            "vous aider à registrar@dspmuranchi.ac.in ou au +91 930 455 261. "
             "Puis-je vous aider sur autre chose ?",
         ),
         "unoffered": (
-            "Meridian University ne propose pas {subject}. Je peux vous parler "
+            "Dr. Shyama Prasad Mukherjee University ne propose pas {subject}. Je peux vous parler "
             "des programmes que nous proposons ou vous mettre en contact avec "
             "le service des admissions.",
-            "{subject_cap} ne fait pas partie des programmes de Meridian "
+            "{subject_cap} ne fait pas partie des programmes de DSPMU "
             "University. Je serais ravie de vous présenter ce que nous "
             "proposons, ou le service des admissions peut vous aider.",
         ),
@@ -289,17 +289,17 @@ GROUNDING_REFUSALS = {
         "escalations": (
             "Questo è tutto ciò che il profilo dell'università riporta "
             "sull'argomento. L'ufficio ammissioni può seguirla: "
-            "admissions@meridian.edu o +1 (555) 204-7890.",
+            "registrar@dspmuranchi.ac.in o +91 930 455 261.",
             "Non posso andare oltre su questo punto, e preferisco dirglielo "
             "invece di girare intorno. Le ammissioni possono aiutarla a "
-            "admissions@meridian.edu o al +1 (555) 204-7890. Posso aiutarla in "
+            "registrar@dspmuranchi.ac.in o al +91 930 455 261. Posso aiutarla in "
             "altro?",
         ),
         "unoffered": (
-            "La Meridian University non offre {subject}. Posso parlarle dei "
+            "La Dr. Shyama Prasad Mukherjee University non offre {subject}. Posso parlarle dei "
             "programmi che offriamo o metterla in contatto con l'ufficio "
             "ammissioni.",
-            "{subject_cap} non è uno dei programmi della Meridian University. "
+            "{subject_cap} non è uno dei programmi della Dr. Shyama Prasad Mukherjee University. "
             "Sarò lieta di illustrarle ciò che offriamo, oppure può aiutarla "
             "l'ufficio ammissioni.",
         ),
@@ -316,15 +316,15 @@ GROUNDING_REFUSALS = {
         ),
         "escalations": (
             "大学のプロフィールにあるのはそこまでです。入学課がさらにご案内"
-            "できます。admissions@meridian.edu または +1 (555) 204-7890。",
+            "できます。registrar@dspmuranchi.ac.in または +91 930 455 261。",
             "この件はこれ以上お答えできません。同じことを繰り返すより、担当者に"
-            "おつなぎするのがよいと思います。admissions@meridian.edu または "
-            "+1 (555) 204-7890 までご連絡ください。ほかに何かお手伝いできますか？",
+            "おつなぎするのがよいと思います。registrar@dspmuranchi.ac.in または "
+            "+91 930 455 261 までご連絡ください。ほかに何かお手伝いできますか？",
         ),
         "unoffered": (
-            "Meridian University では{subject}は提供していません。提供している"
+            "Dr. Shyama Prasad Mukherjee University では{subject}は提供していません。提供している"
             "プログラムをご案内するか、入学課におつなぎできます。",
-            "{subject_cap}は Meridian University のプログラムではありません。"
+            "{subject_cap}は Dr. Shyama Prasad Mukherjee University のプログラムではありません。"
             "提供している内容をご案内できますし、入学課でもお手伝いできます。",
         ),
         "unoffered_markers": ("は提供していません", "のプログラムではありません"),
@@ -341,17 +341,17 @@ GROUNDING_REFUSALS = {
         ),
         "escalations": (
             "Isso é tudo o que o perfil da universidade tem sobre o assunto. O "
-            "setor de admissões pode ajudar mais: admissions@meridian.edu ou "
-            "+1 (555) 204-7890.",
+            "setor de admissões pode ajudar mais: registrar@dspmuranchi.ac.in ou "
+            "+91 930 455 261.",
             "Não posso ir além nesse ponto, e prefiro dizer isso a ficar "
-            "repetindo. As admissões podem ajudar em admissions@meridian.edu "
-            "ou +1 (555) 204-7890. Posso ajudar em mais alguma coisa?",
+            "repetindo. As admissões podem ajudar em registrar@dspmuranchi.ac.in "
+            "ou +91 930 455 261. Posso ajudar em mais alguma coisa?",
         ),
         "unoffered": (
-            "A Meridian University não oferece {subject}. Posso falar sobre os "
+            "A Dr. Shyama Prasad Mukherjee University não oferece {subject}. Posso falar sobre os "
             "programas que oferecemos ou colocar você em contato com o setor "
             "de admissões.",
-            "{subject_cap} não é um dos programas da Meridian University. "
+            "{subject_cap} não é um dos programas da Dr. Shyama Prasad Mukherjee University. "
             "Terei prazer em explicar o que oferecemos, ou o setor de "
             "admissões pode ajudar.",
         ),
@@ -367,17 +367,17 @@ GROUNDING_REFUSALS = {
         ),
         "escalations": (
             "学校资料里关于这一点只有这些。招生办可以进一步帮您："
-            "admissions@meridian.edu 或 +1 (555) 204-7890。",
+            "registrar@dspmuranchi.ac.in 或 +91 930 455 261。",
             "这一点我只能说到这里，与其反复解释，不如请您联系招生办："
-            "admissions@meridian.edu 或 +1 (555) 204-7890。还有什么我可以帮您的吗？",
+            "registrar@dspmuranchi.ac.in 或 +91 930 455 261。还有什么我可以帮您的吗？",
         ),
         "unoffered": (
-            "Meridian University 不提供{subject}。我可以为您介绍我们提供的"
+            "Dr. Shyama Prasad Mukherjee University 不提供{subject}。我可以为您介绍我们提供的"
             "课程，或帮您联系招生办。",
-            "{subject_cap}不是 Meridian University 的课程之一。我很乐意为您"
+            "{subject_cap}不是 Dr. Shyama Prasad Mukherjee University 的课程之一。我很乐意为您"
             "介绍我们提供的课程，招生办也可以进一步帮您。",
         ),
-        "unoffered_markers": ("不提供", "不是 Meridian University 的课程"),
+        "unoffered_markers": ("不提供", "不是 Dr. Shyama Prasad Mukherjee University 的课程"),
     },
 }
 
@@ -736,10 +736,10 @@ def whatsapp_language_menu(options) -> str:
     return "\n".join(lines)
 
 
-# The tables above were written for the archived Meridian deployment. Applying
+# The tables above were written for the archived DSPMU deployment. Applying
 # the deployment brand here keeps the fixed lines (closing, busy, refusal and
 # onboarding examples) in one place while the call sites stay unchanged. In
-# tests conftest pins the Meridian values, so this is a no-op for the existing
+# tests conftest pins the DSPMU values, so this is a no-op for the existing
 # fixtures.
 for _branded_table in (
     "CLOSING_REPLIES",

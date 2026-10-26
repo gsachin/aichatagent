@@ -120,12 +120,12 @@ REFUSAL_VARIANTS = (
 ESCALATION_REFUSALS = (
     brand_text(
         "I've given you everything the university profile has on that. The "
-        "admissions office can take it further -- admissions@meridian.edu, or "
+        "admissions office can take it further -- registrar@dspmuranchi.ac.in, or "
         "+1 (555) 204-7890."
     ),
     brand_text(
         "That's as far as I can take this one, and I'd rather say so than keep "
-        "going round. Admissions can help on admissions@meridian.edu or "
+        "going round. Admissions can help on registrar@dspmuranchi.ac.in or "
         "+1 (555) 204-7890. Is there anything else I can look at for you?"
     ),
 )
@@ -146,12 +146,12 @@ ESCALATION_REFUSALS = (
 #: different words; a caller who pushes a third time is handed to a human.
 UNOFFERED_REFUSALS = (
     brand_text(
-        "Meridian University does not offer {subject}. I can take you through "
+        "Dr. Shyama Prasad Mukherjee University does not offer {subject}. I can take you through "
         "the programmes we do offer, or put you in touch with the admissions "
         "office."
     ),
     brand_text(
-        "{subject_cap} isn't one of Meridian University's programmes. I'm "
+        "{subject_cap} isn't one of Dr. Shyama Prasad Mukherjee University's programmes. I'm "
         "happy to go through what we do offer, or the admissions office can "
         "help further."
     ),
@@ -159,8 +159,8 @@ UNOFFERED_REFUSALS = (
 
 #: The stable phrases `is_refusal` uses to recognise the boundary's own lines.
 #: Built from the same source as the sentences above so the two cannot drift.
-_NOT_OFFERED_MARKER = brand_text("Meridian University does not offer")
-_NOT_ONE_OF_MARKER = brand_text("isn't one of Meridian University's programmes")
+_NOT_OFFERED_MARKER = brand_text("Dr. Shyama Prasad Mukherjee University does not offer")
+_NOT_ONE_OF_MARKER = brand_text("isn't one of Dr. Shyama Prasad Mukherjee University's programmes")
 
 #: "4 years", "$14,500", "3.5", "24 hours", "3-year".
 #:
@@ -214,7 +214,7 @@ def _properties_present(text: str, index: EntityIndex) -> list[str]:
     return [c for c in name_candidates(text) if index.is_known(c)]
 
 
-#: A denied thing is not a claimed thing. "Meridian University does not offer an
+#: A denied thing is not a claimed thing. "Dr. Shyama Prasad Mukherjee University does not offer an
 #: MDA program" is a CORRECT answer, and the replay over the archived calls
 #: caught the guard refusing it -- the entity is unknown, so the name branch
 #: read the denial as an invention. It is the mirror of the defect this branch

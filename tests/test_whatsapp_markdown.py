@@ -25,8 +25,8 @@ def test_strip_markdown_bullets_and_hr():
 
 
 def test_strip_markdown_links_and_code():
-    out = m._strip_markdown("See [programs](https://meridian.test/p) and use `OTP` code")
-    assert out == "See programs (https://meridian.test/p) and use OTP code"
+    out = m._strip_markdown("See [programs](https://dspmu.test/p) and use `OTP` code")
+    assert out == "See programs (https://dspmu.test/p) and use OTP code"
 
 
 def test_strip_markdown_table():
@@ -89,8 +89,12 @@ def test_retrieval_query_keeps_a_program_the_question_names(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(pl, "run_rag_query_sync", fake)
-    asyncio.run(m._whatsapp_chat_rag("what about MBA fees?", program="M.Tech"))
-    assert seen["retrieval_query"] == "what about MBA fees?"
+    asyncio.run(
+        m._whatsapp_chat_rag(
+            "what about BA History fees?", program="B.Sc Physics"
+        )
+    )
+    assert seen["retrieval_query"] == "what about BA History fees?"
 
 
 def test_answers_echoing_user_text_stay_valid_xml():

@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
@@ -168,6 +169,11 @@ _BOUNDARY_WORDS = (
     "admission list", "मेरिट लिस्ट", "चयन सूची", "परिणाम", "રોલ નંબર",
     "પરિણામ",
 )
+
+
+def _with_kind(bundle: ContextBundle, kind: str) -> ContextBundle:
+    """Tag a bundle with the route that produced it (provenance only)."""
+    return replace(bundle, kind=kind)
 
 
 def _resolve(path: str) -> Path:
@@ -367,7 +373,7 @@ def _pg_boundary_block() -> str:
 
 def _detected_programme(query: str) -> str:
     # The router is part of the DSPMU profile; use its catalogue even when the
-    # test suite has pinned the archived Meridian catalogue for old fixtures.
+    # test suite has pinned the archived legacy catalogue for old fixtures.
     return detect_program(query, DSPMU_PROGRAM_ALIASES)
 
 
@@ -547,6 +553,7 @@ def _base_bundle() -> ContextBundle | None:
         node_ids=("core_cards",),
         source_urls=_urls(core),
         valid_until=str(facts.get("valid_until") or "") or None,
+        kind="base",
     )
 
 
@@ -567,7 +574,7 @@ def route_query(query: str = "") -> ContextBundle:
     # A result/merit-list question is a boundary, not a notice lookup.
     if _has_any(text, _BOUNDARY_WORDS):
         logger.info("site router: boundary")
-        return base
+        return _with_kind(base, "boundary")
 
     if is_pg_data_question(text):
         logger.info("site router: PG boundary")
@@ -577,6 +584,7 @@ def route_query(query: str = "") -> ContextBundle:
             node_ids=base.node_ids,
             source_urls=base.source_urls,
             valid_until=base.valid_until,
+            kind="pg_boundary",
         )
 
     if _has_any(text, _NOTICE_WORDS):
@@ -607,13 +615,14 @@ def route_query(query: str = "") -> ContextBundle:
             notice_ids=notice_ids,
             source_urls=tuple(dict.fromkeys(urls)),
             valid_until=base.valid_until,
+            kind="notices",
         )
 
     if _has_any(text, _FEE_WORDS):
         fee = _fee_for(programme)
         if fee is None:
             logger.info("site router: fees (core)")
-            return base
+            return _with_kind(base, "fee")
         rendered = _render_fee(fee)
         fact_id = str(fee.get("fact_id") or "")
         logger.info("site router: fee fact")
@@ -625,17 +634,18 @@ def route_query(query: str = "") -> ContextBundle:
                 (*base.source_urls, str(fee.get("source_url") or ""))
             )),
             valid_until=str(fee.get("valid_until") or "") or base.valid_until,
+            kind="fee",
         )
 
     if _has_any(text, _DOCUMENT_WORDS):
         logger.info("site router: documents (core)")
-        return base
+        return _with_kind(base, "documents")
     if _has_any(text, _DATE_WORDS):
         logger.info("site router: dates (core)")
-        return base
+        return _with_kind(base, "dates")
     if _has_any(text, _CONTACT_WORDS):
         logger.info("site router: contact (core)")
-        return base
+        return _with_kind(base, "contact")
     if _has_any(text, _SYLLABUS_WORDS):
         rendered = _syllabus_text(text, programme)
         if rendered:
@@ -648,10 +658,11 @@ def route_query(query: str = "") -> ContextBundle:
                     (*base.source_urls, "https://dspmuranchi.ac.in/syllabus")
                 )),
                 valid_until=base.valid_until,
+                kind="syllabus",
             )
     if _has_any(text, _ADMISSION_WORDS):
         logger.info("site router: admissions (core)")
-        return base
+        return _with_kind(base, "admissions")
     if (
         _has_any(text, _STRONG_ABOUT_WORDS)
         and not (programme and _has_any(text, _DEGREE_MARKERS))
@@ -668,10 +679,11 @@ def route_query(query: str = "") -> ContextBundle:
                     (*base.source_urls, *((source,) if source else ()))
                 )),
                 valid_until=base.valid_until,
+                kind="about",
             )
     if _has_any(text, _DEPARTMENT_WORDS):
         logger.info("site router: department fallback")
-        return document_bundle()
+        return _with_kind(document_bundle(), "department")
 
     if programme:
         fee = _fee_for(programme)
@@ -687,6 +699,7 @@ def route_query(query: str = "") -> ContextBundle:
                     (*base.source_urls, str(fee.get("source_url") or ""))
                 )),
                 valid_until=str(fee.get("valid_until") or "") or base.valid_until,
+                kind="programme",
             )
 
 
@@ -703,10 +716,11 @@ def route_query(query: str = "") -> ContextBundle:
                     (*base.source_urls, *((source,) if source else ()))
                 )),
                 valid_until=base.valid_until,
+                kind="about",
             )
 
     logger.info("site router: full fallback")
-    return document_bundle()
+    return _with_kind(document_bundle(), "fallback")
 
 
 def clear_cache() -> None:

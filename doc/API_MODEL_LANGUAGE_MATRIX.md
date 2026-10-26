@@ -55,7 +55,7 @@ embedding models.
 - `LLM_MODEL=gpt-6-luna`, `LLM_BASE_URL=https://api.openai.com/v1`
 - `LLM_MAX_TOKENS=192` keeps spoken answers short
 - `LLM_REASONING_EFFORT=none`
-- `LLM_PROMPT_CACHE_KEY=meridian-kb-v1` (stable system+document prefix)
+- `LLM_PROMPT_CACHE_KEY=dspmu-kb-v3` (stable system+document prefix)
 - `LLM_TEMPERATURE` is empty, so **temperature is omitted**. `gpt-6-luna` rejects
   non-default temperature values with HTTP 400.
 - Streaming is used by voice (`LLM_STREAM=1`) and optionally for tool use; text
@@ -68,13 +68,13 @@ embedding models.
 | Model | Provider | Where used | Why this model |
 |---|---|---|---|
 | **`gpt-6-luna`** | OpenAI | All text generation: voice answers, WhatsApp, Streamlit, sentiment, lead extraction, follow-up parsing, admission-intent classification | One remote multilingual model; handles English + Indic + code-mixed prompts; full KB fits in context; prompt caching; no GPU/VRAM on the box |
-| **Sarvam Saaras v4** (`saaras:v4`) | Sarvam AI | Primary STT for live voice | Trained on Indian languages and code-mixed speech; accepts 8 kHz telephony; 49 keyterms keep Meridian/B.Tech/MBA names intact |
+| **Sarvam Saaras v4** (`saaras:v4`) | Sarvam AI | Primary STT for live voice | Trained on Indian languages and code-mixed speech; accepts 8 kHz telephony; 49 keyterms keep DSPMU/B.Tech/MBA names intact |
 | **AI4Bharat IndicConformer-600M** (int8 ONNX) | Local, via `onnx-asr` | STT fallback for **Hindi and Gujarati only** | Offline fallback when Sarvam is unavailable; ~138 MB per language; CPU int8 ~0.25 RTF |
 | **faster-whisper `small`** | Local CTranslate2 | Last-resort STT; broad language coverage | Historical fallback; multilingual `small` (not `small.en`); greedy decoding and VAD tuned for phone audio |
 | **Sarvam Bulbul v4 Flash** (`bulbul:v4-flash`) | Sarvam AI | Gujarati and Hindi TTS (answers and greeting) | Kokoro has no Gujarati voice and mispronounces Hindi code-mixed Latin acronyms; Bulbul has per-language personas and streams raw 8 kHz linear16, matching Twilio |
 | **Kokoro ONNX** | Local, `kokoro-onnx==0.5.0` | English TTS; Hindi fallback when Sarvam is unavailable; mapped voices for six more languages | Low-latency local TTS; 24 kHz; no per-character cloud cost |
 | **AI4Bharat Indic-TTS v1** | Local service at `:8020` (optional) | Not active (`TTS_PROVIDER=sarvam`) | Covers 13 Indic languages, including four Sarvam does not (as, brx, mni, raj) and is the fallback for wider Indic coverage |
-| ~~Embedding model~~ | — | **None** | RAG was removed. The entire `content/meridian/meridian_knowledge_base.md` (~15.6 KB / ~3.2k tokens) is injected every turn |
+| ~~Embedding model~~ | — | **None** | RAG was removed. The entire `content/dspmu/core_cards.md, site_map.md and recent_notices.md` (~15.6 KB / ~3.2k tokens) is injected every turn |
 
 ### Why no RAG / embeddings
 
@@ -207,7 +207,7 @@ but there is no curated prompt name for it. Quality and script correctness must 
 tested per language.
 
 The instruction asks the model to translate every sentence, heading, label and
-list item, while keeping Meridian University, degree abbreviations, numbers,
+list item, while keeping DSPMU University, degree abbreviations, numbers,
 currency, email addresses and URLs in Latin script so the grounding boundary can
 still match them against the English knowledge base.
 
@@ -442,11 +442,11 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `LLM_MAX_TOKENS` | `192` | Spoken-answer brevity |
 | `LLM_REASONING_EFFORT` | `none` | Passed to OpenAI |
-| `LLM_PROMPT_CACHE_KEY` | `meridian-kb-v1` | Stable prompt-cache key |
+| `LLM_PROMPT_CACHE_KEY` | `dspmu-kb-v3` | Stable prompt-cache key |
 | `LLM_TEMPERATURE` | empty | Omitted (model rejects non-default) |
 | `LLM_STREAM` | `1` | Clause streaming for voice |
 | `CONTEXT_MODE` | `doc` | Full-document context, no retrieval |
-| `DOC_PATHS` | `content/meridian/meridian_knowledge_base.md` | Knowledge base (~15.6 KB / ~3.2k tokens) |
+| `DOC_PATHS` | `content/dspmu/core_cards.md, site_map.md and recent_notices.md` | Knowledge base (~15.6 KB / ~3.2k tokens) |
 | `DOC_MAX_BYTES` / `DOC_MAX_TOKENS` | `2000000` / `500000` | Guard rails |
 | `STT_PROVIDER` | `sarvam` | Primary STT |
 | `STT_FALLBACK_PROVIDERS` | `indic_conformer,whisper` | Fallback order |
@@ -503,7 +503,7 @@ The Indic-TTS service also needs the per-language checkpoint downloaded
   `app/voice_handler.py` now passes misaki phonemes with `is_phonemes=True`.
   `misaki[ja]` needs pyopenjtalk; we install the prebuilt `pyopenjtalk-plus`
   wheel instead of compiling it. The TTS-only reading map substitutes
-  `Meridian University` and degree abbreviations for ja/zh; the transcript
+  `DSPMU University` and degree abbreviations for ja/zh; the transcript
   keeps the original text.
 - Kokoro's Japanese/Chinese speed is 1.2x. At 1.4x the Japanese round trip
   starts to smear; 1.0-1.3 is clean.

@@ -23,12 +23,12 @@ contains**, which does not change from turn to turn. That is what this module
 indexes.
 
 The corpus is exactly one file. The Chroma collection behind retrieval holds 35
-chunks and all 35 come from `content/meridian/meridian_knowledge_base.md`, so
+chunks and all 35 come from `content/dspmu/voice_kb.md`, so
 the index and the evidence have one source of truth between them.
 
 The name branch, and why it can come back
 -----------------------------------------
-A name check was tried before and removed. `tests/test_voice_demo_grounding.py`
+A name check was tried before and removed.
 records why: it refused three CORRECT programme lists in front of callers. Those
 measurements were taken on the same calls as the BUG-16 wiring fault, which left
 the evidence list empty -- so everything was being refused, and the name branch
@@ -73,7 +73,7 @@ __all__ = [
 #: The shipped knowledge base. Overridable so a test, or a re-ingested corpus,
 #: can point the index at its own source without touching code.
 KB_PATH_ENV = "VOICE_KB_PATH"
-_DEFAULT_KB = "content/meridian/meridian_knowledge_base.md"
+_DEFAULT_KB = "content/dspmu/voice_kb.md"
 
 #: Categories whose entries name a programme, and so carry numbers that belong
 #: to that programme specifically. Everything outside these sections is treated
@@ -342,7 +342,7 @@ class NameSlot(NamedTuple):
 
         The recombination defect. On live call `2e9952a7` the agent said
         "Master of Science in Computer Science" six times and the guard never
-        fired, because the phrase splits into two genuine Meridian names --
+        fired, because the phrase splits into two genuine DSPMU names --
         `Master of Science` and `Computer Science` -- and each was established on
         its own. The invention is in the JOIN, and nothing was testing the join.
 
@@ -513,7 +513,7 @@ class EntityIndex:
         Entries look like:
 
             ### btech-cs
-            B.Tech in Computer Science at Meridian University: 4 years, School
+            B.Tech in Computer Science at Dr. Shyama Prasad Mukherjee University: 4 years, School
             of Computer Science. Eligibility: 10+2 with ... Tuition: $14,500
             per year.
 
@@ -563,7 +563,7 @@ class EntityIndex:
 
         Every programme entry states its school, so this needs no curation:
 
-            Bachelor of Arts (BA) at Meridian University: 3 years, School of
+            Bachelor of Arts (BA) at Dr. Shyama Prasad Mukherjee University: 3 years, School of
             Arts. Eligibility: 10+2 in any stream. Tuition: $7,900 per year.
         """
         out: dict[str, str] = {}
@@ -600,7 +600,7 @@ class EntityIndex:
     def _entity_names(head: str) -> list[str]:
         """The names an entry head introduces: the full name, and any abbreviation.
 
-        "Bachelor of Arts (BA) at Meridian University: ..." -> both
+        "Bachelor of Arts (BA) at Dr. Shyama Prasad Mukherjee University: ..." -> both
         "Bachelor of Arts" and "BA", because an answer uses either.
         """
         head = re.split(r"\bat\s+[^:]{0,100}?\bUniversity\b", head)[0]
@@ -717,7 +717,7 @@ class EntityIndex:
              year."            -> named "bachelor s", which owns nothing, so
                                    the MBA's real $18,500 looked unattributable
 
-            "Meridian University's MBA program is a 2-year postgraduate
+            "Dr. Shyama Prasad Mukherjee University's MBA program is a 2-year postgraduate
              degree."         -> named "s MBA", same consequence for "2 years"
 
         Both sentences talk about a real programme; the extractor just did not

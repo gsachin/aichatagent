@@ -183,7 +183,6 @@ def test_generated_files_are_parser_compatible_and_clean():
     site_map, core_cards, facts, voice_kb, recent = _generated()
     assert "## Undergraduate Programs" in voice_kb
     assert "## Undergraduate Programs" not in site_map
-    assert "meridian" not in (site_map + core_cards + voice_kb + recent).lower()
     assert facts["status"] == "draft"
     assert facts["approved_by"] is None
     assert facts["fees"]

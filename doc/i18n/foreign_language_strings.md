@@ -18,9 +18,9 @@ digits read aloud).
 | Phone register | Short sentences, no headings, no Markdown, no internal vocabulary ("engine", "timeout", "model"). |
 | Placeholders | `{company_name}`, `{agent_name}`, `{subject}`, `{subject_cap}`, `{name}`, `{email}`, `{phone}`, `{prog}`, `{reqs}` must survive every translation. |
 | Numbers and currency | Numbers are spoken as digits/currency; the grounding boundary still checks them. |
-| Brand and degrees | `Meridian University`, `B.Tech`, `MBA`, `B.CA`, `B.Com` stay in Latin script. |
+| Brand and degrees | `DSPMU`, `B.Tech`, `MBA`, `B.CA`, `B.Com` stay in Latin script. |
 | Japanese/Chinese | No spaces between characters; use `。！？`; Arabic numerals. Japanese and Chinese use the misaki G2P (not espeak-ng). |
-| TTS-only readings | For ja/zh, `app/voice_handler._TTS_READINGS` substitutes `Meridian University` and common degree abbreviations for a spoken reading (e.g. `経営学修士`, `工商管理硕士`). Review those substitutions too; they affect audio only, not the transcript. |
+| TTS-only readings | For ja/zh, `app/voice_handler._TTS_READINGS` substitutes `DSPMU` and common degree abbreviations for a spoken reading (e.g. `経営学修士`, `工商管理硕士`). Review those substitutions too; they affect audio only, not the transcript. |
 | Names | `{subject_cap}` has no capitalisation in Japanese/Chinese; the formatter's `.upper()` is a no-op, so the same text is used. |
 
 ## Sets to review
@@ -52,23 +52,23 @@ digits read aloud).
 
 | | |
 |---|---|
-| es | Gracias por llamar a Admisiones de Meridian University. ¡Que tenga un buen día! |
-| fr | Merci d'avoir appelé les admissions de Meridian University. Bonne journée ! |
-| it | Grazie per aver chiamato l'ufficio ammissioni della Meridian University. Buona giornata! |
-| ja | Meridian University 入学課にお電話いただき、ありがとうございました。よい一日をお過ごしください。 |
-| pt | Obrigada por ligar para o setor de admissões da Meridian University. Tenha um ótimo dia! |
-| zh | 感谢您致电 Meridian University 招生办。祝您愉快！ |
+| es | Gracias por llamar a Admisiones de DSPMU. ¡Que tenga un buen día! |
+| fr | Merci d'avoir appelé les admissions de DSPMU. Bonne journée ! |
+| it | Grazie per aver chiamato l'ufficio ammissioni della DSPMU. Buona giornata! |
+| ja | DSPMU 入学課にお電話いただき、ありがとうございました。よい一日をお過ごしください。 |
+| pt | Obrigada por ligar para o setor de admissões da DSPMU. Tenha um ótimo dia! |
+| zh | 感谢您致电 DSPMU 招生办。祝您愉快！ |
 
 ### Failure / busy
 
 | | Fixed response | Busy |
 |---|---|---|
-| es | Lo siento, no le entendí bien. ¿Podría repetirlo, por favor? | Gracias por llamar a Admisiones de la Meridian University. Todos nuestros asesores están en llamada en este momento. Vuelva a intentarlo en unos minutos y con gusto le ayudaremos. |
-| fr | Je suis désolée, je n'ai pas bien compris. Pourriez-vous répéter, s'il vous plaît ? | Merci d'avoir appelé les admissions de Meridian University. Tous nos conseillers sont en ligne pour le moment. Réessayez dans quelques minutes, nous serons ravis de vous aider. |
-| it | Mi scuso, non ho capito bene. Può ripetere, per favore? | Grazie per aver chiamato l'ufficio ammissioni della Meridian University. Tutti i nostri consulenti sono al telefono in questo momento. Riprovi tra qualche minuto, saremo felici di aiutarla. |
-| ja | すみません、よく聞き取れませんでした。もう一度お願いします。 | Meridian University 入学課です。ただいま電話対応中です。後ほどおかけ直しください。 |
-| pt | Desculpe, não entendi bem. Pode repetir, por favor? | Obrigada por ligar para o setor de admissões da Meridian University. Todos os nossos consultores estão em ligação no momento. Tente novamente em alguns minutos e teremos prazer em ajudar. |
-| zh | 抱歉，我刚才没听清楚。请您再说一遍好吗？ | 感谢您致电 Meridian University 招生办。我们的顾问目前都在通话中。请过几分钟再拨，我们将很乐意为您服务。 |
+| es | Lo siento, no le entendí bien. ¿Podría repetirlo, por favor? | Gracias por llamar a Admisiones de la DSPMU. Todos nuestros asesores están en llamada en este momento. Vuelva a intentarlo en unos minutos y con gusto le ayudaremos. |
+| fr | Je suis désolée, je n'ai pas bien compris. Pourriez-vous répéter, s'il vous plaît ? | Merci d'avoir appelé les admissions de DSPMU. Tous nos conseillers sont en ligne pour le moment. Réessayez dans quelques minutes, nous serons ravis de vous aider. |
+| it | Mi scuso, non ho capito bene. Può ripetere, per favore? | Grazie per aver chiamato l'ufficio ammissioni della DSPMU. Tutti i nostri consulenti sono al telefono in questo momento. Riprovi tra qualche minuto, saremo felici di aiutarla. |
+| ja | すみません、よく聞き取れませんでした。もう一度お願いします。 | DSPMU 入学課です。ただいま電話対応中です。後ほどおかけ直しください。 |
+| pt | Desculpe, não entendi bem. Pode repetir, por favor? | Obrigada por ligar para o setor de admissões da DSPMU. Todos os nossos consultores estão em ligação no momento. Tente novamente em alguns minutos e teremos prazer em ajudar. |
+| zh | 抱歉，我刚才没听清楚。请您再说一遍好吗？ | 感谢您致电 DSPMU 招生办。我们的顾问目前都在通话中。请过几分钟再拨，我们将很乐意为您服务。 |
 
 The remaining sets (`NOISE_LADDERS`, `GROUNDING_REFUSALS`, `STREAMLIT_UI`,
 WhatsApp confirmations) are in `app/localized_text.py` and should be reviewed in

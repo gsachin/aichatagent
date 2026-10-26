@@ -219,7 +219,7 @@ def test_english_output_is_byte_identical_for_empty_language(harness):
 
     greeting, _bg = send("hello")
     assert greeting == (
-        "Hello! 👋 I'm the Meridian University admissions assistant. "
+        "Hello! 👋 I'm the Dr. Shyama Prasad Mukherjee University admissions assistant. "
         "What's your name?"
     )
 
@@ -254,7 +254,7 @@ def test_hindi_intent_starts_the_document_flow(harness):
     _use(session, "hi")
     lead.update(name="Asha", email="asha@example.com")
 
-    reply, _bg = send("मैं एम.कॉम में एडमिशन लेना चाहता हूँ")
+    reply, _bg = send("मैं BA History में एडमिशन लेना चाहता हूँ")
 
     expected = whatsapp_text(
         "admission_docs_prompt",
@@ -264,10 +264,10 @@ def test_hindi_intent_starts_the_document_flow(harness):
         "(Passport, Aadhaar, or Driver's License)\n📝 Any additional "
         "certificates (optional)\n\nJust send clear photos or PDFs right here "
         "in WhatsApp. Type 'done' when you've sent everything.",
-        program="M.Com",
+        program="Bachelor of Arts in History (BA)",
     )
     assert reply == m._strip_markdown(expected)
-    assert lead["program_interest"] == "M.Com"
+    assert lead["program_interest"] == "Bachelor of Arts in History (BA)"
     assert calls["rag"] == []
 
 
@@ -276,7 +276,7 @@ def test_gujarati_intent_starts_the_document_flow(harness):
     _use(session, "gu")
     lead.update(name="Asha", email="asha@example.com")
 
-    reply, _bg = send("મને એમ.કોમમાં એડમિશન લેવું છે")
+    reply, _bg = send("મને BA History માં એડમિશન લેવું છે")
 
     expected = whatsapp_text(
         "admission_docs_prompt",
@@ -286,7 +286,7 @@ def test_gujarati_intent_starts_the_document_flow(harness):
         "(Passport, Aadhaar, or Driver's License)\n📝 Any additional "
         "certificates (optional)\n\nJust send clear photos or PDFs right here "
         "in WhatsApp. Type 'done' when you've sent everything.",
-        program="M.Com",
+        program="Bachelor of Arts in History (BA)",
     )
     assert reply == m._strip_markdown(expected)
     assert calls["rag"] == []
@@ -331,7 +331,7 @@ def test_unknown_language_falls_back_to_english(harness):
     reply, _bg = send("hello")
 
     assert reply == (
-        "Hello! 👋 I'm the Meridian University admissions assistant. "
+        "Hello! 👋 I'm the Dr. Shyama Prasad Mukherjee University admissions assistant. "
         "What's your name?"
     )
 

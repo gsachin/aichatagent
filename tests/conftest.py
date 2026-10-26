@@ -31,17 +31,29 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # service in tests (test_rag_dispatcher.py sets the mode per test).
 os.environ.setdefault("USE_MCP_RAG", "off")
 
-# The demo .env is branded for DSPMU. The existing assertions, fixtures and
-# transcripts were written against Meridian, so pin the archived brand and
-# programme catalogue for the suite. New DSPMU tests call the brand helper or
-# pass DSPMU_PROGRAM_ALIASES explicitly; they do not depend on .env.
-os.environ.setdefault("COMPANY_NAME", "Meridian University")
-os.environ.setdefault("COMPANY_SHORT_NAME", "Meridian")
-os.environ.setdefault("UNIVERSITY_NAME", "Meridian University")
-os.environ.setdefault("OFFER_EMAIL", "admissions@meridian.edu")
-os.environ.setdefault("ADMISSIONS_EMAIL", "admissions@meridian.edu")
-os.environ.setdefault("ADMISSIONS_PHONE", "+1 (555) 204-7890")
-os.environ.setdefault("PROGRAM_PROFILE", "meridian")
+# Request-time website retrieval is off in the hermetic suite. The live-site
+# tests inject a fake session; the integration test flips this setting per
+# case with the `override_settings` fixture.
+os.environ.setdefault("LIVE_SITE_ENABLED", "off")
+
+# Phase 1 NGA is a graph compiler only. Pin the flag off so a developer .env
+# can never make the suite exercise an answer-path integration that does not
+# exist yet.
+os.environ.setdefault("NGA_ENABLED", "off")
+os.environ.setdefault("NGA_MODE", "off")
+os.environ.setdefault("NGA_PII_GUARD_ENABLED", "off")
+os.environ.setdefault("NGA_SCHEDULER_ENABLED", "off")
+
+# The suite runs against the DSPMU brand and catalogue. These are assigned,
+# not defaulted: a developer shell that exported another profile must not
+# change what the tests assert.
+os.environ["COMPANY_NAME"] = "Dr. Shyama Prasad Mukherjee University"
+os.environ["COMPANY_SHORT_NAME"] = "DSPMU"
+os.environ["UNIVERSITY_NAME"] = "Dr. Shyama Prasad Mukherjee University"
+os.environ["OFFER_EMAIL"] = "registrar@dspmuranchi.ac.in"
+os.environ["ADMISSIONS_EMAIL"] = "registrar@dspmuranchi.ac.in"
+os.environ["ADMISSIONS_PHONE"] = "+91 930 455 261"
+os.environ["PROGRAM_PROFILE"] = "dspmu"
 
 # The demo .env sets CONTEXT_MODE=doc (full-document prompting). The existing
 # retrieval/dispatcher tests were written against the retrieval path, so the
@@ -49,14 +61,13 @@ os.environ.setdefault("PROGRAM_PROFILE", "meridian")
 # with the `override_settings` fixture or monkeypatch.
 os.environ.setdefault("CONTEXT_MODE", "rag")
 
-# Milestone 1 points the demo .env at content/dspmu. The existing guard tests
-# use the Meridian fixtures, so pin the document and entity sources to the
-# Meridian KB for the suite. The new DSPMU tests construct EntityIndex directly.
-os.environ.setdefault("VOICE_KB_PATH", "content/meridian/meridian_knowledge_base.md")
-os.environ.setdefault("DOC_PATHS", "content/meridian/meridian_knowledge_base.md")
+# The suite uses the production DSPMU prompt split and entity corpus.
+os.environ["VOICE_KB_PATH"] = "content/dspmu/voice_kb.md"
+os.environ["DOC_PATHS"] = (
+    "content/dspmu/core_cards.md,content/dspmu/site_map.md,"
+    "content/dspmu/recent_notices.md"
+)
 os.environ.setdefault("DOC_MAX_TOKENS", "500000")
-# Do not attach the DSPMU prompt manifest's fact/node IDs to the Meridian
-# fixture. A new bundle test overrides this explicitly.
 os.environ.setdefault("CONTEXT_MANIFEST_PATH", "")
 
 # The demo .env also sets LLM_PROVIDER=openai. Tests must stay hermetic and
@@ -68,12 +79,12 @@ os.environ.setdefault("LLM_PROVIDER", "auto")
 # The demo .env sets STT_PROVIDER=sarvam. Tests must never call a paid API or
 # load the 600M ONNX fallback; provider-specific tests patch the adapter. This
 # must win over .env, and load_dotenv does not override an existing variable.
-os.environ.setdefault("STT_PROVIDER", "whisper")
+os.environ["STT_PROVIDER"] = "whisper"
 os.environ.setdefault("STT_FALLBACK_PROVIDERS", "")
 
 # The demo .env routes Gujarati TTS to Sarvam. Tests must not call the paid
 # TTS API; keep the suite on Kokoro and let Sarvam-specific tests override.
-os.environ.setdefault("TTS_PROVIDER", "kokoro")
+os.environ["TTS_PROVIDER"] = "kokoro"
 os.environ.setdefault("SARVAM_TTS_LANGUAGES", "")
 
 # The greeting warmup is background work for a live box. Tests must not start

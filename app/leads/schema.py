@@ -84,6 +84,13 @@ ALTER_CALL_QUEUE_SQL = """
 ALTER TABLE call_queue ADD COLUMN IF NOT EXISTS language VARCHAR(8) DEFAULT '';
 """
 
+# WhatsApp reference-delivery consent. The columns are additive so existing
+# databases keep working; opt-out is authoritative when set.
+ALTER_LEADS_WHATSAPP_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_opt_in BOOLEAN DEFAULT FALSE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_opt_out_at TIMESTAMP WITH TIME ZONE;
+"""
+
 # ── Indexes ──────────────────────────────────────────────────────────
 CREATE_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_leads_status       ON leads(status);
@@ -103,6 +110,7 @@ ALL_TABLES_SQL = "\n".join(
         CREATE_FOLLOW_UPS_TABLE,
         CREATE_CALL_QUEUE_TABLE,
         ALTER_CALL_QUEUE_SQL,
+        ALTER_LEADS_WHATSAPP_SQL,
         CREATE_INDEXES_SQL,
     ]
 )

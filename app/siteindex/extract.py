@@ -370,12 +370,16 @@ def extract_pdf(
     max_ocr_pages: int = 8,
     ocr_langs: tuple[str, ...] | None = None,
     tessdata_dir: str | None = None,
+    max_pages: int | None = None,
 ) -> PdfDoc:
     """Extract text and tables from a PDF, with an OCR fallback for scans.
 
     ``ocr_langs`` defaults to ``eng,hin``; installed languages are selected in
-    that order. OCR text is always marked for human review.
+    that order. OCR text is always marked for human review. ``max_pages``
+    caps how many leading pages are read; ``pages`` in the result is the
+    number of pages actually processed.
     """
+    page_limit = max(1, int(max_pages)) if max_pages else None
     pages = 0
     text = ""
     tables: list[tuple[tuple[tuple[str, ...], ...], ...]] = []
@@ -383,14 +387,20 @@ def extract_pdf(
 
     try:
         reader = pypdf.PdfReader(io.BytesIO(body))
-        pages = len(reader.pages)
-        text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+        selected = (
+            reader.pages[:page_limit] if page_limit else reader.pages
+        )
+        pages = len(selected)
+        text = "\n".join((page.extract_text() or "") for page in selected).strip()
     except Exception as exc:  # noqa: BLE001
         error = f"pypdf: {type(exc).__name__}: {exc}"
 
     try:
         with pdfplumber.open(io.BytesIO(body)) as document:
-            for page in document.pages:
+            selected_pages = (
+                document.pages[:page_limit] if page_limit else document.pages
+            )
+            for page in selected_pages:
                 raw_tables = page.extract_tables() or []
                 page_tables = []
                 for raw in raw_tables:
@@ -403,7 +413,7 @@ def extract_pdf(
                         page_tables.append(rows)
                 tables.append(tuple(page_tables))
                 if not pages:
-                    pages = len(document.pages)
+                    pages = len(selected_pages)
     except Exception as exc:  # noqa: BLE001
         if not error:
             error = f"pdfplumber: {type(exc).__name__}: {exc}"
@@ -415,9 +425,13 @@ def extract_pdf(
     needs_review = False
 
     if ocr and len(re.sub(r"\W", "", text)) < 80:
+        ocr_pages = (
+            min(max(1, int(max_ocr_pages)), page_limit)
+            if page_limit else max(1, int(max_ocr_pages))
+        )
         ocr_text, ocr_available, ocr_lang, ocr_quality = _ocr_pdf(
             body,
-            max_pages=max_ocr_pages,
+            max_pages=ocr_pages,
             ocr_langs=ocr_langs,
             tessdata_dir=tessdata_dir,
         )

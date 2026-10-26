@@ -312,7 +312,12 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
                        retrieval_query: str | None = None,
                        history: list[str] | None = None,
                        profile: dict | None = None,
-                       language: str | None = None) -> str | None:
+                       language: str | None = None,
+                       voice_fast: bool = False,
+                       agentic_text: bool = False,
+                       channel: str | None = None,
+                       conversation_id: str | None = None,
+                       reference_sink: list | None = None) -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
     Uses shared RAG module for consistent quality across all interfaces.
@@ -339,7 +344,10 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
     from app.rag import query_rag
     if not _bg_priority_enabled():
         return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                         history=history, profile=profile, language=language)
+                         history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
 
     from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
@@ -348,11 +356,17 @@ def run_rag_query_sync(user_text: str, mode: str = "voice",
         label = "voice" if defect is None else f"unclassified:{mode}"
         with GATE.voice_turn(label=label):
             return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                             history=history, profile=profile, language=language)
+                             history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
     try:
         with GATE.background_unit(label="background", mode=mode):
             return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
-                             history=history, profile=profile, language=language)
+                             history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
     except BackgroundDeferred:
         # Refused because the line stayed busy past its budget. It answers
         # nothing rather than being interleaved -- and this is NOT a

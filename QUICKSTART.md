@@ -1,219 +1,106 @@
-# Quick Start - Multi-Platform GPU Support (Phase 1-2 Complete)
+# Quick start — DSPMU admissions assistant
 
-**Status:** ✅ READY TO USE  
-**Your System:** M3 Max (36GB, Metal GPU, FP16)  
-**Date:** 2026-07-25
+Current stack: **OpenAI-compatible LLM**, FastAPI, Streamlit chat + dashboard,
+PostgreSQL, Twilio voice/WhatsApp, Cloudflare tunnel, and the DSPMU NGA site
+graph. There is **no Ollama, Chroma/vector store, Redis, enterprise-rag-core or
+standalone TTS service** in the current architecture.
 
----
+## 1. Prerequisites
 
-## What Changed
+- Python 3.11
+- Docker Desktop (PostgreSQL)
+- An OpenAI API key (or an OpenAI-compatible endpoint)
+- Optional: Twilio account and `cloudflared` for public voice/WhatsApp
 
-The app now automatically detects your GPU and uses optimal settings:
-
-```python
-# BEFORE (Hardcoded CUDA-only):
-DEVICE = "cuda" if GPU_AVAILABLE else "cpu"
-COMPUTE_TYPE = "int8"
-
-# AFTER (Platform-aware):
-config = detect_compute_device()
-DEVICE = config["device"]        # "cuda" | "mps" | "cpu"
-COMPUTE_TYPE = config["compute_type"]  # "int8" | "float16" | "float32"
-```
-
----
-
-## Your System Configuration
-
-| Property | Value |
-|----------|-------|
-| **Platform** | Apple Silicon (M3 Max) |
-| **GPU** | Metal GPU (mps) ✅ |
-| **Compute Type** | float16 (optimal for Metal) |
-| **Total Memory** | 36.0 GB |
-| **Required Memory** | 16.0 GB |
-| **Headroom** | 20.0 GB 🎉 |
-
----
-
-## Files Updated
-
-### Core Modules (Phase 1)
-- ✅ `app/platform.py` - Device detection (200 lines)
-- ✅ `app/memory_budget.py` - Memory budgets (150 lines)
-
-### Application Code (Phase 2)
-- ✅ `app/pipeline.py` - Uses platform config
-- ✅ `app.py` - Platform-aware Whisper
-- ✅ `test_audio_local.py` - Platform detection
-- ✅ `test_full_pipeline.py` - Platform detection
-- ✅ `test_environment.py` - Multi-GPU validation
-
-### Tests (Phase 3)
-- ✅ `tests/test_phase1_environment.py` - All 4 tests passing
-
----
-
-## How to Use
-
-### Test It
+## 2. Install
 
 ```bash
-# Verify platform detection
-python3 -c "from app.platform import detect_compute_device; \
-            config = detect_compute_device(); \
-            print(f'Device: {config[\"device\"]} ({config[\"platform\"]})')"
-
-# Output: Device: mps (apple_silicon)
-```
-
-### Run Environment Check
-
-```bash
-python3 test_environment.py
-
-# Output shows:
-# ✓ GPU available: apple_silicon (mps)
-# ✓ VRAM: 36.00 GB available, 16.00 GB required
-# ✓ Headroom: 20.00 GB
-```
-
-### Run Tests
-
-```bash
-# Phase 1 GPU detection tests (all 4 should pass)
-python3 -m pytest tests/test_phase1_environment.py::TestPhase1GpuDetection -v
-```
-
----
-
-## Performance Expected
-
-```
-Your System (M3 Max with Metal GPU):
-  Latency: ~250ms per voice turn
-  (vs NVIDIA: ~200ms, CPU: ~2800ms)
-  
-Memory Usage:
-  Peak: ~6.25 GB / 36 GB (17% utilized)
-  
-Inference Speed:
-  STT: ~100-150ms (Whisper FP16)
-  LLM: ~80-120ms (Qwen via Ollama)
-  TTS: ~50-80ms (Kokoro)
-```
-
----
-
-## Key Files Reference
-
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/platform.py` | Device detection & config | ✅ Working |
-| `app/memory_budget.py` | Platform memory budgets | ✅ Working |
-| `app/pipeline.py` | Main voice pipeline | ✅ Updated |
-| `app.py` | Streamlit web UI | ✅ Updated |
-| `test_environment.py` | Environment validation | ✅ Working |
-| `tests/test_phase1_environment.py` | GPU detection tests | ✅ All passing |
-| `validate_platform_readiness.py` | Readiness checker | ✅ Available |
-| `IMPLEMENTATION_COMPLETE.md` | Implementation results | ✅ Full details |
-
----
-
-## What's Working Now
-
-✅ **Platform Detection**
-- Automatically detects M3 Max Metal GPU
-- Selects optimal FP16 precision
-- Reports 36GB available memory
-
-✅ **Multi-Platform Code**
-- Single codebase works on:
-  - NVIDIA CUDA (INT8)
-  - Apple Metal (FP16)
-  - CPU fallback (FP32)
-
-✅ **Automatic Optimization**
-- No manual config needed
-- Device selection: CUDA → Metal → CPU
-- Compute type: platform-optimized
-
-✅ **Testing**
-- 4/4 Phase 1 GPU tests passing
-- Memory validation passing
-- Zero breaking changes
-
----
-
-## System Check
-
-Run this to verify everything is working:
-
-```bash
-python3 test_environment.py
-```
-
-**Expected Output:**
-```
-[OK] Python 3.11
-[OK] PyTorch 2.6.0
-[OK] GPU available: apple_silicon (mps)
-[OK] VRAM Budget: 36.00 GB available, 12.00 GB required
-[OK] mlx backend reachable - 1 model(s) found
-```
-
----
-
-## macOS LLM backend — Apple MLX (implemented 2026-08-15)
-
-On Apple Silicon the LLM now runs on **Apple MLX** (`mlx_lm.server`,
-OpenAI-compatible API on `127.0.0.1:1234`) instead of Ollama/llama.cpp.
-Windows and Linux keep using Ollama unchanged. `app/llm_backend.py`
-selects the backend at runtime (`LLM_PROVIDER=auto` by default).
-
-- LLM model: `mlx-community/Qwen2.5-14B-Instruct-4bit` (~9 GB one-time
-  download, configurable via `MLX_MODEL`)
-- Embeddings on Mac: `nomic-ai/nomic-embed-text-v1.5` via
-  sentence-transformers (same 768-dim family as Ollama's
-  nomic-embed-text → Chroma store stays compatible)
-- STT on Mac: faster-whisper CPU + int8 (CTranslate2 has no Metal
-  backend — `app.platform.get_whisper_device_config()` handles the mps→cpu
-  mapping automatically)
-
-### Run on macOS
-
-```bash
-# One-time bootstrap (installs brew deps, venv, downloads models)
 python3.11 bootstrap_services.py
-
-# One-shot launcher (kills stale services, FastAPI, MLX pre-warm,
-# Cloudflare tunnel, Twilio webhook update, optional Streamlit)
-bash start_services.sh --with-streamlit
 ```
 
-Check everything:
+## 3. Configure `.env`
+
+At minimum:
+
+```dotenv
+LLM_PROVIDER=openai
+LLM_API_KEY=your-key
+LLM_MODEL=gpt-4.1-mini
+
+COMPANY_NAME=Dr. Shyama Prasad Mukherjee University
+COMPANY_SHORT_NAME=DSPMU
+ADMISSIONS_EMAIL=registrar@dspmuranchi.ac.in
+ADMISSIONS_PHONE=+91 930 455 261
+PROGRAM_PROFILE=dspmu
+```
+
+PostgreSQL is started by `start_services.sh`; the default database URL points at
+the local `elearning-postgres` container.
+
+Keep the NGA and reference-delivery features off until their sign-off gates are
+complete:
+
+```dotenv
+NGA_ENABLED=false
+NGA_SCHEDULER_ENABLED=false
+NGA_PDF_INDEX_ENABLED=false
+NGA_REFERENCE_DELIVERY_ENABLED=false
+```
+
+## 4. Run
 
 ```bash
-python3 test_environment.py        # platform-aware (MLX on Mac)
-.venv/bin/python validate_platform_readiness.py
+# Local only: FastAPI + Streamlit, no tunnel and no Twilio changes
+bash start_services.sh --local-only
+
+# Full launcher: FastAPI + Streamlit + Cloudflare tunnel + Twilio webhook
+bash start_services.sh --with-streamlit
+
+# Backend + tunnel only
+bash start_services.sh --skip-streamlit
 ```
 
----
+URLs:
 
-## Documentation
+- FastAPI: http://localhost:8000
+- Streamlit chat: http://localhost:8501
+- Dashboard: http://localhost:8502
+- Health: http://localhost:8000/health
+- Readiness: http://localhost:8000/ready
 
-For more details, see:
-- `README_DEPLOYMENT.md` — deployment & platform matrix
-- `IMPLEMENTATION_COMPLETE.md` - Full implementation results
-- `TRD_APPLE_SILICON_SUPPORT.md` - Technical details
-- `APPLE_SILICON_IMPLEMENTATION_GUIDE.md` - Future phases
-- `TRD_INDEX.md` - Document index
+## 5. Stop
 
----
+```bash
+bash stop_services.sh
+```
 
-**You're all set!** 🚀
+PostgreSQL is left running; stop it explicitly with:
 
-The app runs natively on Windows (CUDA/Ollama), Linux (Ollama), and
-macOS Apple Silicon (MLX). The platform is detected automatically —
-no manual config needed.
+```bash
+docker stop elearning-postgres
+```
 
+## 6. NGA operations
+
+The site graph, refresh worker, PDF index and reference delivery are separate
+from the web process and remain off by default:
+
+```bash
+.venv/bin/python scripts/nga_scheduler.py --status
+.venv/bin/python scripts/nga_documents.py --status
+.venv/bin/python scripts/nga_references.py --status
+```
+
+See `doc/sdlc/nga/`, `doc/ops/nga-runbook.md` and
+`doc/ops/conversation-storage.md`.
+
+## 7. Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| FastAPI does not start | `logs/fastapi.log`; `.env`; `LLM_API_KEY` |
+| PostgreSQL unavailable | `docker ps`; `DATABASE_URL` |
+| Dashboard shows no data | PostgreSQL is running and the lead tables exist |
+| Tunnel URL missing | `logs/cloudflared_8000.log`; `cloudflared` installed |
+| Twilio stale | re-run `start_services.sh` or `scripts/update_twilio_webhook.py` |
+| Voice has no audio | `logs/fastapi.log`; STT/TTS provider keys |

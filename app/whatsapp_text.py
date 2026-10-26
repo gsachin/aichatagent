@@ -378,14 +378,14 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "identificaciones) y PDF. Por favor, envíelo como imagen o PDF."
         ),
         "empty_message": (
-            "¡Hola! Envíe su pregunta sobre las admisiones de Meridian University."
+            "¡Hola! Envíe su pregunta sobre las admisiones de Dr. Shyama Prasad Mukherjee University."
         ),
         "greeting_known_name": (
-            "¡Hola, {name}! 👋 Soy la asistente de admisiones de Meridian "
+            "¡Hola, {name}! 👋 Soy la asistente de admisiones de DSPMU "
             "University. ¿Qué desea saber?"
         ),
         "greeting_unknown_name": (
-            "¡Hola! 👋 Soy la asistente de admisiones de Meridian University. "
+            "¡Hola! 👋 Soy la asistente de admisiones de Dr. Shyama Prasad Mukherjee University. "
             "¿Cuál es su nombre?"
         ),
         "name_corrected_ask_email": (
@@ -414,7 +414,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "name_captured_profile_updated": (
             "¡Gracias, {name}! He actualizado su perfil. ¿En qué puedo ayudarle "
-            "con las admisiones de Meridian?"
+            "con las admisiones de DSPMU?"
         ),
         "ask_name_missing": "¡Hola! Antes de ayudarle, ¿me dice su nombre?",
         "email_saved_with_name": "¡Gracias, {name}! He guardado su correo electrónico.",
@@ -509,7 +509,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "safety_fallback": (
             "Le tengo registrado como {name}. ¿En qué puedo ayudarle con las "
-            "admisiones de Meridian?"
+            "admisiones de DSPMU?"
         ),
     },
     "fr": {
@@ -528,15 +528,15 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "image ou en PDF."
         ),
         "empty_message": (
-            "Bonjour ! Envoyez votre question sur les admissions à Meridian "
+            "Bonjour ! Envoyez votre question sur les admissions à DSPMU "
             "University."
         ),
         "greeting_known_name": (
             "Bonjour {name} ! 👋 Je suis l'assistante des admissions de "
-            "Meridian University. Que souhaitez-vous savoir ?"
+            "Dr. Shyama Prasad Mukherjee University. Que souhaitez-vous savoir ?"
         ),
         "greeting_unknown_name": (
-            "Bonjour ! 👋 Je suis l'assistante des admissions de Meridian "
+            "Bonjour ! 👋 Je suis l'assistante des admissions de DSPMU "
             "University. Quel est votre nom ?"
         ),
         "name_corrected_ask_email": (
@@ -567,7 +567,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "name_captured_profile_updated": (
             "Merci {name} ! J'ai mis à jour votre profil. Comment puis-je vous "
-            "aider pour les admissions à Meridian ?"
+            "aider pour les admissions à DSPMU ?"
         ),
         "ask_name_missing": (
             "Bonjour ! Avant de vous aider, pourriez-vous me dire votre nom ?"
@@ -665,7 +665,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "safety_fallback": (
             "Vous êtes enregistré sous le nom {name}. Comment puis-je vous "
-            "aider pour les admissions à Meridian ?"
+            "aider pour les admissions à DSPMU ?"
         ),
     },
     "it": {
@@ -683,14 +683,14 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "PDF."
         ),
         "empty_message": (
-            "Salve! Invii la sua domanda sulle ammissioni a Meridian University."
+            "Salve! Invii la sua domanda sulle ammissioni a Dr. Shyama Prasad Mukherjee University."
         ),
         "greeting_known_name": (
-            "Salve {name}! 👋 Sono l'assistente per le ammissioni di Meridian "
+            "Salve {name}! 👋 Sono l'assistente per le ammissioni di DSPMU "
             "University. Cosa desidera sapere?"
         ),
         "greeting_unknown_name": (
-            "Salve! 👋 Sono l'assistente per le ammissioni di Meridian "
+            "Salve! 👋 Sono l'assistente per le ammissioni di DSPMU "
             "University. Qual è il suo nome?"
         ),
         "name_corrected_ask_email": (
@@ -719,7 +719,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "name_captured_profile_updated": (
             "Grazie {name}! Ho aggiornato il suo profilo. Come posso aiutarla "
-            "con le ammissioni a Meridian?"
+            "con le ammissioni a DSPMU?"
         ),
         "ask_name_missing": (
             "Salve! Prima di aiutarla, mi può dire il suo nome?"
@@ -815,7 +815,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "safety_fallback": (
             "La ho registrata come {name}. Come posso aiutarla con le "
-            "ammissioni a Meridian?"
+            "ammissioni a DSPMU?"
         ),
     },
     "ja": {
@@ -832,15 +832,15 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "身分証明書）とPDFのみです。画像またはPDFでお送りください。"
         ),
         "empty_message": (
-            "こんにちは！Meridian Universityの入学に関するご質問をお送り"
+            "こんにちは！Dr. Shyama Prasad Mukherjee Universityの入学に関するご質問をお送り"
             "ください。"
         ),
         "greeting_known_name": (
-            "こんにちは、{name}さん！👋 Meridian Universityの入学アドバイザー"
+            "こんにちは、{name}さん！👋 Dr. Shyama Prasad Mukherjee Universityの入学アドバイザー"
             "です。何をお知りになりたいですか？"
         ),
         "greeting_unknown_name": (
-            "こんにちは！👋 Meridian Universityの入学アドバイザーです。お名前"
+            "こんにちは！👋 Dr. Shyama Prasad Mukherjee Universityの入学アドバイザーです。お名前"
             "を教えていただけますか？"
         ),
         "name_corrected_ask_email": (
@@ -870,7 +870,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "name_captured_profile_updated": (
             "{name}さん、ありがとうございます！プロフィールを更新しました。"
-            "Meridianの入学についてどのようなご支援が必要ですか？"
+            "DSPMUの入学についてどのようなご支援が必要ですか？"
         ),
         "ask_name_missing": (
             "こんにちは！お手伝いの前に、お名前を教えていただけますか？"
@@ -968,7 +968,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "ください。"
         ),
         "safety_fallback": (
-            "{name}さんとして登録されています。Meridianの入学についてどのような"
+            "{name}さんとして登録されています。DSPMUの入学についてどのような"
             "ご支援が必要ですか？"
         ),
     },
@@ -987,14 +987,14 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "PDF."
         ),
         "empty_message": (
-            "Olá! Envie sua pergunta sobre as admissões da Meridian University."
+            "Olá! Envie sua pergunta sobre as admissões da Dr. Shyama Prasad Mukherjee University."
         ),
         "greeting_known_name": (
-            "Olá, {name}! 👋 Sou a assistente de admissões da Meridian "
+            "Olá, {name}! 👋 Sou a assistente de admissões da DSPMU "
             "University. O que você gostaria de saber?"
         ),
         "greeting_unknown_name": (
-            "Olá! 👋 Sou a assistente de admissões da Meridian University. Qual "
+            "Olá! 👋 Sou a assistente de admissões da Dr. Shyama Prasad Mukherjee University. Qual "
             "é o seu nome?"
         ),
         "name_corrected_ask_email": (
@@ -1022,7 +1022,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "name_captured_profile_updated": (
             "Obrigada, {name}! Atualizei seu perfil. Como posso ajudar com as "
-            "admissões da Meridian?"
+            "admissões da DSPMU?"
         ),
         "ask_name_missing": (
             "Olá! Antes de ajudar, você pode me dizer seu nome?"
@@ -1118,7 +1118,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "safety_fallback": (
             "Tenho você registrado como {name}. Como posso ajudar com as "
-            "admissões da Meridian?"
+            "admissões da DSPMU?"
         ),
     },
     "zh": {
@@ -1134,14 +1134,14 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "图片或 PDF 形式发送。"
         ),
         "empty_message": (
-            "您好！请发送您关于 Meridian University 招生的问题。"
+            "您好！请发送您关于 Dr. Shyama Prasad Mukherjee University 招生的问题。"
         ),
         "greeting_known_name": (
-            "您好，{name}！👋 我是 Meridian University 的招生助理。您想了解"
+            "您好，{name}！👋 我是 Dr. Shyama Prasad Mukherjee University 的招生助理。您想了解"
             "什么？"
         ),
         "greeting_unknown_name": (
-            "您好！👋 我是 Meridian University 的招生助理。请问您的姓名是？"
+            "您好！👋 我是 Dr. Shyama Prasad Mukherjee University 的招生助理。请问您的姓名是？"
         ),
         "name_corrected_ask_email": (
             "谢谢 — 我已将您的姓名更正为 {name}。请问您的电子邮箱是？"
@@ -1163,7 +1163,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
             "跟进。"
         ),
         "name_captured_profile_updated": (
-            "谢谢您，{name}！我已更新您的资料。关于 Meridian 的入学申请，我能"
+            "谢谢您，{name}！我已更新您的资料。关于 DSPMU 的入学申请，我能"
             "为您做什么？"
         ),
         "ask_name_missing": "您好！在帮助您之前，请告诉我您的姓名好吗？",
@@ -1242,7 +1242,7 @@ WHATSAPP_TEXT: dict[str, dict[str, str]] = {
         ),
         "rag_failure": "抱歉，我无法处理您的问题。请重试。",
         "safety_fallback": (
-            "我记录您的姓名是 {name}。关于 Meridian 的入学申请，我能为您做"
+            "我记录您的姓名是 {name}。关于 DSPMU 的入学申请，我能为您做"
             "什么？"
         ),
     },
@@ -1342,7 +1342,7 @@ def whatsapp_text(
     code = normalize_language_code(language)
     # Brand the template before formatting, not the formatted result: a
     # student's name or email must never be rewritten because it happens to
-    # contain "Meridian".
+    # contain "DSPMU".
     default = brand_text(default)
     template = brand_text(WHATSAPP_TEXT.get(code, {}).get(key, default))
     if not kwargs:

@@ -51,11 +51,11 @@ from typing import Any, Sequence
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
-GOLDEN_PATH = HERE / "golden_set.jsonl"
-HELDOUT_PATH = HERE / "heldout.txt"
-KB_PATH = REPO / "content" / "meridian" / "meridian_knowledge_base.md"
-KB_LABEL = "meridian_knowledge_base.md"
-CATALOG_PATH = REPO / "doc" / "sdlc" / "09-intent-catalog.md"
+GOLDEN_PATH = HERE / "dspmu_golden_set.jsonl"
+HELDOUT_PATH = HERE / "dspmu_heldout.txt"
+KB_PATH = HERE / "dspmu_kb.md"
+KB_LABEL = "dspmu_kb.md"
+CATALOG_PATH = HERE / "intent-catalog.md"
 
 #: Fallback intent catalog, used only if `09-intent-catalog.md` cannot be parsed.
 #: The intent numbering in that catalog is NOT an ID space; intents are identified by name.

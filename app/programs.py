@@ -5,15 +5,10 @@ Both chat front ends need this: the WhatsApp webhook (``app.main``) and the
 Streamlit UI (``app.py``). Each grew its own copy, and both copies were wrong in
 the same way, so the knowledge lives here now and the callers only import it.
 
-Two catalogues live here:
-
-  * ``DSPMU_PROGRAM_ALIASES`` is built from the generated
-    ``content/dspmu/facts.json`` and is the production profile. It covers the
-    43 undergraduate programmes in the 2026 fee sheet. Postgraduate programme
-    names are deliberately absent until their list and fees are verified.
-  * ``MERIDIAN_PROGRAM_ALIASES`` is the archived catalogue. It remains for the
-    existing fixtures and as the rollback path, selected with
-    ``PROGRAM_PROFILE=meridian``.
+``DSPMU_PROGRAM_ALIASES`` is built from the generated
+``content/dspmu/facts.json``. It covers the 43 undergraduate programmes in the
+2026 fee sheet. Postgraduate programme names are deliberately absent until
+their list and fees are verified.
 
 Matching is on a compiled, boundary-anchored pattern. A dotted alias compiles
 to an optional-separator pattern, so ``b.sc`` / ``b. sc`` / ``bsc`` are one
@@ -26,68 +21,6 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
-
-from app.config import settings
-
-# Longer/more specific aliases first — first match wins.
-MERIDIAN_PROGRAM_ALIASES = {
-    # Compound / specific names first — first match wins
-    "master of business administration": "MBA",
-    "ai & machine learning": "B.Tech AI & Machine Learning",
-    "computer science": "B.Tech Computer Science",
-    "information technology": "B.Tech Information Technology",
-    "computer applications": "BCA",
-    "business administration": "BBA",
-    # Devanagari (Hindi) spellings. A dotted alias compiles to an optional
-    # separator, so "एम.कॉम" also matches "एमकॉम" and "एम कॉम". Longer names
-    # come first: "बी.एससी" must win over "बी.ए", whose pattern would
-    # otherwise match its prefix.
-    "मास्टर ऑफ बिजनेस एडमिनिस्ट्रेशन": "MBA",
-    "कंप्यूटर साइंस": "B.Tech Computer Science",
-    "इंफॉर्मेशन टेक्नोलॉजी": "B.Tech Information Technology",
-    "एम.बी.ए": "MBA",
-    "एम.सी.ए": "MCA",
-    "एम.टेक": "M.Tech",
-    "बी.टेक": "B.Tech",
-    "बी.सी.ए": "BCA",
-    "बी.बी.ए": "BBA",
-    "बी.कॉम": "B.Com",
-    "बी.एससी": "B.Sc",
-    "बी.ए": "BA",
-    "एम.एससी": "M.Sc",
-    "एम.कॉम": "M.Com",
-    "एम.ए": "MA",
-    # Gujarati spellings, same ordering rule.
-    "માસ્ટર ઓફ બિઝનેસ એડમિનિસ્ટ્રેશન": "MBA",
-    "કમ્પ્યુટર સાયન્સ": "B.Tech Computer Science",
-    "ઇન્ફોર્મેશન ટેકનોલોજી": "B.Tech Information Technology",
-    "એમ.બી.એ": "MBA",
-    "એમ.સી.એ": "MCA",
-    "એમ.ટેક": "M.Tech",
-    "બી.ટેક": "B.Tech",
-    "બી.સી.એ": "BCA",
-    "બી.બી.એ": "BBA",
-    "બી.કોમ": "B.Com",
-    "બી.એસસી": "B.Sc",
-    "બી.એ": "BA",
-    "એમ.એસસી": "M.Sc",
-    "એમ.કોમ": "M.Com",
-    "એમ.એ": "MA",
-    # Short aliases
-    "mba": "MBA",
-    "mca": "MCA",
-    "m.tech": "M.Tech",
-    "b.tech": "B.Tech",
-    "bca": "BCA",
-    "bba": "BBA",
-    "b.com": "B.Com",
-    "b.sc": "B.Sc",
-    "b.a": "BA",
-    "ba": "BA",
-    "m.sc": "M.Sc",
-    "m.com": "M.Com",
-    "m.a": "MA",
-}
 
 #: Degree families a caller may name without a subject. They are attested by
 #: the DSPMU knowledge base as degree headings, but a lead that stops at "BA"
@@ -275,12 +208,8 @@ def _build_dspmu_program_aliases() -> dict[str, str]:
 
 DSPMU_PROGRAM_ALIASES = _build_dspmu_program_aliases()
 
-_PROGRAM_PROFILE = (settings.PROGRAM_PROFILE or "dspmu").strip().lower()
-PROGRAM_ALIASES = (
-    MERIDIAN_PROGRAM_ALIASES
-    if _PROGRAM_PROFILE == "meridian"
-    else DSPMU_PROGRAM_ALIASES
-)
+#: The DSPMU catalogue is the only supported programme catalogue.
+PROGRAM_ALIASES = DSPMU_PROGRAM_ALIASES
 
 _SEPARATOR_RE = re.compile(r"[.\s]+")
 

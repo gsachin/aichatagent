@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -189,6 +190,127 @@ async def get_lead_by_phone(phone_number: str) -> dict | None:
         except Exception:
             logger.exception("Failed to get lead by phone")
             return None
+
+
+_PHONE_MATCH_SQL = (
+    "(l.phone_number = %s OR "
+    "RIGHT(REGEXP_REPLACE(l.phone_number, '[^0-9]', '', 'g'), 10) = %s)"
+)
+_PHONE_MATCH_UPDATE_SQL = (
+    "(phone_number = %s OR "
+    "RIGHT(REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g'), 10) = %s)"
+)
+
+
+def _phone_match_args(phone_number: str) -> tuple[str, str]:
+    digits = re.sub(r"\D", "", phone_number or "")
+    return (
+        phone_number or "",
+        digits[-10:] if len(digits) >= 10 else "NO-PHONE",
+    )
+
+
+async def get_lead_whatsapp_state(phone_number: str) -> dict | None:
+    """Lead consent plus its most recent inbound WhatsApp time."""
+    with _get_db() as conn:
+        if conn is None:
+            return None
+        try:
+            conn.autocommit = True
+            raw, last10 = _phone_match_args(phone_number)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT l.id, l.phone_number, l.whatsapp_opt_in, "
+                    "l.whatsapp_opt_out_at, "
+                    "(SELECT MAX(c.created_at) FROM conversations c "
+                    " WHERE c.lead_id = l.id AND c.channel = 'whatsapp') "
+                    "AS last_inbound_at "
+                    "FROM leads l WHERE "
+                    + _PHONE_MATCH_SQL +
+                    " ORDER BY (l.phone_number = %s) DESC, l.created_at DESC "
+                    "LIMIT 1",
+                    (raw, last10, raw),
+                )
+                row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": str(row[0]),
+                "phone_number": row[1] or "",
+                "whatsapp_opt_in": bool(row[2]),
+                "whatsapp_opt_out_at": row[3],
+                "last_inbound_at": row[4],
+            }
+        except Exception:
+            logger.exception("Failed to get WhatsApp registration state")
+            return None
+
+
+async def has_recent_whatsapp_conversation(
+    lead_id: str, days: int = 30
+) -> bool:
+    """True when the lead has an inbound WhatsApp conversation in the window."""
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM conversations "
+                    "WHERE lead_id = %s AND channel = 'whatsapp' "
+                    "AND created_at >= NOW() - (%s * INTERVAL '1 day') "
+                    "LIMIT 1",
+                    (lead_id, max(1, int(days))),
+                )
+                return cur.fetchone() is not None
+        except Exception:
+            logger.exception("Failed to read WhatsApp conversation history")
+            return False
+
+
+async def set_whatsapp_opt_out(
+    phone_number: str, when: str | None = None
+) -> bool:
+    """Record a STOP; opt-out is authoritative over any opt-in."""
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            raw, last10 = _phone_match_args(phone_number)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET whatsapp_opt_out_at = %s, "
+                    "updated_at = NOW() WHERE "
+                    + _PHONE_MATCH_UPDATE_SQL,
+                    (when or _now_iso(), raw, last10),
+                )
+                return cur.rowcount > 0
+        except Exception:
+            logger.exception("Failed to record WhatsApp opt-out")
+            return False
+
+
+async def set_whatsapp_opt_in(phone_number: str) -> bool:
+    """Explicit re-subscribe: clear opt-out and set the opt-in flag."""
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            raw, last10 = _phone_match_args(phone_number)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET whatsapp_opt_in = TRUE, "
+                    "whatsapp_opt_out_at = NULL, updated_at = NOW() WHERE "
+                    + _PHONE_MATCH_UPDATE_SQL,
+                    (raw, last10),
+                )
+                return cur.rowcount > 0
+        except Exception:
+            logger.exception("Failed to record WhatsApp opt-in")
+            return False
 
 
 async def get_call_queue_by_sid(call_sid: str) -> dict | None:

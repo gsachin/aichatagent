@@ -546,7 +546,10 @@ class Settings:
     )
     DOC_PATHS: str = field(
         default_factory=lambda: _env(
-            "DOC_PATHS", "content/meridian/meridian_knowledge_base.md"
+            "DOC_PATHS",
+            "content/dspmu/core_cards.md,"
+            "content/dspmu/site_map.md,"
+            "content/dspmu/recent_notices.md",
         ).strip()
     )
     DOC_MAX_BYTES: int = field(
@@ -556,7 +559,7 @@ class Settings:
         default_factory=lambda: _env_int("DOC_MAX_TOKENS", 500_000)
     )
     #: Sidecar metadata for the current prompt bundle (fact/node IDs and source
-    #: URLs). Empty by default so a Meridian rollback carries no DSPMU IDs.
+    #: URLs). Empty when no manifest is in use.
     CONTEXT_MANIFEST_PATH: str = field(
         default_factory=lambda: _env("CONTEXT_MANIFEST_PATH", "").strip()
     )
@@ -584,6 +587,436 @@ class Settings:
     )
     SITE_ROUTER_MAX_NOTICES: int = field(
         default_factory=lambda: _env_int("SITE_ROUTER_MAX_NOTICES", 5)
+    )
+    # ── NGA navigation graph (Phase 1) ───────────────────────────────
+    # The graph compiler is an offline/background tool. The answer path does
+    # not read these values yet; NGA_ENABLED stays false until later gates.
+    NGA_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_ENABLED", "")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_MODE: str = field(
+        default_factory=lambda: _env("NGA_MODE", "off").strip().lower()
+    )
+    #: Product decision 2026-10-24: the chat is part of the public website and
+    #: the university already publishes these pages, so the URL/title PII guard
+    #: is off by default. Set true to restore the conservative result/merit/
+    #: selection and staff-directory exclusions, then recompile the graph.
+    NGA_PII_GUARD_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_PII_GUARD_ENABLED", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_SITE_BASE_URL: str = field(
+        default_factory=lambda: _env(
+            "NGA_SITE_BASE_URL", "https://dspmuranchi.ac.in"
+        ).strip()
+    )
+    NGA_SITEMAP_URL: str = field(
+        default_factory=lambda: _env(
+            "NGA_SITEMAP_URL", "https://dspmuranchi.ac.in/sitemap.xml"
+        ).strip()
+    )
+    NGA_ALLOWED_HOSTS: str = field(
+        default_factory=lambda: _env(
+            "NGA_ALLOWED_HOSTS",
+            "dspmuranchi.ac.in,www.dspmuranchi.ac.in",
+        ).strip()
+    )
+    NGA_BLOCKED_PATH_TOKENS: str = field(
+        default_factory=lambda: _env(
+            "NGA_BLOCKED_PATH_TOKENS",
+            "result,results,merit,selection,selected,waiting,answer,admit,"
+            "archive,awarded,departments,faculties,staff,faculty,teaching,"
+            "nonteaching",
+        ).strip()
+    )
+    NGA_GRAPH_SQLITE_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_GRAPH_SQLITE_PATH", "content/dspmu/nga_graph.sqlite3"
+        ).strip()
+    )
+    NGA_COVERAGE_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_COVERAGE_PATH", "content/dspmu/nga_coverage.json"
+        ).strip()
+    )
+    NGA_NOTICES_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_NOTICES_PATH", "content/dspmu/notices.jsonl"
+        ).strip()
+    )
+    NGA_COVERAGE_MIN: float = field(
+        default_factory=lambda: _env_float("NGA_COVERAGE_MIN", 0.95)
+    )
+    # ── Phase 3 fetch / content / freshness ──────────────────────────
+    NGA_FETCH_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("NGA_FETCH_TIMEOUT_S", 6.0)
+    )
+    NGA_FETCH_DELAY_S: float = field(
+        default_factory=lambda: _env_float("NGA_FETCH_DELAY_S", 0.25)
+    )
+    NGA_MAX_BYTES: int = field(
+        default_factory=lambda: _env_int("NGA_MAX_BYTES", 2_000_000)
+    )
+    NGA_MIN_PAGE_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_MIN_PAGE_CHARS", 120)
+    )
+    NGA_TTL_PAGE_S: int = field(
+        default_factory=lambda: _env_int("NGA_TTL_PAGE_S", 86_400)
+    )
+    NGA_TTL_NOTICE_S: int = field(
+        default_factory=lambda: _env_int("NGA_TTL_NOTICE_S", 300)
+    )
+    NGA_TTL_NAV_S: int = field(
+        default_factory=lambda: _env_int("NGA_TTL_NAV_S", 3_600)
+    )
+    NGA_REFRESH_LIMIT: int = field(
+        default_factory=lambda: _env_int("NGA_REFRESH_LIMIT", 10)
+    )
+    # ── Phase 10 refresh scheduler and alerts ────────────────────────
+    # The scheduler is a separate process behind its own flag; enabling the
+    # answer-path NGA flag never starts background fetching.
+    NGA_SCHEDULER_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_SCHEDULER_ENABLED", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_REFRESH_INTERVAL_S: int = field(
+        default_factory=lambda: _env_int("NGA_REFRESH_INTERVAL_S", 900)
+    )
+    NGA_REFRESH_JITTER_S: int = field(
+        default_factory=lambda: _env_int("NGA_REFRESH_JITTER_S", 60)
+    )
+    NGA_REFRESH_MAX_CYCLES: int = field(
+        default_factory=lambda: _env_int("NGA_REFRESH_MAX_CYCLES", 0)
+    )
+    NGA_REFRESH_REPORT_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_REFRESH_REPORT_PATH",
+            "content/dspmu/nga_refresh_report.json",
+        ).strip()
+    )
+    NGA_REFRESH_LOG_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_REFRESH_LOG_PATH", "logs/nga_refresh.jsonl"
+        ).strip()
+    )
+    NGA_ALERT_LOG_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_ALERT_LOG_PATH", "logs/nga_alerts.jsonl"
+        ).strip()
+    )
+    NGA_REFRESH_LOCK_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_REFRESH_LOCK_PATH", "content/dspmu/nga_refresh.lock"
+        ).strip()
+    )
+    NGA_ALERT_COVERAGE_DROP: float = field(
+        default_factory=lambda: _env_float("NGA_ALERT_COVERAGE_DROP", 0.02)
+    )
+    NGA_ALERT_RUN_FAILURE_STREAK: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_RUN_FAILURE_STREAK", 3)
+    )
+    NGA_ALERT_NODE_FAILURE_STREAK: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_NODE_FAILURE_STREAK", 3)
+    )
+    NGA_ALERT_ERROR_RATE: float = field(
+        default_factory=lambda: _env_float("NGA_ALERT_ERROR_RATE", 0.5)
+    )
+    NGA_ALERT_EMPTY_SHELL_RATE: float = field(
+        default_factory=lambda: _env_float("NGA_ALERT_EMPTY_SHELL_RATE", 0.35)
+    )
+    NGA_ALERT_SOFT_404_RATE: float = field(
+        default_factory=lambda: _env_float("NGA_ALERT_SOFT_404_RATE", 0.25)
+    )
+    NGA_ALERT_STALE_NODES: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_STALE_NODES", 50)
+    )
+    NGA_ALERT_STALE_GRACE_S: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_STALE_GRACE_S", 7200)
+    )
+    NGA_ALERT_GRAPH_STALE_HOURS: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_GRAPH_STALE_HOURS", 168)
+    )
+    # ── Phase 11 background PDF/OCR index ───────────────────────────
+    # Documents are fetched and OCR'd only by the refresh worker. The live
+    # answer path reads stored text; OCR text waits for explicit review.
+    NGA_PDF_INDEX_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_PDF_INDEX_ENABLED", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_TTL_DOCUMENT_S: int = field(
+        default_factory=lambda: _env_int("NGA_TTL_DOCUMENT_S", 604_800)
+    )
+    NGA_PDF_REFRESH_LIMIT: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_REFRESH_LIMIT", 5)
+    )
+    NGA_PDF_MAX_BYTES: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_MAX_BYTES", 10_000_000)
+    )
+    NGA_PDF_MAX_PAGES: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_MAX_PAGES", 40)
+    )
+    NGA_PDF_MIN_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_MIN_CHARS", 80)
+    )
+    NGA_PDF_OCR_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_PDF_OCR_ENABLED", "true")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_PDF_OCR_MAX_PAGES: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_OCR_MAX_PAGES", 8)
+    )
+    NGA_PDF_OCR_LANGS: str = field(
+        default_factory=lambda: _env("NGA_PDF_OCR_LANGS", "").strip()
+    )
+    NGA_PDF_FAILURE_BACKOFF_S: int = field(
+        default_factory=lambda: _env_int("NGA_PDF_FAILURE_BACKOFF_S", 3600)
+    )
+    NGA_ALERT_DOCUMENT_ERROR_RATE: float = field(
+        default_factory=lambda: _env_float("NGA_ALERT_DOCUMENT_ERROR_RATE", 0.5)
+    )
+    NGA_ALERT_REVIEW_BACKLOG: int = field(
+        default_factory=lambda: _env_int("NGA_ALERT_REVIEW_BACKLOG", 25)
+    )
+    # ── Phase 12 references and voice→WhatsApp delivery ─────────────
+    # Cited chat/WhatsApp answers always render their evidence references.
+    # This flag enables the separate voice→WhatsApp delivery pipeline.
+    NGA_REFERENCE_DELIVERY_ENABLED: bool = field(
+        default_factory=lambda: _env("NGA_REFERENCE_DELIVERY_ENABLED", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_REFERENCE_DELIVERY_MODE: str = field(
+        default_factory=lambda: _env(
+            "NGA_REFERENCE_DELIVERY_MODE", "turn"
+        ).strip().lower()
+    )
+    NGA_REFERENCE_MAX_PER_CALL: int = field(
+        default_factory=lambda: _env_int("NGA_REFERENCE_MAX_PER_CALL", 3)
+    )
+    NGA_REFERENCE_MIN_INTERVAL_S: int = field(
+        default_factory=lambda: _env_int("NGA_REFERENCE_MIN_INTERVAL_S", 20)
+    )
+    NGA_REFERENCE_SNIPPET_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_REFERENCE_SNIPPET_CHARS", 240)
+    )
+    NGA_WHATSAPP_REGISTRATION_WINDOW_DAYS: int = field(
+        default_factory=lambda: _env_int(
+            "NGA_WHATSAPP_REGISTRATION_WINDOW_DAYS", 30
+        )
+    )
+    NGA_WHATSAPP_REFERENCE_REQUIRE_OPT_IN: bool = field(
+        default_factory=lambda: _env(
+            "NGA_WHATSAPP_REFERENCE_REQUIRE_OPT_IN", "false"
+        )
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_WHATSAPP_TEMPLATE_SID: str = field(
+        default_factory=lambda: _env(
+            "NGA_WHATSAPP_TEMPLATE_SID", ""
+        ).strip()
+    )
+    NGA_REFERENCE_RETRY_MAX: int = field(
+        default_factory=lambda: _env_int("NGA_REFERENCE_RETRY_MAX", 3)
+    )
+    NGA_REFERENCE_RETRY_BACKOFF_S: float = field(
+        default_factory=lambda: _env_float(
+            "NGA_REFERENCE_RETRY_BACKOFF_S", 2.0
+        )
+    )
+    NGA_REFERENCE_LOG_RETENTION_DAYS: int = field(
+        default_factory=lambda: _env_int(
+            "NGA_REFERENCE_LOG_RETENTION_DAYS", 30
+        )
+    )
+    NGA_ALERT_REFERENCE_WINDOW_S: int = field(
+        default_factory=lambda: _env_int(
+            "NGA_ALERT_REFERENCE_WINDOW_S", 3600
+        )
+    )
+    NGA_ALERT_REFERENCE_FAILURES: int = field(
+        default_factory=lambda: _env_int(
+            "NGA_ALERT_REFERENCE_FAILURES", 3
+        )
+    )
+    NGA_ALERT_TEMPLATE_REQUIRED: int = field(
+        default_factory=lambda: _env_int(
+            "NGA_ALERT_TEMPLATE_REQUIRED", 3
+        )
+    )
+    NGA_SESSION_HISTORY_TURNS: int = field(
+        default_factory=lambda: _env_int("NGA_SESSION_HISTORY_TURNS", 6)
+    )
+    NGA_EVENT_RETENTION_DAYS: int = field(
+        default_factory=lambda: _env_int("NGA_EVENT_RETENTION_DAYS", 90)
+    )
+    # ── Phase 7 shadow mode ──────────────────────────────────────────
+    # Shadow runs only when NGA_ENABLED=true and NGA_MODE=shadow. It never
+    # changes the answer, and only computes evidence (and optionally a
+    # generated/verified answer) for comparison.
+    NGA_SHADOW_LOG_PATH: str = field(
+        default_factory=lambda: _env(
+            "NGA_SHADOW_LOG_PATH", "logs/nga_shadow.jsonl"
+        ).strip()
+    )
+    NGA_SHADOW_GENERATE: bool = field(
+        default_factory=lambda: _env("NGA_SHADOW_GENERATE", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_SHADOW_MAX_WORKERS: int = field(
+        default_factory=lambda: _env_int("NGA_SHADOW_MAX_WORKERS", 2)
+    )
+    NGA_SHADOW_SAMPLE_RATE: float = field(
+        default_factory=lambda: _env_float("NGA_SHADOW_SAMPLE_RATE", 1.0)
+    )
+    NGA_SHADOW_LOG_QUERIES: bool = field(
+        default_factory=lambda: _env("NGA_SHADOW_LOG_QUERIES", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_SHADOW_DEADLINE_MS: int = field(
+        default_factory=lambda: _env_int("NGA_SHADOW_DEADLINE_MS", 8000)
+    )
+    NGA_SHADOW_MAX_STEPS: int = field(
+        default_factory=lambda: _env_int("NGA_SHADOW_MAX_STEPS", 8)
+    )
+    NGA_SHADOW_MAX_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_SHADOW_MAX_CHARS", 3000)
+    )
+    # ── Phase 8 voice fast path ──────────────────────────────────────
+    # Voice uses the deterministic planner, at most two tool calls, a hard
+    # deadline, and a small live-evidence budget. Text channels are unchanged
+    # until the agentic phase.
+    NGA_VOICE_DEADLINE_MS: int = field(
+        default_factory=lambda: _env_int("NGA_VOICE_DEADLINE_MS", 1500)
+    )
+    NGA_VOICE_MAX_STEPS: int = field(
+        default_factory=lambda: _env_int("NGA_VOICE_MAX_STEPS", 2)
+    )
+    NGA_VOICE_MAX_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_VOICE_MAX_CHARS", 1200)
+    )
+    # ── Phase 9 text agentic path ────────────────────────────────────
+    # Chat/WhatsApp use the bounded tool loop, evidence bundle, answer and
+    # verifier. The LLM planner is optional; deterministic planning is the
+    # default so the agentic path costs one generation call.
+    NGA_TEXT_DEADLINE_MS: int = field(
+        default_factory=lambda: _env_int("NGA_TEXT_DEADLINE_MS", 8000)
+    )
+    NGA_TEXT_MAX_STEPS: int = field(
+        default_factory=lambda: _env_int("NGA_TEXT_MAX_STEPS", 8)
+    )
+    NGA_TEXT_MAX_CHARS: int = field(
+        default_factory=lambda: _env_int("NGA_TEXT_MAX_CHARS", 4000)
+    )
+    NGA_TEXT_LLM_PLANNER: bool = field(
+        default_factory=lambda: _env("NGA_TEXT_LLM_PLANNER", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    NGA_FETCH_USER_AGENT: str = field(
+        default_factory=lambda: _env(
+            "NGA_FETCH_USER_AGENT",
+            "DSPMU-Admissions-Assistant/1.0 "
+            "(+https://dspmuranchi.ac.in; contact: registrar@dspmuranchi.ac.in)",
+        ).strip()
+    )
+    NGA_ROBOTS_RESPECT: bool = field(
+        default_factory=lambda: _env("NGA_ROBOTS_RESPECT", "true")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    # ── Live request-time website retrieval (prototype, disabled) ────
+    # The static DSPMU corpus is a build-time snapshot. When enabled, the
+    # answer pipeline may fetch one or two public HTML pages for questions
+    # the snapshot does not cover. The live path is bounded (allowlisted
+    # hosts, robots-aware, short timeout, TTL cache) and always degrades to
+    # the static bundle. Disabled by default so tests and offline runs never
+    # touch the network; the deployment .env turns it on.
+    LIVE_SITE_ENABLED: bool = field(
+        default_factory=lambda: _env("LIVE_SITE_ENABLED", "")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    #: ``novel`` fetches only when the router missed or the question contains
+    #: a term the static bundle does not carry. ``always`` adds live context
+    #: to every non-boundary turn (slower, larger prompt).
+    LIVE_SITE_MODE: str = field(
+        default_factory=lambda: _env("LIVE_SITE_MODE", "novel").strip().lower()
+    )
+    LIVE_SITE_BASE_URL: str = field(
+        default_factory=lambda: _env(
+            "LIVE_SITE_BASE_URL", "https://dspmuranchi.ac.in"
+        ).strip()
+    )
+    LIVE_SITE_SITEMAP_URL: str = field(
+        default_factory=lambda: _env(
+            "LIVE_SITE_SITEMAP_URL", "https://dspmuranchi.ac.in/sitemap.xml"
+        ).strip()
+    )
+    LIVE_SITE_ALLOWED_HOSTS: str = field(
+        default_factory=lambda: _env(
+            "LIVE_SITE_ALLOWED_HOSTS",
+            "dspmuranchi.ac.in,www.dspmuranchi.ac.in",
+        ).strip()
+    )
+    LIVE_SITE_BLOCKED_PATH_TOKENS: str = field(
+        default_factory=lambda: _env(
+            "LIVE_SITE_BLOCKED_PATH_TOKENS",
+            "result,results,merit,selection,selected,waiting,answer,admit,"
+            "archive,awarded,departments,faculties,staff,faculty,teaching,"
+            "nonteaching",
+        ).strip()
+    )
+    LIVE_SITE_TIMEOUT_S: float = field(
+        default_factory=lambda: _env_float("LIVE_SITE_TIMEOUT_S", 6.0)
+    )
+    LIVE_SITE_DELAY_S: float = field(
+        default_factory=lambda: _env_float("LIVE_SITE_DELAY_S", 0.25)
+    )
+    LIVE_SITE_MAX_PAGES: int = field(
+        default_factory=lambda: _env_int("LIVE_SITE_MAX_PAGES", 2)
+    )
+    LIVE_SITE_MAX_CHARS: int = field(
+        default_factory=lambda: _env_int("LIVE_SITE_MAX_CHARS", 3000)
+    )
+    LIVE_SITE_CACHE_TTL_S: float = field(
+        default_factory=lambda: _env_float("LIVE_SITE_CACHE_TTL_S", 600.0)
+    )
+    LIVE_SITE_SITEMAP_TTL_S: float = field(
+        default_factory=lambda: _env_float("LIVE_SITE_SITEMAP_TTL_S", 3600.0)
+    )
+    LIVE_SITE_RESPECT_ROBOTS: bool = field(
+        default_factory=lambda: _env("LIVE_SITE_RESPECT_ROBOTS", "true")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    LIVE_SITE_USER_AGENT: str = field(
+        default_factory=lambda: _env(
+            "LIVE_SITE_USER_AGENT",
+            "DSPMU-Admissions-Assistant/1.0 "
+            "(+https://dspmuranchi.ac.in; contact: registrar@dspmuranchi.ac.in)",
+        ).strip()
     )
     DEFAULT_LANGUAGE: str = field(
         default_factory=lambda: _env("DEFAULT_LANGUAGE", "en").strip().lower()
@@ -711,7 +1144,7 @@ class Settings:
     # The full legal name is what a caller hears and what appears in prompt
     # text. The short name is for sentences where the full name would be
     # unwieldy ("DSPMU admissions"). Both are deployment values; the legacy
-    # Meridian fixtures pin them in tests/conftest.py.
+    # legacy fixtures pin them in tests/conftest.py.
     COMPANY_NAME: str = field(
         default_factory=lambda: _env(
             "COMPANY_NAME", "Dr. Shyama Prasad Mukherjee University"
@@ -734,9 +1167,8 @@ class Settings:
             "UNIVERSITY_WEBSITE", "https://dspmuranchi.ac.in"
         )
     )
-    # Which programme catalogue app.programs should load. "dspmu" is the
-    # production profile; "meridian" exists for the archived fixtures and the
-    # rollback path.
+    #: Retained for configuration compatibility; DSPMU is the only supported
+    #: programme catalogue.
     PROGRAM_PROFILE: str = field(
         default_factory=lambda: _env("PROGRAM_PROFILE", "dspmu").strip().lower()
     )

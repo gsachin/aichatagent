@@ -8,7 +8,6 @@
 .venv/
 venv/
 logs/
-chroma_local_db/
 data/
 models/
 __pycache__/

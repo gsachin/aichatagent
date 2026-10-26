@@ -28,7 +28,6 @@ Thumbs.db
 Desktop.ini
 
 # ChromaDB (large binary files) — legacy data; runtime no longer uses it
-chroma_local_db/
 
 # Benchmark artifacts and Indic-TTS checkpoints (~1.5 GB per language)
 doc/perf/results/
@@ -63,14 +62,18 @@ data/
 # DSPMU site-index raw cache (regenerate with scripts/build_site_index.py).
 # The generated markdown/JSON and notices.sqlite3 in content/dspmu/ are tracked.
 content/dspmu/cache/
+content/dspmu/nga_graph.sqlite3
+content/dspmu/nga_graph.sqlite3-*
 content/dspmu/*.sqlite3.tmp
 content/dspmu/*.sqlite3.tmp-*
 content/dspmu/*.sqlite3-journal
 content/dspmu/*.sqlite3-wal
 content/dspmu/*.sqlite3-shm
+# Phase 10 runtime state: latest refresh report and the worker's advisory lock.
+content/dspmu/nga_refresh_report.json
+content/dspmu/nga_refresh.lock
 # Extracted notice bodies can contain personal data until reviewed; never commit.
 content/dspmu/notice_bodies/
 # Tesseract language data (~12 MB); install with scripts/install_hindi_ocr.py.
 .tessdata/
 .siteindex-ocr-*/
-chroma_local_db_pre_c4/

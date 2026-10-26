@@ -39,6 +39,212 @@ Rebuild only the notice search index from the committed JSONL:
 .venv/bin/python scripts/build_notice_store.py
 ```
 
+### Phase 1 navigation graph (NGA)
+
+Compile the sitemap and rendered navigation into the typed graph. This is an
+offline/background tool: it does not touch the answer path and
+`NGA_ENABLED=false` in `.env`.
+
+```bash
+.venv/bin/python scripts/nga_compile.py
+```
+
+It reads `cache/current/home.html` and `cache/current/sitemap.xml`; add
+`--allow-network` to fetch a missing source through the polite `SourceBook`.
+Outputs:
+
+- `content/dspmu/nga_graph.sqlite3` — the node/edge graph (gitignored).
+- `content/dspmu/nga_coverage.json` — the reviewable coverage report.
+
+The command exits non-zero when sitemap coverage is below `--min-coverage`
+(default 0.95). Use `--allow-below-gate` only for an intentional partial build.
+The graph is relational (SQLite here; Postgres later); there is no graph
+database and no vector index. See `doc/sdlc/nga/` for the design.
+
+Search the compiled graph (Phase 2, no network and no LLM):
+
+```bash
+.venv/bin/python scripts/nga_search.py --query "hostel"
+.venv/bin/python scripts/nga_search.py --query "फीस" --json
+```
+
+Plan, execute and assemble evidence/citations (Phase 4, no LLM):
+
+```bash
+.venv/bin/python scripts/nga_ask.py --query "What is the BA History fee?"
+.venv/bin/python scripts/nga_ask.py --query "complaint status" --json
+```
+
+The demo shows the plan, tool calls, verified facts, page evidence and the
+citation block that the future answer generator will receive. It does not
+write an answer.
+
+Generate and verify an answer (Phase 5). `--dry-run` prints the exact system
+and user messages without calling the LLM:
+
+```bash
+.venv/bin/python scripts/nga_answer.py \
+  --query "What is the BA History fee?" --dry-run
+
+.venv/bin/python scripts/nga_answer.py \
+  --query "What is the BA History fee?"
+```
+
+The second command calls the configured LLM, then the claim verifier. Fee
+amounts must come from the verified fact layer; unsupported amounts, dates,
+programmes or contacts block the answer. No channel is connected.
+
+Conversation memory and follow-ups (Phase 6). Use the same conversation ID
+across turns; `--dry-run` records the turn without calling the LLM:
+
+```bash
+.venv/bin/python scripts/nga_session.py \
+  --conversation-id demo-1 --query "complaint status" --dry-run --reset
+
+.venv/bin/python scripts/nga_session.py \
+  --conversation-id demo-1 --query "what about its fee?" --dry-run
+```
+
+The second turn loads the previous topic and plans `site.open` on that topic
+before searching. Events are stored in `nga_turn_event`.
+
+Shadow mode (Phase 7) observes the existing answer seam without changing the
+answer. It runs only when both flags are set:
+
+```dotenv
+NGA_ENABLED=true
+NGA_MODE=shadow
+NGA_SHADOW_LOG_PATH=logs/nga_shadow.jsonl
+```
+
+Each sampled turn writes one JSONL record with the plan, execution, evidence,
+citations and a delta against the static bundle. Query text is redacted unless
+`NGA_SHADOW_LOG_QUERIES=true`; `NGA_SHADOW_GENERATE=true` also records a
+generated/verified answer. The default `NGA_ENABLED=false` keeps shadow off.
+
+Voice fast path (Phase 8) is enabled with:
+
+```dotenv
+NGA_ENABLED=true
+NGA_MODE=fast
+NGA_VOICE_DEADLINE_MS=1500
+NGA_VOICE_MAX_STEPS=2
+NGA_VOICE_MAX_CHARS=1200
+```
+
+Only voice turns use it. The deterministic plan gets at most two local tool
+calls; cited evidence is appended to the static core cards. No evidence, a
+deadline, or an error falls back to the static bundle.
+
+Text agentic path (Phase 9) is enabled with:
+
+```dotenv
+NGA_ENABLED=true
+NGA_MODE=agentic
+NGA_TEXT_DEADLINE_MS=8000
+NGA_TEXT_MAX_STEPS=8
+NGA_TEXT_MAX_CHARS=4000
+NGA_TEXT_LLM_PLANNER=false
+```
+
+Chat/WhatsApp use the bounded tool loop, evidence bundle, answer generation and
+claim verifier. The deterministic planner is the default; set
+`NGA_TEXT_LLM_PLANNER=true` for the structured LLM planner. An answer that
+fails verification is not released; the caller gets a safe registrar-contact
+refusal. With no evidence the static bundle is used. Streamlit receives the
+verified answer as one block rather than a token stream in this mode.
+
+Refresh page bodies (Phase 3, background worker, no answer-path call). List
+what is due without touching the network first:
+
+```bash
+.venv/bin/python scripts/nga_refresh.py --dry-run --limit 10
+```
+
+Fetch a small, explicit sample politely (robots-aware, one request at a time):
+
+```bash
+.venv/bin/python scripts/nga_refresh.py --allow-network \
+  --node-id student-life.grievance-redressal-cell --node-id cms.about-the-university
+```
+
+Each fetched page gets a version, a SHA-256 content hash, a body FTS entry and
+`checked_at`/`next_due_at` freshness state. `site.open` then returns
+`body_available: true`; `site.search` can match body text. Pages with too little
+main text are recorded as `empty_shell`, not indexed.
+
+Run the single-writer worker and its ops alerts (Phase 10). It is a separate
+process and refuses to start unless `NGA_SCHEDULER_ENABLED=true`:
+
+```bash
+# Offline status and alerts, no network
+.venv/bin/python scripts/nga_scheduler.py --status
+
+# One cycle, foreground
+.venv/bin/python scripts/nga_scheduler.py --allow-network --once
+
+# Continuous worker (SIGTERM/Ctrl-C stops after the current cycle)
+.venv/bin/python scripts/nga_scheduler.py --allow-network
+```
+
+Each cycle writes `content/dspmu/nga_refresh_report.json` (latest, atomic),
+appends `logs/nga_refresh.jsonl`, and appends any rule hit to
+`logs/nga_alerts.jsonl`. The advisory lock
+`content/dspmu/nga_refresh.lock` allows one worker; a second worker skips.
+Alert codes and incident procedures are in `doc/ops/nga-runbook.md`.
+
+Index linked PDFs in the background (Phase 11). It is separate from the page
+refresh and is off unless `NGA_PDF_INDEX_ENABLED=true`:
+
+```bash
+# Summary, due count and review queue; no network
+.venv/bin/python scripts/nga_documents.py --status
+
+# Create document nodes for PDFs linked from already-indexed pages
+.venv/bin/python scripts/nga_documents.py --discover-only
+
+# Fetch and extract up to five due PDFs
+.venv/bin/python scripts/nga_documents.py --allow-network --limit 5
+
+# List OCR text awaiting review, then approve one document
+.venv/bin/python scripts/nga_documents.py --list-review
+.venv/bin/python scripts/nga_documents.py \
+  --review doc.<id> --reviewer "registrar office"
+```
+
+Approved document text is indexed for `site.search` and returned by
+`site.open`. OCR text is stored with `needs_review` and is **not answerable**
+until a named reviewer approves it. Extracted text below `NGA_PDF_MIN_CHARS`
+is `empty`; a PDF over `NGA_PDF_MAX_BYTES` is rejected; only the first
+`NGA_PDF_MAX_PAGES` pages are processed. With `NGA_PII_GUARD_ENABLED=true`, a
+text scan that looks like a student list blocks the document and discards its
+text. The lookups never fetch a PDF.
+
+A graph compile replaces the nodes and **clears page bodies, freshness and the
+document index** (document nodes are created at refresh time). Back up, compile
+in a maintenance window, then re-warm pages and documents with the scheduler
+using a larger `--limit`.
+
+Cited chat/WhatsApp answers carry the evidence references (title, snippet,
+exact URL). Voice answers do not read URLs aloud; when
+`NGA_REFERENCE_DELIVERY_ENABLED=true`, the delivery worker sends them to a
+registered caller's WhatsApp with the call context. Inspect it with:
+
+```bash
+.venv/bin/python scripts/nga_references.py --status
+.venv/bin/python scripts/nga_references.py --list --limit 20
+.venv/bin/python scripts/nga_references.py --purge
+```
+
+The delivery log stores a phone hash and last four digits, never the message
+body or full number. See `doc/ops/conversation-storage.md` for the store map
+and `doc/ops/nga-runbook.md` for consent and template procedures.
+
+The PII guard is **off by default** (`NGA_PII_GUARD_ENABLED=false`) following
+the 2026-10-24 product decision that the chat is part of the public website.
+Set it to `true` and recompile the graph to restore the result/merit/selection
+and staff-directory exclusions.
+
 Install Hindi OCR data once (repo-local, gitignored):
 
 ```bash

@@ -36,13 +36,13 @@ ENGLISH_DEFAULTS = {
         "I received your file but I can only accept photos (transcripts, IDs) "
         "and PDFs. Please try sending it as an image or PDF."
     ),
-    "empty_message": "Hello! Send me a question about Meridian admissions.",
+    "empty_message": "Hello! Send me a question about DSPMU admissions.",
     "greeting_known_name": (
-        "Hello {name}! 👋 I'm the Meridian University admissions assistant. "
+        "Hello {name}! 👋 I'm the Dr. Shyama Prasad Mukherjee University admissions assistant. "
         "What would you like to know?"
     ),
     "greeting_unknown_name": (
-        "Hello! 👋 I'm the Meridian University admissions assistant. What's "
+        "Hello! 👋 I'm the Dr. Shyama Prasad Mukherjee University admissions assistant. What's "
         "your name?"
     ),
     "name_corrected_ask_email": (
@@ -70,7 +70,7 @@ ENGLISH_DEFAULTS = {
     ),
     "name_captured_profile_updated": (
         "Thanks {name}! I've updated your profile. How can I help you with "
-        "Meridian admissions?"
+        "DSPMU admissions?"
     ),
     "ask_name_missing": "Hi! Before I help you, could you tell me your name?",
     "email_saved_with_name": "Thanks {name}! I've saved your email.",
@@ -159,7 +159,7 @@ ENGLISH_DEFAULTS = {
         "Sorry, I couldn't process your question. Please try again."
     ),
     "safety_fallback": (
-        "I have you as {name}. How can I help with Meridian admissions?"
+        "I have you as {name}. How can I help with DSPMU admissions?"
     ),
 }
 
@@ -243,7 +243,7 @@ def test_malformed_translation_falls_back_to_english(monkeypatch):
     assert whatsapp_text(
         "greeting_known_name", "hi", ENGLISH_DEFAULTS["greeting_known_name"],
         name="Asha",
-    ) == "Hello Asha! 👋 I'm the Meridian University admissions assistant. " \
+    ) == "Hello Asha! 👋 I'm the Dr. Shyama Prasad Mukherjee University admissions assistant. " \
          "What would you like to know?"
 
 

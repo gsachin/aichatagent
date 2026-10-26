@@ -600,8 +600,6 @@ def build(
             "today's grounding guard rejected a correct DSPMU fee; "
             f"ungrounded={ungrounded_claims(probe_claim, document_text, index)}"
         )
-    if "meridian" in (site_map + core_cards + recent_notices + voice_kb).lower():
-        raise BuildError("generated files still mention Meridian")
     if "## Undergraduate Programs" not in voice_kb:
         raise BuildError("voice_kb.md is missing the ## Undergraduate Programs section")
     pii_leaks = [
@@ -720,7 +718,6 @@ def build(
             "parser": "ok",
             "probe": probe,
             "probe_numbers": sorted(owned),
-            "no_meridian": True,
             "no_pii_titles": True,
             "prompt_split": True,
             "doc_budget_ok": True,

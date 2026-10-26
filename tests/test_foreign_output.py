@@ -43,10 +43,10 @@ def test_greetings_for_six_format_and_existing_codes_are_untouched():
     for code, phrase in expected.items():
         inbound = call_greeting(code, "inbound")
         assert phrase in inbound, code
-        assert "Meridian University" in inbound
+        assert "Dr. Shyama Prasad Mukherjee University" in inbound
         outbound = call_greeting(code, "outbound")
         assert "{agent_name}" not in outbound
-        assert "Meridian University" in outbound
+        assert "Dr. Shyama Prasad Mukherjee University" in outbound
 
     # The three existing greetings are pinned by the baseline hash test; this
     # is a readable sanity check that the merge did not replace them.

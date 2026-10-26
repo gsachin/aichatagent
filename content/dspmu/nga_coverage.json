@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-10-25T02:14:42Z",
+  "source_mode": "cache",
+  "base_url": "https://dspmuranchi.ac.in",
+  "sitemap_url": "https://dspmuranchi.ac.in/sitemap.xml",
+  "sitemap_urls": 257,
+  "nav_nodes": 68,
+  "nav_links": 137,
+  "nav_sections": 19,
+  "nav_urls_represented": 68,
+  "unique_nodes": 329,
+  "represented_sitemap_urls": 257,
+  "missing_sitemap_urls": [],
+  "coverage_pct": 1.0,
+  "min_coverage": 0.95,
+  "meets_gate": true,
+  "pii_guard": false,
+  "sections": 19,
+  "pages": 308,
+  "documents": 0,
+  "external": 2,
+  "blocked": 0,
+  "departments": 51,
+  "top_level_sections": [
+    "About DSPMU",
+    "Academics",
+    "Administration",
+    "Committees & Cells",
+    "Examination",
+    "Faculties",
+    "IQAC & Accreditation",
+    "Research & Innovation",
+    "Statutory Bodies",
+    "Student Life"
+  ],
+  "orphans": [],
+  "warnings": [
+    "duplicate_nav_urls:9"
+  ],
+  "graph_hash": "b0175e40068e7e3f9f3ed84d829095e302334dcee74626b51d9e177418e0df93"
+}

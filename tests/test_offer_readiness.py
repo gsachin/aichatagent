@@ -58,7 +58,7 @@ class TestEvaluateOfferReadiness:
             **overrides,
         }
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_lead_not_found(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
 
@@ -72,7 +72,7 @@ class TestEvaluateOfferReadiness:
         assert result["lead"] is None
         assert result["documents"] == 0
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_all_ready(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
 
@@ -88,7 +88,7 @@ class TestEvaluateOfferReadiness:
         assert result["missing"] == []
         assert result["documents"] == 1
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_missing_program_interest(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
 
@@ -104,7 +104,7 @@ class TestEvaluateOfferReadiness:
         assert "program_interest" in result["missing"]
         assert result["documents"] == 1
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_missing_name_and_no_docs(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
 
@@ -121,7 +121,7 @@ class TestEvaluateOfferReadiness:
         assert "document" in result["missing"]
         assert result["documents"] == 0
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_missing_email_and_phone(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
 

@@ -37,7 +37,7 @@ def test_sarvam_request_contract(monkeypatch, override_settings):
     monkeypatch.setattr(sarvam, "_post", fake_post)
     override_settings(
         SARVAM_API_KEY="test-key",
-        SARVAM_STT_KEYTERMS="Meridian University,B.Tech,MBA",
+        SARVAM_STT_KEYTERMS="Dr. Shyama Prasad Mukherjee University,B.Tech,MBA",
     )
 
     result = sarvam.transcribe(np.zeros(1600, dtype=np.int16))
@@ -48,7 +48,7 @@ def test_sarvam_request_contract(monkeypatch, override_settings):
     assert captured["data"]["mode"] == "codemix"
     assert captured["data"]["language_code"] == "unknown"
     assert json.loads(captured["data"]["keyterms"]) == [
-        "Meridian University", "B.Tech", "MBA",
+        "Dr. Shyama Prasad Mukherjee University", "B.Tech", "MBA",
     ]
     assert captured["files"]["file"][0] == "utterance.wav"
     assert captured["files"]["file"][2] == "audio/wav"
@@ -155,6 +155,7 @@ def test_sarvam_resets_session_after_transport_error(
 
 
 def test_indic_conformer_uses_language_model(monkeypatch, override_settings):
+    pytest.importorskip("onnx_asr")
     import onnx_asr
 
     import app.stt_indic as indic

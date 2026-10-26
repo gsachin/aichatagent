@@ -4,12 +4,9 @@
 .DESCRIPTION
     Kills stale services, releases ports, starts everything fresh,
     and updates the Cloudflare tunnel URL everywhere it is needed.
-    Includes GPU health check, Ollama model pre-warming, optional named
-    Cloudflare tunnel for a permanent URL, and the enterprise-rag-core MCP
-    retrieval service (https://github.com/gsachin/enterprise-rag-core):
-    Step 4b clone/syncs the repo + Redis Stack, Step 6b launches its MCP
-    server on :8010 (MCP-first retrieval with automatic fallback to local
-    Chroma). Override its location with ERC_ROOT.
+    Includes GPU health check, optional named Cloudflare tunnel for a
+    permanent URL, and the current OpenAI + DSPMU stack. RAG/Chroma, Ollama,
+    enterprise-rag-core and Redis are deliberately not started.
 .PARAMETER WithStreamlit
     Also launch Streamlit dashboard (port 8502) and main app (port 8501),
     each behind its own public Cloudflare quick tunnel.
@@ -40,8 +37,8 @@ param(
 $ProjectRoot = $PSScriptRoot
 $TunnelFile  = Join-Path $ProjectRoot ".whatsapp_tunnel"
 $StreamlitDashboardPort = 8502
-# The FastAPI and Streamlit ports, and the enterprise-rag-core MCP port (Step
-# 6b), are resolved further down from .env -- see "Ports from .env".
+# The FastAPI and Streamlit ports are resolved further down from .env --
+# see "Ports from .env".
 
 # The Salesforce admission API (see doc/salesforce/). A SEPARATE repo with its own
 # venv, started from its own directory: its config calls load_dotenv() with no
@@ -333,7 +330,7 @@ function Ensure-ProjectDeps {
     }
 
     Write-Warn "venv dependencies missing or broken -- running installer (bootstrap_services.py --install-only)..."
-    Write-Warn "First run downloads several GB (torch cu128 + pip deps + Ollama models) -- please wait."
+    Write-Warn "First run downloads several GB (torch cu128 + pip deps) -- please wait."
     $boot = Join-Path $ProjectRoot "bootstrap_services.py"
     if (-not (Test-Path $boot)) {
         Write-Err "bootstrap_services.py not found -- cannot install dependencies"
@@ -543,60 +540,13 @@ if (-not $dbReady) {
     Write-OK "Database pre-flight: PASSED"
 }
 
-# ==== Step 4b: Enterprise RAG Core =========================================
-Write-Step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-rag-core)"
-
-# The extracted Enterprise RAG/MCP Core Engine lives in its own repo, next to
-# this project. Ensure it is present (clone or pull) and that its only
-# required local infra -- Redis Stack -- is running. Failures here never block
-# the admissions app (warn-only).
-$ERCRepo = "https://github.com/gsachin/enterprise-rag-core"
-$ERCRoot = if ($env:ERC_ROOT) { $env:ERC_ROOT } else { Join-Path (Split-Path $ProjectRoot -Parent) "enterprise-rag-core" }
-$ERCGit  = Join-Path $ERCRoot ".git"
-
-if (Test-Path $ERCGit) {
-    Write-OK ("enterprise-rag-core present at {0} - syncing (git pull --ff-only)" -f $ERCRoot)
-    $ercPull = git -C $ERCRoot pull --ff-only 2>&1
-    if ($LASTEXITCODE -eq 0) { Write-OK "enterprise-rag-core up to date" }
-    else { Write-Warn ("git pull failed: {0}" -f ($ercPull -join " ")) }
-} else {
-    Write-Warn ("enterprise-rag-core not found - cloning {0} -> {1}" -f $ERCRepo, $ERCRoot)
-    $ercClone = git clone --depth 1 $ERCRepo $ERCRoot 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-OK "enterprise-rag-core cloned (first-time setup: see $ERCRoot\README.md)"
-    } else {
-        Write-Warn ("clone failed: {0}" -f ($ercClone -join " "))
-        Write-Warn "Skip: the RAG/MCP core is unavailable (admissions app unaffected)"
-    }
-}
-
-# Redis Stack (RediSearch + RedisJSON) is the only infra the RAG core needs
-# beyond Ollama (already handled in Step 6). Reuse the repo's compose file so
-# the stack matches its pinned setup; fall back to a bare container.
-if ((Test-Path $ERCGit) -and $DockerCli -and $dockerRunning) {
-    $ercCompose = Join-Path $ERCRoot "docker-compose.yml"
-    $redisNames = & $DockerCli ps --filter "publish=6379" --format "{{.Names}}" 2>$null
-    if ($redisNames) {
-        Write-OK ("Redis Stack already running ({0} on :6379)" -f ($redisNames -join ", "))
-    } elseif (Test-Path $ercCompose) {
-        Write-OK ("Starting Redis Stack via {0} (redis-stack service only)..." -f $ercCompose)
-        & $DockerCli compose -f $ercCompose up -d redis-stack 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-OK "Redis Stack started on :6379" }
-        else { Write-Warn "redis-stack failed to start - the RAG core will run without its semantic cache" }
-    } else {
-        & $DockerCli run -d --name rag-redis-stack -p 6379:6379 redis/redis-stack-server:latest 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-OK "Redis Stack started on :6379" }
-        else { Write-Warn "redis-stack failed to start - the RAG core will run without its semantic cache" }
-    }
-}
-
-# ==== Step 4c: Pre-rendered call assets ====================================
+# ==== Step 4b: Pre-rendered call assets ====================================
 # The greeting WAVs are generated, not committed (`app/static/audio/` is
 # gitignored). A fresh clone or deploy that skips this step silently falls back
 # to live synthesis on every call -- the greeting latency win is lost with no
 # error anywhere. `--ensure` is a no-op when every asset is present and
 # current, so a restart pays nothing; it renders only what is missing or stale.
-Write-Step "Step 4c: Pre-rendered call assets"
+Write-Step "Step 4b: Pre-rendered call assets"
 & $PythonExe (Join-Path $ProjectRoot "scripts\build_call_assets.py") --ensure
 if ($LASTEXITCODE -eq 0) {
     Write-OK "call assets ready (greetings asset-first on the next call)"
@@ -713,10 +663,9 @@ if ((Test-Path $CrmApiRoot) -and (Test-Path $CrmPython)) {
 # ==== Step 6: LLM pre-warming ============================================
 Write-Step "Step 6: LLM pre-warming"
 Write-OK "Remote LLM: OpenAI - no local model to load or warm"
-
-# ==== Step 6b: Retrieval service ==========================================
-Write-Step "Step 6b: Retrieval service"
-Write-OK "RAG removed - the full knowledge base is passed to OpenAI; no ERC/Chroma"
+Write-OK ("NGA: mode={0} enabled={1} scheduler={2} pdf={3} refs={4}" -f `
+    $env:NGA_MODE, $env:NGA_ENABLED, $env:NGA_SCHEDULER_ENABLED, `
+    $env:NGA_PDF_INDEX_ENABLED, $env:NGA_REFERENCE_DELIVERY_ENABLED)
 
 # ==== Step 7: Start Cloudflare tunnel ======================================
 Write-Step "Step 7: Starting Cloudflare tunnel"

@@ -1,7 +1,6 @@
 # DSPMU evaluation — draft golden set
 
-This is the DSPMU counterpart to the archived Meridian 161-case set. It is
-**draft and not university-approved**. Every critical case is
+This is the DSPMU evaluation set. It is **draft and not university-approved**. Every critical case is
 `PENDING_PO_SIGNOFF` with `approved_by: null`, so the checker reports the
 critical intents as **BLOCKED**; no number from this set is adoption-grade.
 

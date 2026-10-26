@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the draft DSPMU golden set, held-out split and evaluation KB.
 
-The set is deliberately separate from the archived Meridian 161-case set. It is
+The set is the DSPMU evaluation corpus. It is
 generated from the committed DSPMU facts and prompt corpus so a fee/date change
 cannot silently leave the evaluation behind.
 

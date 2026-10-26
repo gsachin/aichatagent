@@ -36,7 +36,7 @@ from app.programs import detect_program, is_explicit_program_choice
 # a bachelor's degree. A detected full programme name starts with the degree
 # family and is handled by `_eligibility_for` below.
 #
-# The archived Meridian names stay for PROGRAM_PROFILE=meridian rollback.
+# The catalogue is DSPMU-only.
 PROGRAM_ELIGIBILITY = {
     "BA": "10+2 in any stream",
     "B.Com.": "10+2 in any stream",
@@ -126,7 +126,15 @@ async def _stream_rag_answer(prompt: str, collected: list[str]):
     # English is the pre-existing path: no instruction suffix. Passing "en"
     # would add an "Answer in English" block the old chain never had.
     language = None if code in ("", "en") else code
-    async for item in query_rag_stream(prompt, language=language):
+    text_kwargs = (
+        {
+            "agentic_text": True,
+            "channel": "chat",
+            "conversation_id": st.session_state.get("conversation_id", ""),
+        }
+        if settings.NGA_ENABLED else {}
+    )
+    async for item in query_rag_stream(prompt, language=language, **text_kwargs):
         if isinstance(item, str) and item:
             collected.append(item)
             yield item

@@ -4,12 +4,14 @@
 # -----------------------------------------------------------------------------
 # Bash port of start_services.ps1 with full parity:
 #   kills stale services, frees ports, checks the compute platform, pre-flights
-#   Docker/PostgreSQL, clone/syncs the enterprise-rag-core repo with its Redis
-#   Stack infra (Step 4b, https://github.com/gsachin/enterprise-rag-core,
-#   override location with ERC_ROOT), starts FastAPI, checks the configured
-#   OpenAI-compatible LLM endpoint, starts a Cloudflare tunnel, writes the
-#   tunnel hostname everywhere it is needed, updates Twilio webhooks, and
+#   Docker/PostgreSQL, builds the pre-rendered call assets, starts FastAPI,
+#   checks the configured OpenAI endpoint, starts a Cloudflare tunnel, writes
+#   the tunnel hostname everywhere it is needed, updates Twilio webhooks, and
 #   starts the Streamlit apps.
+#
+# The launcher starts only services this application still uses. RAG/Chroma,
+# Ollama, enterprise-rag-core and Redis are deliberately not started; the
+# application uses OpenAI plus the DSPMU local site graph.
 #
 # Usage:
 #   bash start_services.sh              # everything, including Streamlit UIs
@@ -84,7 +86,7 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
     done < "$PROJECT_ROOT/.env"
 fi
 
-# ---- Python selection (bootstrap venv -> setup.sh venv -> system) ---------
+# ---- Python selection (bootstrap venv -> legacy venv -> system) -----------
 if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
     PYTHON="$PROJECT_ROOT/.venv/bin/python"
 elif [ -x "$PROJECT_ROOT/venv/bin/python" ]; then
@@ -276,67 +278,13 @@ else
 fi
 fi
 
-# ==== Step 4b: Enterprise RAG Core =========================================
-write_step "Step 4b: Enterprise RAG Core (https://github.com/gsachin/enterprise-rag-core)"
-
-# The extracted Enterprise RAG/MCP Core Engine lives in its own repo, next to
-# this project. Ensure it is present (clone or pull) and that its only
-# required local infra -- Redis Stack -- is running. Failures here never block
-# the admissions app (warn-only). Override the location with ERC_ROOT.
-if [ "$LOCAL_ONLY" = "true" ]; then
-    write_warn "Local-only mode: skipping enterprise-rag-core and Redis"
-else
-ERC_REPO="https://github.com/gsachin/enterprise-rag-core"
-ERC_ROOT="${ERC_ROOT:-$PROJECT_ROOT/../enterprise-rag-core}"
-
-if [ -d "$ERC_ROOT/.git" ]; then
-    write_ok "enterprise-rag-core present at $ERC_ROOT - syncing (git pull --ff-only)"
-    if (cd "$ERC_ROOT" && git pull --ff-only) >/dev/null 2>&1; then
-        write_ok "enterprise-rag-core up to date"
-    else
-        write_warn "git pull failed in $ERC_ROOT"
-    fi
-else
-    write_warn "enterprise-rag-core not found - cloning $ERC_REPO -> $ERC_ROOT"
-    if git clone --depth 1 "$ERC_REPO" "$ERC_ROOT" >/dev/null 2>&1; then
-        write_ok "enterprise-rag-core cloned (first-time setup: see $ERC_ROOT/README.md)"
-    else
-        write_warn "clone failed - the RAG/MCP core is unavailable (admissions app unaffected)"
-    fi
-fi
-
-# Redis Stack (RediSearch + RedisJSON) is the only infra the RAG core needs
-# beyond its embedding endpoint. Reuse the repo's compose file so the stack
-# matches its pinned setup; fall back to a bare container.
-if [ -d "$ERC_ROOT/.git" ] && docker info >/dev/null 2>&1; then
-    _redis_names="$(docker ps --filter "publish=6379" --format "{{.Names}}" 2>/dev/null)"
-    if [ -n "$_redis_names" ]; then
-        write_ok "Redis Stack already running ($(echo "$_redis_names" | tr '\n' ' ')on :6379)"
-    elif [ -f "$ERC_ROOT/docker-compose.yml" ]; then
-        write_ok "Starting Redis Stack via $ERC_ROOT/docker-compose.yml (redis-stack service only)..."
-        if docker compose -f "$ERC_ROOT/docker-compose.yml" up -d redis-stack >/dev/null 2>&1; then
-            write_ok "Redis Stack started on :6379"
-        else
-            write_warn "redis-stack failed to start - the RAG core will run without its semantic cache"
-        fi
-    else
-        if docker run -d --name rag-redis-stack -p 6379:6379 redis/redis-stack-server:latest >/dev/null 2>&1; then
-            write_ok "Redis Stack started on :6379"
-        else
-            write_warn "redis-stack failed to start - the RAG core will run without its semantic cache"
-        fi
-    fi
-fi
-
-fi
-
-# ==== Step 4c: Pre-rendered call assets ====================================
+# ==== Step 4b: Pre-rendered call assets ====================================
 # The greeting WAVs are generated, not committed (`app/static/audio/` is
 # gitignored). A fresh clone or deploy that skips this step silently falls back
 # to live synthesis on every call -- the greeting latency win is lost with no
 # error anywhere. `--ensure` is a no-op when every asset is present and
 # current, so a restart pays nothing; it renders only what is missing or stale.
-write_step "Step 4c: Pre-rendered call assets"
+write_step "Step 4b: Pre-rendered call assets"
 if [ "$LOCAL_ONLY" = "true" ]; then
     write_warn "Local-only mode: skipping call-asset build"
 elif "$PYTHON" "$PROJECT_ROOT/scripts/build_call_assets.py" --ensure; then
@@ -716,14 +664,10 @@ else
 fi
 printf '\n%sLocal Services:%s\n' "$BOLD" "$RESET"
 printf '   FastAPI backend:  %shttp://localhost:%s%s\n' "$CYAN" "$FASTAPI_PORT" "$RESET"
-if [ "$LOCAL_ONLY" != "true" ]; then
-    printf '   Enterprise RAG Core: %s%s%s  (repo: %shttps://github.com/gsachin/enterprise-rag-core%s)\n' "$CYAN" "$ERC_ROOT" "$RESET" "$CYAN" "$RESET"
-    printf '     MCP server (optional): cd %s && .venv/bin/enterprise-rag-core serve --port 8010\n' "$ERC_ROOT"
-fi
-# The ERC MCP service (:8010) is launched by the ERC repo's own launcher;
-# this script does not manage it — see doc/enterprizesolutions/
-# TRD_ERC_DECOUPLING_INTEGRATION.md (follow-up).
 printf '   LLM backend:      %s%s%s (%s)\n' "$CYAN" "$LLM_PROVIDER" "$RESET" "${LLM_MODEL:-default}"
+printf '   NGA:              mode=%s enabled=%s scheduler=%s pdf=%s refs=%s\n' \
+    "${NGA_MODE:-off}" "${NGA_ENABLED:-false}" "${NGA_SCHEDULER_ENABLED:-false}" \
+    "${NGA_PDF_INDEX_ENABLED:-false}" "${NGA_REFERENCE_DELIVERY_ENABLED:-false}"
 if [ "$WITH_STREAMLIT" = "true" ]; then
     printf '   Dashboard:        %shttp://localhost:%s%s\n' "$CYAN" "$STREAMLIT_DASH_PORT" "$RESET"
     printf '   Main Streamlit:   %shttp://localhost:%s%s\n' "$CYAN" "$STREAMLIT_MAIN_PORT" "$RESET"

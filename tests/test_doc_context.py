@@ -18,7 +18,7 @@ def test_current_kb_loads(override_settings):
     _reset(override_settings, CONTEXT_MODE="doc")
     text = doc_context.document_context()
     stats = doc_context.document_stats()
-    assert "Meridian University" in text
+    assert "Dr. Shyama Prasad Mukherjee University" in text
     assert stats.tokens > 0
     assert stats.bytes_read > 0
     assert stats.truncated_bytes is False

@@ -1574,6 +1574,14 @@ class VoiceCallSession:
         self._language_locked = self.language_source in _LOCKING_LANGUAGE_SOURCES
         self._noise_streak = 0  # consecutive noise-gated turns
         self.call_id = ""       # set by the WS handler (stream_sid)
+        #: Reference delivery identity, set by the WS handler. The carrier's
+        #: number is only present in the <Parameter>s, not the media stream.
+        self.call_sid = ""
+        self.phone_number = ""
+        self.conversation_id = ""
+        #: Citations obtained on the non-streaming path, where the worker
+        #: thread's ContextVar cannot reach this loop.
+        self._reference_citations: tuple[dict, ...] = ()
 
         # US-012: the per-call TTS cache. Unused while TTS_CACHE_SCOPE is
         # "shared" (the DG-06 default), where every session reads and writes the
@@ -1632,7 +1640,7 @@ class VoiceCallSession:
         #: ran OUTSIDE this class and wrote nothing here -- so the model's
         #: context began at the caller's first utterance, with no record that it
         #: had already said hello. 39 live answers reopened with "Hello, I'm
-        #: Alex from Meridian University Admissions".
+        #: Alex from DSPMU University Admissions".
         self.intro_done = False
 
         #: Slots the caller has already filled, in their own words, so the model
@@ -1648,7 +1656,7 @@ class VoiceCallSession:
         #: passed the check by citing the earlier invention.
         self._grounding_evidence: list[str] = []
 
-        #: Things the caller has asked about that Meridian does not offer,
+        #: Things the caller has asked about that DSPMU does not offer,
         #: accumulated across the call (BUG-17). The corpus decides this, not the
         #: conversation -- `app.kb_entities.unoffered_entities` -- so it does not
         #: depend on the model having noticed anything.
@@ -1683,7 +1691,7 @@ class VoiceCallSession:
         self._trace = None
 
     def note_unoffered(self, utterance: str) -> list[str]:
-        """Record anything the caller named that Meridian does not offer.
+        """Record anything the caller named that DSPMU does not offer.
 
         Returns what this turn ADDED, so the caller can log once rather than
         once per turn. Backed by the corpus index, so it is a fact about the
@@ -1768,7 +1776,7 @@ class VoiceCallSession:
                        for entity in self._unoffered)
 
     def not_offered_block(self) -> str:
-        """What the prompt says about the things Meridian does not offer.
+        """What the prompt says about the things DSPMU does not offer.
 
         BUG-17. The agent held the correct refusal for two turns on call
         944b503f and then reversed it at turn 16, after the caller said "You are
@@ -2683,6 +2691,7 @@ class VoiceCallSession:
         answer = self.grounded(answer)
 
         self._conversation_history.append(f"Assistant: {answer}")
+        self.queue_reference_delivery(transcript, answer)
         logger.info(f"VoiceCall: answer ({len(answer)} chars) = \"{answer[:120]}...\"")
 
         # Build dialogue for transcript logging
@@ -3120,6 +3129,44 @@ class VoiceCallSession:
         self.log_event("STT_LANGUAGE", language=detected,
                        prob=round(probability, 2))
 
+    def queue_reference_delivery(self, question: str, answer: str) -> None:
+        """Queue this turn's citations for WhatsApp delivery, if registered.
+
+        Never blocks and never raises into the call. The registration and
+        send happen in the delivery worker, after the turn.
+        """
+        if not settings.NGA_REFERENCE_DELIVERY_ENABLED:
+            return
+        if not (self.call_sid and self.phone_number):
+            return
+        try:
+            from app.rag import last_context_bundle
+            from app.references.delivery import (
+                ReferenceDeliveryRequest,
+                get_delivery_service,
+            )
+
+            bundle = last_context_bundle()
+            citations = tuple(bundle.citations) if bundle else ()
+            if not citations:
+                citations = self._reference_citations
+            if not citations:
+                return
+            get_delivery_service().submit_turn(
+                ReferenceDeliveryRequest(
+                    call_sid=self.call_sid,
+                    conversation_id=self.conversation_id,
+                    phone_number=self.phone_number,
+                    channel=f"{self.direction}_call",
+                    question=question,
+                    answer_summary=answer,
+                    citations=citations,
+                    mode=settings.NGA_REFERENCE_DELIVERY_MODE,
+                )
+            )
+        except Exception:  # noqa: BLE001 - delivery never affects the call
+            logger.exception("reference delivery enqueue failed")
+
     async def _query_llm(self, question: str) -> str:
         """Query the shared RAG + LLM pipeline in a thread."""
         try:
@@ -3138,9 +3185,20 @@ class VoiceCallSession:
             # C3/N1: retrieval embeds the caller's actual utterance, not the
             # assembled instruction prompt (history + style rules dominated
             # the dense vector and diluted the question).
-            answer = await asyncio.to_thread(
-                run_rag_query_sync, prompt, "voice", question
-            ) or ""
+            fast_kwargs = {"voice_fast": True} if settings.NGA_ENABLED else {}
+            sink: list[dict] = []
+            if settings.NGA_ENABLED:
+                answer = await asyncio.to_thread(
+                    run_rag_query_sync, prompt, "voice", question,
+                    reference_sink=sink,
+                    **fast_kwargs,
+                ) or ""
+            else:
+                answer = await asyncio.to_thread(
+                    run_rag_query_sync, prompt, "voice", question,
+                    **fast_kwargs,
+                ) or ""
+            self._reference_citations = tuple(sink)
             # Record the evidence on the loop. The bundle is set by
             # query_rag_stream; reading it here keeps the guard on the same
             # text the prompt used, without a worker-thread context loss.
@@ -3206,8 +3264,12 @@ class VoiceCallSession:
             cancelled = False
             try:
                 # C3/N1: same retrieval-query decoupling as the batch path.
+                fast_kwargs = (
+                    {"voice_fast": True} if settings.NGA_ENABLED else {}
+                )
                 async for item in query_rag_stream(
-                    prompt, cancel=cancel, retrieval_query=question
+                    prompt, cancel=cancel, retrieval_query=question,
+                    **fast_kwargs,
                 ):
                     if isinstance(item, str):
                         if first_delta:

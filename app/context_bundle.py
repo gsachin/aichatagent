@@ -19,4 +19,12 @@ class ContextBundle:
     node_ids: tuple[str, ...] = ()
     notice_ids: tuple[str, ...] = ()
     source_urls: tuple[str, ...] = ()
+    #: Structured citations (title, url, evidence snippet) for reference
+    #: rendering and voice→WhatsApp delivery. Empty on the static path.
+    citations: tuple[dict, ...] = ()
     valid_until: str | None = None
+    #: The route that produced this bundle (``fee``, ``notices``,
+    #: ``fallback``, ...), or the live suffix when request-time website text
+    #: was appended. Provenance only: no consumer makes an answer decision on
+    #: it, but it is what lets the live-retrieval gate stay narrow.
+    kind: str = ""

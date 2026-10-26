@@ -85,7 +85,7 @@ def test_call_greeting_uses_the_call_language():
     assert "admissions assistant" in call_greeting("en")
     assert "एडमिशन" in call_greeting("hi")
     assert "એડમિશન" in call_greeting("gu")
-    assert "Meridian University" in call_greeting("gu", "outbound")
+    assert "Dr. Shyama Prasad Mukherjee University" in call_greeting("gu", "outbound")
 
 
 def test_system_prompt_has_no_language_instruction():
@@ -111,7 +111,7 @@ def test_query_rag_appends_language_to_user_turn(monkeypatch, override_settings)
     rag.query_rag("What is the fee?", language="hi")
     messages = captured["messages"]
     assert messages[0]["role"] == "system"
-    assert "Meridian University" in messages[0]["content"]
+    assert "Dr. Shyama Prasad Mukherjee University" in messages[0]["content"]
     assert "Answer in Hindi" in messages[1]["content"]
     assert "Student's question: What is the fee?" in messages[1]["content"]
 

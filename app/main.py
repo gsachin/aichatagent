@@ -318,26 +318,11 @@ def _reconcile_workers() -> None:
     every model. On a 16 GB card already holding ~13 GB, that is a crash, not a
     speedup.
 
-    CORRECTED 2026-09-21 (US-011, TAC-3), in two steps. This docstring used to
-    assert that "No launcher passes it to uvicorn -- start_services.ps1,
-    start_services.sh, the Dockerfile and docker-compose all start a single
-    process", and the warning below told the operator "No launcher honours the
-    setting; the running count is 1". Both were false. The list had simply never
-    included start.sh, whose non-DEV_MODE branch passed:
-
-        --workers "${FASTAPI_WORKERS:-4}"
-
-    start.sh is not dead code -- it is the launcher SETUP_GUIDE.md,
-    README_DEPLOYMENT.md and SETUP_COMPLETE.md point operators at. So the key
-    was honoured on that path, and substituted 4 when it was unset OR empty:
-    four workers each holding their own copy of the models, which is the crash
-    described above, reached by doing nothing.
-
-    The launcher decision that followed was to remove the flag rather than tune
-    its default, so start.sh now starts one process like every other launcher.
-    The original claim is therefore true again -- but because no launcher passes
-    the flag, rather than because the list of launchers was incomplete. The key
-    is reported as NOT IN EFFECT below, and is inert on every path.
+    CORRECTED 2026-09-21 (US-011, TAC-3). The supported launchers
+    (``start_services.sh``, ``start_services.ps1``, the Dockerfile and
+    ``docker-compose.yml``) start one process and do not pass ``--workers``.
+    The legacy ``start.sh`` that passed four workers has been removed. The key
+    is therefore reported as NOT IN EFFECT below and is inert on every path.
     """
     raw = settings.FASTAPI_WORKERS
     if not raw:
@@ -1612,6 +1597,9 @@ async def websocket_twilio(websocket: WebSocket):
                     language=session.language,
                 )
                 conversation_id = inbound_session.conversation_id
+                session.call_sid = call_sid or stream_sid
+                session.phone_number = caller_number
+                session.conversation_id = conversation_id
                 logger.info(
                     f"WS /ws/twilio: caller number {'received' if caller_number else 'missing'}"
                 )
@@ -1745,6 +1733,7 @@ async def websocket_twilio(websocket: WebSocket):
         from app.crm import session as crm_session
 
         ended = crm_session.end("inbound_call", stream_sid) if stream_sid else None
+        _flush_voice_references(call_sid or session.call_sid or stream_sid or "")
         await _handle_disconnect(
             transcript_parts,
             ended.conversation_id if ended else "",
@@ -1874,6 +1863,9 @@ async def websocket_twilio_outbound(websocket: WebSocket):
                     language=session.language,
                 )
                 conversation_id = outbound_session.conversation_id
+                session.call_sid = call_sid or stream_sid
+                session.phone_number = outbound_phone
+                session.conversation_id = conversation_id
                 _push_transcript_event("call_started", stream_sid, {
                     "direction": "outbound",
                     "conversation_id": conversation_id,
@@ -1985,6 +1977,7 @@ async def websocket_twilio_outbound(websocket: WebSocket):
         from app.crm import session as crm_session
 
         ended = crm_session.end("outbound_call", stream_sid) if stream_sid else None
+        _flush_voice_references(call_sid or session.call_sid or stream_sid or "")
         await _handle_disconnect(
             transcript_parts,
             ended.conversation_id if ended else "",
@@ -2869,6 +2862,8 @@ async def _whatsapp_chat_rag(
     profile: dict | None = None,
     program: str = "",
     language: str | None = None,
+    conversation_id: str = "",
+    to_number: str = "",
 ) -> str:
     """
     RAG answer for WhatsApp text chat using the chat-oriented prompt
@@ -2893,6 +2888,14 @@ async def _whatsapp_chat_rag(
         retrieval_query = f"{question} {program}"
 
     try:
+        text_kwargs = (
+            {
+                "agentic_text": True,
+                "channel": "whatsapp",
+                "conversation_id": conversation_id,
+            }
+            if settings.NGA_ENABLED else {}
+        )
         answer = await _asyncio.to_thread(
             run_rag_query_sync,
             question,
@@ -2901,15 +2904,60 @@ async def _whatsapp_chat_rag(
             history=history,
             profile=profile,
             language=language,
+            **text_kwargs,
         )
         if answer:
-            return answer
+            from app.references.formatting import split_whatsapp_answer
+
+            body, references = split_whatsapp_answer(answer)
+            if references:
+                from app.crm.tasks import spawn as _spawn
+
+                _spawn(
+                    _send_whatsapp_reference_followup(to_number, references),
+                    label="whatsapp reference follow-up",
+                )
+            return body
     except Exception:
         logger.exception("WhatsApp RAG failed")
     return whatsapp_text(
         "rag_failure", language or "",
         "Sorry, I couldn't process your question. Please try again.",
     )
+
+
+async def _send_whatsapp_reference_followup(
+    to_number: str, references: str
+) -> None:
+    """Send an over-limit reference block as a second WhatsApp message.
+
+    Failure is logged and never changes the answer already returned to the
+    webhook.
+    """
+    if not to_number or not references.strip():
+        return
+    try:
+        from app.config import settings as _settings
+        from app.messaging import send_whatsapp_message
+        from app.references.formatting import whatsapp_address
+
+        sender = (
+            _settings.TWILIO_WHATSAPP_NUMBER or _settings.TWILIO_PHONE_NUMBER
+        )
+        ok, sid = await _asyncio.to_thread(
+            send_whatsapp_message,
+            whatsapp_address(to_number),
+            whatsapp_address(sender),
+            references,
+        )
+        if not ok:
+            logger.warning(
+                "WhatsApp reference follow-up failed (%d chars): %s",
+                len(references),
+                sid,
+            )
+    except Exception:  # noqa: BLE001 - the answer already exists
+        logger.exception("WhatsApp reference follow-up failed")
 
 
 async def _whatsapp_offer_on_done(
@@ -3334,6 +3382,39 @@ async def twilio_whatsapp_webhook(
 
     logger.info(f"WhatsApp from {From} (WaId={WaId}): {Body[:100]}")
 
+    # ── WhatsApp consent commands ────────────────────────────────
+    # STOP is authoritative for proactive reference delivery. START/UNSTOP is
+    # the explicit re-subscribe; an ordinary inbound message does not clear an
+    # opt-out on its own.
+    _consent_command = Body.strip().upper()
+    if _consent_command in ("STOP", "STOP ALL", "UNSUBSCRIBE", "CANCEL"):
+        try:
+            from app.leads.models import set_whatsapp_opt_out
+
+            await set_whatsapp_opt_out(From)
+        except Exception:
+            logger.exception("Failed to record WhatsApp STOP")
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(
+            answer=escape(
+                "You have been unsubscribed from proactive reference messages. "
+                "Send START to receive them again."
+            )
+        )
+        return Response(content=twiml, media_type="application/xml")
+    if _consent_command in ("START", "UNSTOP"):
+        try:
+            from app.leads.models import set_whatsapp_opt_in
+
+            await set_whatsapp_opt_in(From)
+        except Exception:
+            logger.exception("Failed to record WhatsApp START")
+        twiml = WHATSAPP_TWIML_TEMPLATE.format(
+            answer=escape(
+                "You are subscribed again. Send STOP to opt out at any time."
+            )
+        )
+        return Response(content=twiml, media_type="application/xml")
+
     # ── In-chat language command ─────────────────────────────────
     # A whole-message command ("Spanish", "/es") sets this thread's answer
     # language and is confirmed without calling the LLM. It runs before lead
@@ -3574,6 +3655,8 @@ async def twilio_whatsapp_webhook(
             },
             program=lead_program,
             language=_answer_language,
+            conversation_id=conversation_id,
+            to_number=From,
         )
 
     # An explicit "my name is X" / "call me X" is an instruction, and it has to
@@ -4634,6 +4717,18 @@ async def api_batch_quick_call_status(batch_id: str):
 # In-memory transcript queue (shared by WebSocket handlers + SSE endpoint)
 _transcript_events: list[dict] = []
 _active_call_sids: dict[str, dict] = {}  # call_sid -> call metadata
+
+
+def _flush_voice_references(call_sid: str) -> None:
+    """Send any call-end reference batch; never blocks call teardown."""
+    if not call_sid:
+        return
+    try:
+        from app.references.delivery import flush_voice_references
+
+        flush_voice_references(call_sid)
+    except Exception:  # noqa: BLE001 - teardown must complete
+        logger.exception("voice reference flush failed")
 
 
 def _push_transcript_event(event_type: str, call_sid: str, data: dict | None = None):
