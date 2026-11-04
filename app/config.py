@@ -835,6 +835,13 @@ class Settings:
     CRM_DOCUMENT_UPLOAD_ENABLED: bool = field(
         default_factory=lambda: _env("CRM_DOCUMENT_UPLOAD_ENABLED", "true").lower() == "true"
     )
+    # Which upload contract to use. "legacy" is the chunked init/chunks/complete
+    # protocol the pipeline has always used; "updated" switches to the
+    # offer-letter/raw/upload-and-verify endpoints added in the phase-1 API
+    # build. The default stays legacy until the updated path is gate-verified.
+    CRM_UPLOAD_MODE: str = field(
+        default_factory=lambda: _env("CRM_UPLOAD_MODE", "legacy").strip().lower()
+    )
     # These land in the ContentVersion fields Document_Type__c / Source__c. The
     # API validates neither (both are free strings), but both are restricted
     # picklists in the dev org, so an out-of-vocabulary value fails as a 500

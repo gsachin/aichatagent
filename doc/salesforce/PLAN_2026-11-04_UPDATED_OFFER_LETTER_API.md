@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Draft for review — no code changed yet
+**Status:** Phase 1 implemented and Gate 1 green (2026-11-04) — Phase 2 not started.
+**Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
 "any document uploaded → offer" to "document validated → marks meet the program requirement →
@@ -694,49 +695,54 @@ document's `validation_status` and extracted mark (see §3.4).
 
 ### Phase 1 — Bring up `NEW` in shadow, preserving the live contract
 
-`NEW`:
-- [ ] Initialize git in `NEW` (or merge into a branch of `OLD`) with `origin/main` as the base and
-      re-apply `f327a95` + `0fc5328`. Do not hand-edit the files without history.
-- [ ] Add `PyMuPDF`, `opencv-python-headless`, `numpy`, `pytesseract`, `Pillow` to
-      `requirements.txt`; add `PyJWT` only if auth is enabled.
-- [ ] Create `venv`, `.env`; smoke-test `import main` and `/health` on `:8099`.
-- [ ] Implement `store_document_without_validation()` (no OCR, no history, **omit
-      `Verification_Status__c`** — the org's restricted picklist has no `Pending` and the field is
-      nillable).
-- [ ] Fix the `upload-and-verify` event-loop block (§2.5 item 8): make the route `def` or run the
-      service in `run_in_threadpool`.
-- [ ] Make the offer-letter `Document_Type__c` configurable and default it to `Other` (the org has
-      no `Offer Letter` value). Do **not** add a `PENDING` mapping; use “omit”.
-- [ ] Expose it as:
-      - `POST /admissions/{application_no}/documents/offer-letter` (new contract), and
-      - the legacy `uploads` / `chunks` / `complete` routes as a **deprecated shim** over the same
-        storage function (so UD is untouched in Phase 1).
-- [ ] Delete `.bak` / `_backup.py` duplicates; fix or remove the broken `evaluate-and-save` and
-      `save_admission_document_evaluation`; fix `test_demo_rules.py`.
+`NEW` — done:
+- [x] Initialized git; baseline `ae46db0`, Phase 1 `0bc5aca`.
+- [x] Re-applied the live user-API fixes (`f327a95` + `0fc5328`): optional identifiers, blank-name
+      guard, `format_soql`, email-then-phone, precise not-found, `GET /users/lookup`.
+- [x] Pinned PyMuPDF/OpenCV/numpy/pytesseract/Pillow/PyJWT/pypdf in `requirements.txt`.
+- [x] Created `venv` and `.env` (same org, `power-agility-491`); `import main` and `/health` on
+      `:8099` verified. `.env` is gitignored; no values printed or committed.
+- [x] Added `store_document_without_validation()` / `store_offer_letter()`; **omits
+      `Verification_Status__c`** (the org's restricted picklist has no `Pending`; field nillable).
+- [x] Added `POST /admissions/{application_no}/documents/offer-letter` and `.../documents/raw`.
+- [x] Restored the legacy `uploads` / `chunks` / `complete` routes as a deprecated shim, with a
+      UUID check on `upload_id` (the old code joined it into a path unchecked).
+- [x] Fixed the event-loop block with `run_in_threadpool` (§2.5 item 8).
+- [x] Deleted `.bak` / `_backup.py`; removed the dead `evaluate-and-save` and
+      `save_admission_document_evaluation` paths; fixed `test_demo_rules.py`; added
+      `test_contract.py`.
+- [x] Offline tests: 19 threshold/name assertions, 2 aggregation checks, org picklist contract,
+      required route inventory, upload_id traversal guard — all pass.
+- [x] **Tesseract 5.4.0 installed** at `C:\Program Files\Tesseract-OCR`; the scanned sample now
+      extracts 71.6% and passes (§3.12). Other hosts need it too.
 - [ ] Regenerate `openapi.json` and store it for contract review.
 
-`UD`:
-- [ ] Add `CRM_UPLOAD_MODE=legacy|updated` (default `legacy`); point `CRM_BASE_URL` at `:8099`
-      for the shadow run only.
-- [ ] No behavior change yet.
+`UD` — done:
+- [x] Gate run pointed at `:8099` via `--crm-url` / `CRM_BASE_URL`; the live `.env` still points at
+      `:8098` so the running app is untouched.
+- [x] Added `CRM_UPLOAD_MODE` (default `legacy`) for Phase 2 to consume.
 
-**Setup already completed on this machine (2026-11-04):**
-- [x] `NEW/.env` created from the live API's credentials (same org, `power-agility-491`);
-      `.env` is covered by `.gitignore`. No values printed or committed.
-- [x] `NEW/venv` created (Python 3.11); PyMuPDF, OpenCV, numpy, pytesseract, Pillow and pypdf
-      installed; `import main` succeeds.
-- [x] `uvicorn main:app` served `GET /health` → `{"status":"ok"}` on `127.0.0.1:8099`; the test
-      process was stopped.
-- [x] **Tesseract 5.4.0 installed** at `C:\Program Files\Tesseract-OCR`; the scanned sample now
-      extracts 71.6% and passes (§3.12). The installer is per-machine; any other host needs it too.
-- [ ] `requirements.txt` is **not yet updated**; the venv has the packages, the file does not.
-- [ ] No code changes have been made.
+**Gate 1 — green (2026-11-04).** The four existing live harnesses ran against `:8099`:
 
-**Gate 1:** the four existing live harnesses pass against `:8099` with `CRM_UPLOAD_MODE=legacy`:
-`verify_offer_document_upload.py`, `verify_gate45_voice.py`, `verify_gate6_webchat.py`,
-`verify_gate7_status.py`. Point them with `--base-url` / `--crm-url` where supported, otherwise
-export `CRM_BASE_URL=http://127.0.0.1:8099` before the run (`verify_gate45_voice.py` has no CRM URL
-argument and reads the app's settings). Unit baseline stays green (73 CRM/offer tests).
+| Harness | Result |
+|---|---|
+| `verify_offer_document_upload.py` | **10 passed, 0 failed** (one ContentVersion residue, below) |
+| `verify_gate45_voice.py` | **5 passed, 0 failed** (2 deferred by design: needs real audio) |
+| `verify_gate6_webchat.py` | **6 passed, 0 failed** |
+| `verify_gate7_status.py` | **17 passed, 0 failed** |
+
+Docker Desktop and the `elearning-postgres` container were started for Gates 6/7. The shadow API
+was stopped afterwards; port `:8099` is free.
+
+**No-write smoke test** (legacy init/chunk): init `200`, chunk `200`, missing-chunk complete `400`,
+non-PDF offer `400`, invalid raw type `400`. No Salesforce writes were made during the smoke test.
+
+**Residue:** ContentVersion `068T100000niVybIAE` on `APP-A34F6F9621` remains from Gate 4 — the API
+has no document delete route. Remove it in Salesforce if the test document should not stay.
+
+**New finding:** UD's `map_document_type` returns `IELTS Score`, but the org's restricted
+`Document_Type__c` value is `IELTS`. The shim rejects it with a clear `400` (instead of the old
+opaque 500); Phase 3 must change the mapping to `IELTS`.
 
 ### Phase 2 — Port the fixes and switch the client to the new upload contract
 
@@ -779,9 +785,10 @@ mappings, and program-detection failures before a student is denied an offer.
 - [ ] Add `api_document_type()` to `app/crm/identity.py`: `transcript` →
       `UNDERGRADUATE_TRANSCRIPT`, `marksheet` → `CLASS_12_MARKSHEET` (confirm: UD currently files
       this as `10th Marksheet`, which the new API does not model), `id_proof`/`passport` →
-      `ID_PROOF`, `ielts` → `IELTS`; `test_score` needs a disambiguation question (SAT/GRE/GMAT/
-      TOEFL cannot be inferred from “test_score”); `resume`, `financial`, `recommendation`,
-      `other` → raw lane.
+      `ID_PROOF`, `ielts` → `IELTS` — **UD's current `DOCUMENT_TYPE_MAP` says `IELTS Score`, which
+      is not in the org's restricted picklist; the shim already rejects it with a 400**. The
+      `test_score` value needs a disambiguation question (SAT/GRE/GMAT/TOEFL cannot be inferred
+      from “test_score”); `resume`, `financial`, `recommendation`, `other` → raw lane.
 - [ ] Add `program_level(program)` returning `Bachelor's` or `Master's`, and push it to
       `Education_Level__c` — **`Program__c` does not exist in this org**. `_customer_program`
       checks `Course__c == "MBA"` first, so ensure `Course__c` is exactly `"MBA"` for MBA
