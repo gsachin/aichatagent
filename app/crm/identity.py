@@ -77,7 +77,9 @@ DOCUMENT_TYPE_MAP: dict[str, str] = {
     "financial": "Financial Document",
     "recommendation": "Recommendation Letter",
     "test_score": "Test Score",
-    "ielts": "IELTS Score",
+    # The org's value is "IELTS", not "IELTS Score" (verified against the
+    # restricted picklist on 2026-11-04; the longer spelling was a 500).
+    "ielts": "IELTS",
     "other": "Other",
 }
 

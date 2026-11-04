@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phase 1 implemented and Gate 1 green (2026-11-04) — Phase 2 not started.
+**Status:** Phases 1–2 implemented and Gate 2 green (2026-11-04) — Phase 3 not started.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -746,33 +746,40 @@ opaque 500); Phase 3 must change the mapping to `IELTS`.
 
 ### Phase 2 — Port the fixes and switch the client to the new upload contract
 
-`NEW`:
-- [ ] Confirm the merged user API matches the live fixes: optional `UserResponse` identifiers,
-      blank-name guard, `format_soql`, email-then-phone, `SalesforceResourceNotFound` only,
-      `GET /users/lookup`.
-- [ ] Add tests pinning those behaviours (they are the regression fence).
-- [ ] Add `POST /admissions/{application_no}/documents/raw`: multipart PDF for documents that are
-      not evidence (`Other`, `Resume`, `Financial Document`, `Recommendation Letter`). Stores a
-      ContentVersion **without `Verification_Status__c`** (no `Pending` in the restricted picklist);
-      **no OCR, no history, no eligibility write**. This is the Phase 2 lane for student documents
-      that cannot be validated.
-- [ ] Decide whether the legacy chunked shim stays for a second release or is removed after
-      Gate 2; either way it must keep the same duplicate-defence semantics.
+`NEW` — done:
+- [x] The live user-API fixes are merged (Phase 1), and `test_contract.py` covers the routes and
+      org picklist vocabulary.
+- [x] `POST /admissions/{application_no}/documents/raw` added: stores a ContentVersion **without
+      `Verification_Status__c`**, no OCR/history/eligibility write.
+- [x] `openapi.json` exported (`b04f050`).
+- [x] The legacy chunked shim is kept for one release (deprecated) and shares the duplicate
+      defence with the new paths.
 
-`UD`:
-- [ ] Rewrite `_transfer` (`app/crm/documents.py:335-450`) into:
-      - `_upload_offer_letter` → new offer-letter endpoint (single multipart, no chunk loop);
-      - `_upload_student_document_raw` → new raw endpoint (Phase 2 behavior);
-      - `_upload_and_verify` → the validation endpoint, added now but wired in Phase 3;
-      - keep `_find_existing_offer_document`, `is_create` semantics, and the
-        `uploaded` / `failed` / `unknown` outcome model.
-- [ ] Preserve the “never retry a create” rule for the new create-shaped call.
-- [ ] Update the mocked paths in `tests/test_crm_documents.py`,
-      `tests/test_crm_student_documents.py`.
+`UD` — done:
+- [x] `_transfer_offer_letter` → `/documents/offer-letter` (single multipart, no chunk loop).
+- [x] `_transfer_raw` → `/documents/raw` (the Phase 2 student-document lane).
+- [x] `_transfer_and_verify` → `/documents/upload-and-verify` (defined now; wired in Phase 3).
+- [x] `CRM_UPLOAD_MODE` selects legacy vs updated; **legacy remains the default**.
+- [x] `_find_existing_offer_document`, `is_create` semantics, and the
+      `uploaded` / `failed` / `unknown` outcome model are preserved.
+- [x] Tests updated: 46 across the two upload files; 270 across the CRM/offer suite.
+- [x] `IELTS Score` → `IELTS` mapping fixed.
 
-**Gate 2:** offer and student-document uploads pass against `:8099` using `CRM_UPLOAD_MODE=updated`;
-student documents use the raw lane and **no offer behaviour changes**; the old gate harnesses pass
-unchanged (same `CRM_BASE_URL` override); duplicate defence still suppresses a second offer upload.
+**Gate 2 — green (2026-11-04), `CRM_UPLOAD_MODE=updated` against `:8099`:**
+
+| Harness | Result |
+|---|---|
+| offer document upload | **10 passed, 0 failed** |
+| webchat | **6 passed, 0 failed** |
+| status | **17 passed, 0 failed** |
+| voice 4/5 | **5 passed, 0 failed** |
+
+The API access log confirms `POST /admissions/APP-9362067473/documents/offer-letter 200 OK` — the
+updated path was actually used, not the legacy shim. Student documents used the raw lane. The live
+`.env` remains `legacy` / `:8098` until the Phase 5 cutover, so the running app is unchanged;
+updated mode is proven via the gates' environment override.
+
+**Residue:** ContentVersion `068T100000nij6sIAA` on `APP-9362067473` from Gate 2.
 
 ### Phase 3 — Capture validation evidence and compute the decision in shadow mode
 

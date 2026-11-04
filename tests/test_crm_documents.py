@@ -41,6 +41,18 @@ def crm_on(override_settings):
         CRM_OFFER_DOCUMENT_SOURCE="Internal Upload",
         CRM_UPLOAD_CHUNK_BYTES=1024 * 1024,
         CRM_UPLOAD_TIMEOUT_S=30.0,
+        CRM_UPLOAD_MODE="legacy",
+    )
+
+
+@pytest.fixture
+def crm_updated(override_settings):
+    override_settings(
+        CRM_ENABLED=True,
+        CRM_OFFER_UPLOAD_ENABLED=True,
+        CRM_OFFER_DOCUMENT_SOURCE="Internal Upload",
+        CRM_UPLOAD_TIMEOUT_S=30.0,
+        CRM_UPLOAD_MODE="updated",
     )
 
 
@@ -274,6 +286,59 @@ async def test_upload_runs_init_chunk_complete_in_order(crm_on, store, monkeypat
     assert store["recorded"][-1] == {
         "document_id": "068f6000002vvTWAAY", "status": "uploaded"
     }
+
+
+@pytest.mark.anyio
+async def test_updated_mode_posts_one_offer_letter_request(
+    crm_updated, store, monkeypatch, pdf
+):
+    """The updated contract is one multipart call, not init/chunks/complete."""
+    store["application_no"] = "APP-D0ACBB945B"
+    handler, state = scripted([
+        ok([]),  # pre-check: no documents yet
+        ok({
+            "application_no": "APP-D0ACBB945B",
+            "document_id": "068UPDATED01",
+            "status": "uploaded",
+            "document": {
+                "document_id": "068UPDATED01",
+                "file_name": "Offer_Letter_ABCD1234.pdf",
+                "document_type": "Other",
+                "source": "Internal Upload",
+            },
+        }),
+    ])
+    install(monkeypatch, handler)
+
+    document_id = await upload(pdf_path=pdf)
+
+    assert document_id == "068UPDATED01"
+    paths = [r.url.path for r in state["requests"]]
+    assert paths == [
+        "/admissions/APP-D0ACBB945B/documents",
+        "/admissions/APP-D0ACBB945B/documents/offer-letter",
+    ]
+    fields, files = multipart_parts(state["requests"][-1])
+    assert fields == {"source": "Internal Upload"}
+    assert files["file"][0] == "Offer_Letter_ABCD1234.pdf"
+    assert files["file"][1] == PDF
+    assert store["recorded"][-1] == {
+        "document_id": "068UPDATED01", "status": "uploaded"
+    }
+
+
+@pytest.mark.anyio
+async def test_updated_mode_does_not_retry_an_ambiguous_offer_store(
+    crm_updated, store, monkeypatch, pdf
+):
+    """A 500 on the create-shaped store is 'unknown', never a retry."""
+    store["application_no"] = "APP-D0ACBB945B"
+    handler, state = scripted([ok([]), err(500, "boom")])
+    install(monkeypatch, handler)
+
+    assert await upload(pdf_path=pdf) == ""
+    assert state["calls"] == 2, "pre-check + one store; the store must not retry"
+    assert store["recorded"][-1] == {"document_id": "", "status": "unknown"}
 
 
 @pytest.mark.anyio

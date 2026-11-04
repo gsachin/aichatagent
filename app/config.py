@@ -855,7 +855,7 @@ class Settings:
     # {Academic Transcript, Resume, Financial Document, ID Document, Admission
     # Call Recording, Chatbot Conversation Record, Test Score, Recommendation
     # Letter, Other, 10th/12th/Diploma Marksheet, Bachelor's Last-Semester
-    # Result, IELTS Score, Diploma Last-Semester Result}.
+    # Result, IELTS, Diploma Last-Semester Result}.
     CRM_OFFER_DOCUMENT_TYPE: str = field(
         default_factory=lambda: _env("CRM_OFFER_DOCUMENT_TYPE", "Other")
     )

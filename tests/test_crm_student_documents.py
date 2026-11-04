@@ -14,6 +14,8 @@ bookkeeping lives on the document row rather than the offer row.
 
 from __future__ import annotations
 
+import email
+
 import httpx
 import pytest
 
@@ -36,6 +38,19 @@ def crm_on(override_settings):
         CRM_UPLOAD_CHUNK_BYTES=1024 * 1024,
         CRM_UPLOAD_TIMEOUT_S=30.0,
         CRM_MAX_RETRIES=0,
+        CRM_UPLOAD_MODE="legacy",
+    )
+
+
+@pytest.fixture
+def crm_updated(override_settings):
+    override_settings(
+        CRM_ENABLED=True,
+        CRM_DOCUMENT_UPLOAD_ENABLED=True,
+        CRM_OFFER_DOCUMENT_SOURCE="Internal Upload",
+        CRM_UPLOAD_TIMEOUT_S=30.0,
+        CRM_MAX_RETRIES=0,
+        CRM_UPLOAD_MODE="updated",
     )
 
 
@@ -106,6 +121,25 @@ def scripted(*responses):
     return list(responses)
 
 
+def multipart_parts(entry: dict) -> tuple[dict[str, str], dict[str, tuple[str, bytes]]]:
+    """Split a recorded multipart body into form fields and file parts."""
+    raw = (
+        b"Content-Type: " + entry["content_type"].encode()
+        + b"\r\nMIME-Version: 1.0\r\n\r\n" + entry["body"]
+    )
+    fields: dict[str, str] = {}
+    files: dict[str, tuple[str, bytes]] = {}
+    for part in email.message_from_bytes(raw).get_payload():
+        name = part.get_param("name", header="content-disposition")
+        body = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        if filename is not None:
+            files[name] = (filename, body)
+        else:
+            fields[name] = body.decode()
+    return fields, files
+
+
 def upload(doc_id=DOC_ID, path="/tmp/x.pdf", doc_type="transcript", name="RAG.md.pdf"):
     return docs_mod.upload_student_document(
         lead_id="lead-1", doc_id=doc_id, file_path=path, doc_type=doc_type,
@@ -155,6 +189,42 @@ async def test_a_transcript_reaches_the_crm(crm_on, client, store, pdf):
     assert paths[-1].endswith("/complete")
     assert store["recorded"][-1] == {"document_id": "068T100000cVgi7IAC",
                                      "status": "uploaded"}
+
+
+@pytest.mark.anyio
+async def test_updated_mode_posts_one_raw_request(crm_updated, client, store, pdf):
+    """The updated contract is one multipart call to /documents/raw."""
+    sent, state = client
+    state["responses"] = scripted(
+        ok_listing(),
+        httpx.Response(200, json={
+            "application_no": "APP-28B9A16C28",
+            "document_id": "068RAW0001",
+            "status": "uploaded",
+            "document": {
+                "document_id": "068RAW0001",
+                "file_name": "C852F7D9_RAG.md.pdf",
+                "document_type": "Academic Transcript",
+                "source": "Internal Upload",
+            },
+        }),
+    )
+
+    assert await upload(path=pdf, doc_type="transcript") == "068RAW0001"
+
+    paths = [s["path"] for s in sent]
+    assert paths == [
+        "/admissions/APP-28B9A16C28/documents",
+        "/admissions/APP-28B9A16C28/documents/raw",
+    ]
+    fields, files = multipart_parts(sent[-1])
+    assert fields["document_type"] == "Academic Transcript"
+    assert fields["source"] == "Internal Upload"
+    assert files["file"][0] == "C852F7D9_RAG.md.pdf"
+    assert files["file"][1] == PDF
+    assert store["recorded"][-1] == {
+        "document_id": "068RAW0001", "status": "uploaded"
+    }
 
 
 def init_fields(request_body: bytes) -> dict:
@@ -328,6 +398,11 @@ def test_an_unrecognised_document_type_falls_back_rather_than_failing():
     assert ident.map_document_type(None) == "Other"
 
 
+def test_ielts_maps_to_the_org_value():
+    """The org's value is IELTS, not IELTS Score."""
+    assert ident.map_document_type("ielts") == "IELTS"
+
+
 def test_every_mapped_value_is_a_value_the_org_accepts():
     """
     The picklist is restricted — the API validates nothing, so a typo here
@@ -337,7 +412,7 @@ def test_every_mapped_value_is_a_value_the_org_accepts():
         "Academic Transcript", "Resume", "Financial Document", "ID Document",
         "Admission Call Recording", "Chatbot Conversation Record", "Test Score",
         "Recommendation Letter", "Other", "10th Marksheet", "12th Marksheet",
-        "Diploma Marksheet", "Bachelor's Last-Semester Result", "IELTS Score",
+        "Diploma Marksheet", "Bachelor's Last-Semester Result", "IELTS",
         "Diploma Last-Semester Result",
     }
     for value in ident.DOCUMENT_TYPE_MAP.values():

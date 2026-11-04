@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -87,6 +88,17 @@ def documents_enabled() -> bool:
     identity documents — stay on this host until someone signs off on that.
     """
     return crm_enabled() and bool(settings.CRM_DOCUMENT_UPLOAD_ENABLED)
+
+
+def upload_mode() -> str:
+    """
+    Which upload contract to use: ``legacy`` (chunked) or ``updated``.
+
+    The updated API removed init/chunks/complete and added the offer-letter and
+    raw-document endpoints. Keep the selection here so the rest of the module
+    does not need to know which build is on the other end.
+    """
+    return (getattr(settings, "CRM_UPLOAD_MODE", "legacy") or "legacy").strip().lower()
 
 
 def _safe_segment(value: object, *, what: str, pattern: re.Pattern) -> str:
@@ -325,11 +337,14 @@ class TransferResult:
     """
 
     def __init__(self, status: str, *, document_id: str = "", step: str = "",
-                 error: CrmError | None = None) -> None:
+                 error: CrmError | None = None, response: dict | None = None) -> None:
         self.status = status          # "uploaded" | "unknown" | "failed"
         self.document_id = document_id
         self.step = step
         self.error = error
+        # The full API response, when there is one. The validation endpoint
+        # returns the marks and status here; the legacy paths leave it None.
+        self.response = response
 
 
 async def _transfer(
@@ -450,6 +465,171 @@ async def _transfer(
     return TransferResult("uploaded", document_id=document_id)
 
 
+# ── Updated API transfer paths ───────────────────────────────────────────────
+#
+# The updated API removed init/chunks/complete. These are one-call replacements;
+# they share the caller's duplicate defence and outcome model with the legacy
+# path, so only the wire shape differs.
+
+def _mime_type(file_name: str) -> str:
+    return mimetypes.guess_type(str(file_name))[0] or "application/octet-stream"
+
+
+async def _transfer_offer_letter(
+    *,
+    application: str,
+    file_name: str,
+    blob: bytes,
+    source: str,
+    label: str,
+    application_no: str,
+) -> TransferResult:
+    """Store an offer PDF through the updated non-validating endpoint.
+
+    The endpoint writes no validation history and no Course_Eligibility__c. It
+    creates a ContentVersion, so a 500 is an unknown state and is never retried.
+    """
+    client = get_client()
+    timeout = settings.CRM_UPLOAD_TIMEOUT_S
+    try:
+        done = await client.post_multipart(
+            f"/admissions/{application}/documents/offer-letter",
+            data={"source": source},
+            files={"file": (file_name, blob, "application/pdf")},
+            is_create=True,
+            timeout=timeout,
+        )
+    except CrmUnknownStateError as exc:
+        logger.error(
+            f"crm.documents: {label} — the CRM answered 500 storing the offer "
+            f"letter, so the document MAY exist on {application_no}. It is not "
+            f"being retried. {exc}"
+        )
+        return TransferResult("unknown", step="store the offer letter", error=exc)
+    except CrmError as exc:
+        return TransferResult("failed", step="store the offer letter", error=exc)
+
+    document = (done or {}).get("document") or {}
+    document_id = str(
+        document.get("document_id") or (done or {}).get("document_id") or ""
+    )
+    if not document_id:
+        logger.error(
+            f"crm.documents: offer-letter store for {label} returned no "
+            f"document_id: {done!r}"
+        )
+        return TransferResult("unknown", step="store the offer letter", response=done)
+
+    logger.info(
+        f"crm.documents: {label} uploaded to {application_no} as {document_id} "
+        f"({file_name}, {len(blob)} bytes, updated offer-letter endpoint)"
+    )
+    return TransferResult("uploaded", document_id=document_id, response=done)
+
+
+async def _transfer_raw(
+    *,
+    application: str,
+    file_name: str,
+    blob: bytes,
+    document_type: str,
+    source: str,
+    label: str,
+    application_no: str,
+) -> TransferResult:
+    """Store a non-validated student document through ``/documents/raw``."""
+    client = get_client()
+    timeout = settings.CRM_UPLOAD_TIMEOUT_S
+    try:
+        done = await client.post_multipart(
+            f"/admissions/{application}/documents/raw",
+            data={"document_type": document_type, "source": source},
+            files={"file": (file_name, blob, _mime_type(file_name))},
+            is_create=True,
+            timeout=timeout,
+        )
+    except CrmUnknownStateError as exc:
+        logger.error(
+            f"crm.documents: {label} — the CRM answered 500 on the raw store, so "
+            f"the document MAY exist on {application_no}. It is not being "
+            f"retried. {exc}"
+        )
+        return TransferResult("unknown", step="store the document", error=exc)
+    except CrmError as exc:
+        return TransferResult("failed", step="store the document", error=exc)
+
+    document = (done or {}).get("document") or {}
+    document_id = str(
+        document.get("document_id") or (done or {}).get("document_id") or ""
+    )
+    if not document_id:
+        logger.error(
+            f"crm.documents: raw store for {label} returned no document_id: {done!r}"
+        )
+        return TransferResult("unknown", step="store the document", response=done)
+
+    logger.info(
+        f"crm.documents: {label} uploaded to {application_no} as {document_id} "
+        f"({file_name}, {len(blob)} bytes, updated raw endpoint)"
+    )
+    return TransferResult("uploaded", document_id=document_id, response=done)
+
+
+async def _transfer_and_verify(
+    *,
+    application: str,
+    file_name: str,
+    blob: bytes,
+    document_type: str,
+    source: str,
+    label: str,
+    application_no: str,
+) -> TransferResult:
+    """Upload a document through ``/documents/upload-and-verify``.
+
+    Phase 3 wires this into the student-document path; Phase 2 only defines it so
+    the client contract is complete. The response carries the extracted marks and
+    validation status; ``TransferResult.response`` preserves it for the caller.
+    """
+    client = get_client()
+    timeout = settings.CRM_UPLOAD_TIMEOUT_S
+    try:
+        done = await client.post_multipart(
+            f"/admissions/{application}/documents/upload-and-verify",
+            data={"document_type": document_type, "source": source},
+            files={"file": (file_name, blob, _mime_type(file_name))},
+            is_create=True,
+            timeout=timeout,
+        )
+    except CrmUnknownStateError as exc:
+        logger.error(
+            f"crm.documents: {label} — the CRM answered 500 during validation "
+            f"upload, so the document MAY exist on {application_no}. It is not "
+            f"being retried. {exc}"
+        )
+        return TransferResult("unknown", step="validate the document", error=exc)
+    except CrmError as exc:
+        return TransferResult("failed", step="validate the document", error=exc)
+
+    document = (done or {}).get("document") or {}
+    document_id = str(
+        (done or {}).get("document_id") or document.get("document_id") or ""
+    )
+    if not document_id:
+        logger.error(
+            f"crm.documents: validation upload for {label} returned no "
+            f"document_id: {done!r}"
+        )
+        return TransferResult("unknown", step="validate the document", response=done)
+
+    logger.info(
+        f"crm.documents: {label} uploaded to {application_no} as {document_id} "
+        f"({file_name}, {len(blob)} bytes, validation endpoint "
+        f"status={(done or {}).get('validation_status')!r})"
+    )
+    return TransferResult("uploaded", document_id=document_id, response=done)
+
+
 async def _upload(
     *,
     lead_id: str,
@@ -514,15 +694,25 @@ async def _upload(
             )
         return document_id
 
-    result = await _transfer(
-        application=application,
-        file_name=file_name,
-        blob=blob,
-        document_type=settings.CRM_OFFER_DOCUMENT_TYPE,
-        source=settings.CRM_OFFER_DOCUMENT_SOURCE,
-        label=f"offer {offer_id}",
-        application_no=application_no,
-    )
+    if upload_mode() == "updated":
+        result = await _transfer_offer_letter(
+            application=application,
+            file_name=file_name,
+            blob=blob,
+            source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+            label=f"offer {offer_id}",
+            application_no=application_no,
+        )
+    else:
+        result = await _transfer(
+            application=application,
+            file_name=file_name,
+            blob=blob,
+            document_type=settings.CRM_OFFER_DOCUMENT_TYPE,
+            source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+            label=f"offer {offer_id}",
+            application_no=application_no,
+        )
 
     if result.status == STATUS_UPLOADED:
         await set_offer_crm_upload(
@@ -666,15 +856,30 @@ async def upload_student_document(
             )
         return existing_id
 
-    result = await _transfer(
-        application=application,
-        file_name=file_name,
-        blob=blob,
-        document_type=identity_mod.map_document_type(doc_type),
-        source=settings.CRM_OFFER_DOCUMENT_SOURCE,
-        label=f"document {doc_id}",
-        application_no=application_no,
-    )
+    salesforce_document_type = identity_mod.map_document_type(doc_type)
+
+    if upload_mode() == "updated":
+        # Phase 2 lane: no OCR/validation for student documents yet. Phase 3
+        # switches canonical types to _transfer_and_verify.
+        result = await _transfer_raw(
+            application=application,
+            file_name=file_name,
+            blob=blob,
+            document_type=salesforce_document_type,
+            source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+            label=f"document {doc_id}",
+            application_no=application_no,
+        )
+    else:
+        result = await _transfer(
+            application=application,
+            file_name=file_name,
+            blob=blob,
+            document_type=salesforce_document_type,
+            source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+            label=f"document {doc_id}",
+            application_no=application_no,
+        )
 
     if result.status == STATUS_UPLOADED:
         await set_document_crm_upload(
