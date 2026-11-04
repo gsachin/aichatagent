@@ -68,7 +68,11 @@ CRM_LEAD_CATEGORY_VOCAB = frozenset({"HOT", "WARM", "NURTURE", "AT RISK", "DISQU
 DOCUMENT_TYPE_MAP: dict[str, str] = {
     "transcript": "Academic Transcript",
     "academic_transcript": "Academic Transcript",
-    "marksheet": "10th Marksheet",
+    # 12th and 10th are distinct values in the org. "marksheet" is the Class-12
+    # validation lane, so filing it as 10th would contradict the validator.
+    "marksheet": "12th Marksheet",
+    "marksheet_12": "12th Marksheet",
+    "marksheet_10": "10th Marksheet",
     "id_proof": "ID Document",
     "id": "ID Document",
     "passport": "ID Document",
@@ -77,10 +81,34 @@ DOCUMENT_TYPE_MAP: dict[str, str] = {
     "financial": "Financial Document",
     "recommendation": "Recommendation Letter",
     "test_score": "Test Score",
+    "sat": "Test Score",
+    "gre": "Test Score",
+    "gmat": "Test Score",
+    "toefl": "Test Score",
     # The org's value is "IELTS", not "IELTS Score" (verified against the
     # restricted picklist on 2026-11-04; the longer spelling was a 500).
     "ielts": "IELTS",
     "other": "Other",
+}
+
+# Human labels for the Streamlit upload widgets. The value is this app's
+# doc_type; the CRM layer maps it to the org's Document_Type__c vocabulary.
+# The exam types are distinct here because the validator needs the exact exam;
+# in Salesforce they all file under "Test Score".
+UPLOAD_DOCUMENT_TYPES: dict[str, str] = {
+    "12th Marksheet": "marksheet",
+    "10th Marksheet": "marksheet_10",
+    "Undergraduate Transcript": "transcript",
+    "ID Document / Passport": "id_proof",
+    "SAT Score Report": "sat",
+    "GRE Score Report": "gre",
+    "GMAT Score Report": "gmat",
+    "TOEFL Score Report": "toefl",
+    "IELTS Score Report": "ielts",
+    "Resume": "resume",
+    "Financial Document": "financial",
+    "Recommendation Letter": "recommendation",
+    "Other": "other",
 }
 
 # Canonical types accepted by the API's validation endpoint. Only documents the
@@ -89,6 +117,9 @@ VALIDATION_DOCUMENT_TYPE_MAP: dict[str, str] = {
     "transcript": "UNDERGRADUATE_TRANSCRIPT",
     "academic_transcript": "UNDERGRADUATE_TRANSCRIPT",
     "marksheet": "CLASS_12_MARKSHEET",
+    "marksheet_12": "CLASS_12_MARKSHEET",
+    # marksheet_10 is deliberately absent: the validator has no Class 10 type,
+    # so it goes through the raw lane and is filed as "10th Marksheet".
     "id_proof": "ID_PROOF",
     "id": "ID_PROOF",
     "passport": "ID_PROOF",

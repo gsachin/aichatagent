@@ -905,6 +905,9 @@ Done:
       token is byte-identical to `.env`, so this is the account, not the credentials. Reactivate it
       or supply an active SID/token, ensure the test phone has joined the sandbox, and run the
       tunnel/webhook. Email is deferred per the 2026-11-04 instruction.
+- [ ] WhatsApp document-type selection. The handler currently infers PDF → transcript and
+      image → id_proof, so GMAT/TOEFL/marksheet files are misclassified. Add a menu using the
+      Streamlit `UPLOAD_DOCUMENT_TYPES` list before the live test.
 - [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
 - [ ] Monitor `crm_upload_status` and the decision log.
 
@@ -1170,15 +1173,28 @@ CRM_UPLOAD_TIMEOUT_S=120
 | UD `doc_type` | API canonical type | Salesforce `Document_Type__c` | Lane |
 |---|---|---|---|
 | `transcript` / `academic_transcript` | `UNDERGRADUATE_TRANSCRIPT` | `Academic Transcript` | validate |
-| `marksheet` | `CLASS_12_MARKSHEET` (confirm — UD currently files this as `10th Marksheet`, and the new API models no Class-10 type) | `12th Marksheet` | validate after confirmation |
+| `marksheet` / `marksheet_12` | `CLASS_12_MARKSHEET` | `12th Marksheet` | validate |
+| `marksheet_10` | — | `10th Marksheet` | raw (no Class-10 validator type) |
 | `id_proof` / `id` / `passport` | `ID_PROOF` | `ID Document` | validate |
+| `sat` / `gre` / `gmat` / `toefl` | `SAT` / `GRE` / `GMAT` / `TOEFL` | `Test Score` | validate |
 | `ielts` | `IELTS` | `IELTS` | validate |
-| `test_score` | needs student confirmation (SAT/GRE/GMAT/TOEFL) | `Test Score` | validate after choice |
-| `resume` / `cv` | — | `Other` (raw lane) | raw |
-| `financial` | — | `Other` (raw lane) | raw |
-| `recommendation` | — | `Other` (raw lane) | raw |
-| `other` | — | `Other` (raw lane) | raw |
+| `test_score` | — (needs a specific exam) | `Test Score` | raw / ask the student |
+| `resume` / `cv` | — | `Resume` | raw |
+| `financial` | — | `Financial Document` | raw |
+| `recommendation` | — | `Recommendation Letter` | raw |
+| `other` | — | `Other` | raw |
 | offer letter (generated) | — | `Other` (the org's restricted `Document_Type__c` has no `Offer Letter`) | offer-letter endpoint |
+
+The Streamlit dropdown labels live in `UPLOAD_DOCUMENT_TYPES` (`app/crm/identity.py`): 12th
+Marksheet, 10th Marksheet, Undergraduate Transcript, ID Document / Passport, SAT/GRE/GMAT/TOEFL/
+IELTS score reports, Resume, Financial Document, Recommendation Letter, Other. The exam labels are
+distinct so the validator knows which score to extract; Salesforce files them all as `Test Score`.
+
+**WhatsApp gap:** the WhatsApp document handler still infers the type from MIME
+(`app/main.py:2677-2681`: PDF → `transcript`, image → `id_proof`). A GMAT/TOEFL/marksheet PDF would
+therefore be validated as a transcript. Before the live WhatsApp offer test, the handler needs a
+student-facing document-type menu (the same `UPLOAD_DOCUMENT_TYPES` list), otherwise the marks gate
+can block or misclassify the wrong document.
 
 ## Appendix C — File change map
 

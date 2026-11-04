@@ -155,8 +155,14 @@ def test_unclassified_program_blocks_unknown():
 def test_validation_type_mapping():
     assert ident.validation_document_type("transcript") == "UNDERGRADUATE_TRANSCRIPT"
     assert ident.validation_document_type("marksheet") == "CLASS_12_MARKSHEET"
+    assert ident.validation_document_type("marksheet_12") == "CLASS_12_MARKSHEET"
+    assert ident.validation_document_type("marksheet_10") is None
     assert ident.validation_document_type("id_proof") == "ID_PROOF"
     assert ident.validation_document_type("ielts") == "IELTS"
+    assert ident.validation_document_type("sat") == "SAT"
+    assert ident.validation_document_type("gre") == "GRE"
+    assert ident.validation_document_type("gmat") == "GMAT"
+    assert ident.validation_document_type("toefl") == "TOEFL"
     assert ident.validation_document_type("test_score") is None
     assert ident.validation_document_type("resume") is None
 

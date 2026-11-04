@@ -23,6 +23,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+from app.crm.identity import UPLOAD_DOCUMENT_TYPES
 from app.streamlit_backend import backend_healthy, sync_lead, sync_program
 from app.languages import configured_foreign_languages, normalize_language_code
 from app.localized_text import eligibility_text, greeting_text, streamlit_ui
@@ -379,7 +380,10 @@ with st.sidebar:
         key="sidebar_doc_upload",
         label_visibility="collapsed",
     )
-    doc_type = st.selectbox("Document Type", ["transcript", "id_proof", "marksheet", "other"], key="sidebar_doc_type")
+    doc_label = st.selectbox(
+        "Document Type", list(UPLOAD_DOCUMENT_TYPES), key="sidebar_doc_type"
+    )
+    doc_type = UPLOAD_DOCUMENT_TYPES[doc_label]
     if uploaded_file and st.button("📤 Upload Document", key="sidebar_upload_btn"):
         lead_id = st.session_state.get("lead_id", "")
         if not lead_id:
@@ -1128,7 +1132,10 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
             label_visibility="collapsed",
         )
     with col2:
-        chat_doc_type = st.selectbox("Type", ["transcript", "id_proof", "marksheet", "other"], key="chat_doc_type2")
+        chat_doc_label = st.selectbox(
+            "Type", list(UPLOAD_DOCUMENT_TYPES), key="chat_doc_type2"
+        )
+        chat_doc_type = UPLOAD_DOCUMENT_TYPES[chat_doc_label]
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         upload_clicked = st.button("📤 Upload", key="chat_upload_btn2", use_container_width=True, type="primary")

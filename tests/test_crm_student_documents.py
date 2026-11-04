@@ -518,6 +518,33 @@ def test_ielts_maps_to_the_org_value():
     assert ident.map_document_type("ielts") == "IELTS"
 
 
+def test_transcript_and_marksheet_are_distinct():
+    """12th, 10th and the undergraduate transcript are separate org values."""
+    assert ident.map_document_type("marksheet") == "12th Marksheet"
+    assert ident.map_document_type("marksheet_10") == "10th Marksheet"
+    assert ident.map_document_type("transcript") == "Academic Transcript"
+
+
+def test_exam_types_file_under_test_score():
+    for value in ("sat", "gre", "gmat", "toefl"):
+        assert ident.map_document_type(value) == "Test Score"
+
+
+def test_upload_labels_map_to_known_doc_types():
+    for label, value in ident.UPLOAD_DOCUMENT_TYPES.items():
+        assert (
+            value in ident.DOCUMENT_TYPE_MAP
+            or value in ident.VALIDATION_DOCUMENT_TYPE_MAP
+        ), label
+
+    # The labels the student sees must expose the exam choices and keep the
+    # transcript/marksheet distinction.
+    assert ident.UPLOAD_DOCUMENT_TYPES["GMAT Score Report"] == "gmat"
+    assert ident.UPLOAD_DOCUMENT_TYPES["TOEFL Score Report"] == "toefl"
+    assert ident.UPLOAD_DOCUMENT_TYPES["12th Marksheet"] == "marksheet"
+    assert ident.UPLOAD_DOCUMENT_TYPES["Undergraduate Transcript"] == "transcript"
+
+
 def test_every_mapped_value_is_a_value_the_org_accepts():
     """
     The picklist is restricted — the API validates nothing, so a typo here
