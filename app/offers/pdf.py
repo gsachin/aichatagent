@@ -47,6 +47,7 @@ def build_offer_pdf(
     course: dict | None,
     offer: dict,
     out_dir: Path,
+    evidence: dict | None = None,
 ) -> Path:
     """
     Generate a branded offer-letter PDF.
@@ -145,6 +146,41 @@ def build_offer_pdf(
         pdf.cell(col_w, 7, label, border=0)
         pdf.set_font("Helvetica", "", 10)
         pdf.cell(0, 7, value, border=0, new_x="LMARGIN", new_y="NEXT")
+
+    # ── Basis of offer ───────────────────────────────────────────────
+    if evidence:
+        pdf.ln(8)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_fill_color(240, 240, 245)
+        pdf.cell(0, 7, "Basis of Offer", fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "", 9.5)
+
+        gate = str(evidence.get("gate_document") or "")
+        if gate == "CLASS_12_MARKSHEET":
+            label, suffix = "Class 12 percentage", "%"
+        elif gate == "UNDERGRADUATE_TRANSCRIPT":
+            label, suffix = "Undergraduate GPA", ""
+        else:
+            label, suffix = "Validated academic record", ""
+
+        mark = str(evidence.get("score") or "")
+        threshold = str(evidence.get("threshold") or "")
+        line = label
+        if mark:
+            line += f": {mark}{suffix}"
+        if threshold:
+            line += f" (requirement: {threshold}{suffix})"
+        pdf.cell(0, 6, line, new_x="LMARGIN", new_y="NEXT")
+
+        if evidence.get("uploaded_at"):
+            pdf.set_text_color(100, 100, 100)
+            pdf.cell(
+                0, 5,
+                f"Validated: {evidence['uploaded_at']}",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+            pdf.set_text_color(*BODY_FG)
 
     # ── Payment ──────────────────────────────────────────────────────
     payment_link = (course or {}).get("payment_link", "") or settings.DEFAULT_PAYMENT_LINK

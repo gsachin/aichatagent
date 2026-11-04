@@ -58,6 +58,13 @@ class TestEvaluateOfferReadiness:
             **overrides,
         }
 
+    @pytest.fixture(autouse=True)
+    def _empty_validation_rows(self, monkeypatch):
+        async def fake_rows(_):
+            return []
+
+        monkeypatch.setattr("app.offers.models.list_validation_results", fake_rows)
+
     @pytest.mark.asyncio
     async def test_lead_not_found(self, monkeypatch):
         from app.offers.service import evaluate_offer_readiness
@@ -137,6 +144,62 @@ class TestEvaluateOfferReadiness:
         assert "email" in result["missing"]
         assert "phone_number" in result["missing"]
         assert "program_interest" not in result["missing"]
+
+    @pytest.mark.asyncio
+    async def test_enforced_mode_requires_a_passing_gate(
+        self, monkeypatch, override_settings
+    ):
+        from app.offers.service import evaluate_offer_readiness
+
+        override_settings(OFFER_ELIGIBILITY_SHADOW=False)
+
+        async def fake_get_lead(_):
+            return self._make_lead(program_interest="B.Tech Computer Science")
+
+        async def fake_list_docs(_):
+            return [{"id": "d1"}]
+
+        async def fake_rows(_):
+            return [{
+                "api_document_type": "CLASS_12_MARKSHEET",
+                "validation_status": "PASSED",
+                "requirement_status": "SATISFIED",
+                "is_active": True,
+                "extracted_score": "75",
+                "score_threshold": "70",
+                "reason_codes": "",
+                "uploaded_at": "",
+            }]
+
+        monkeypatch.setattr("app.leads.models.get_lead", fake_get_lead)
+        monkeypatch.setattr("app.offers.models.list_documents", fake_list_docs)
+        monkeypatch.setattr("app.offers.models.list_validation_results", fake_rows)
+
+        result = await evaluate_offer_readiness("test-id")
+        assert result["ready"] is True
+        assert result["decision"].action == "issue"
+
+    @pytest.mark.asyncio
+    async def test_enforced_mode_blocks_without_a_passing_gate(
+        self, monkeypatch, override_settings
+    ):
+        from app.offers.service import evaluate_offer_readiness
+
+        override_settings(OFFER_ELIGIBILITY_SHADOW=False)
+
+        async def fake_get_lead(_):
+            return self._make_lead(program_interest="B.Tech Computer Science")
+
+        async def fake_list_docs(_):
+            return [{"id": "d1"}]
+
+        monkeypatch.setattr("app.leads.models.get_lead", fake_get_lead)
+        monkeypatch.setattr("app.offers.models.list_documents", fake_list_docs)
+        # the autouse fixture returns no validation rows
+
+        result = await evaluate_offer_readiness("test-id")
+        assert result["ready"] is False
+        assert result["decision"].action == "block_missing"
 
 
 # ==========================================================================

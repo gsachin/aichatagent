@@ -596,6 +596,46 @@ async def set_offer_crm_upload(
         return False
 
 
+async def set_offer_eligibility(
+    offer_id: str,
+    *,
+    action: str = "",
+    evidence_json: str = "",
+    gate_document_id: str = "",
+    gate_score: str = "",
+    gate_threshold: str = "",
+) -> bool:
+    """Record the marks decision that justified (or blocked) this offer."""
+    if not offer_id:
+        return False
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return False
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE offer_letters SET eligibility_action = %s, "
+                "eligibility_evidence = %s, gate_document_id = %s, "
+                "gate_score = %s, gate_threshold = %s, updated_at = %s "
+                "WHERE id = %s",
+                (
+                    action or None,
+                    evidence_json or None,
+                    gate_document_id or None,
+                    gate_score or None,
+                    gate_threshold or None,
+                    _now_iso(),
+                    offer_id,
+                ),
+            )
+        conn.close()
+        return True
+    except Exception:
+        logger.exception("Failed to record eligibility evidence for offer")
+        return False
+
+
 async def get_document_crm_upload(doc_id: str) -> dict:
     """
     The CRM upload state for one student document.
@@ -938,8 +978,13 @@ async def update_offer_letter_status(
         return None
 
 
-async def get_recent_offer_for_lead(lead_id: str, within_hours: int = 24) -> dict | None:
-    """Check if an offer was recently sent to this lead (idempotency guard)."""
+async def get_recent_offer_for_lead(lead_id: str, within_hours: float = 24) -> dict | None:
+    """Check if an offer was recently sent to this lead (idempotency guard).
+
+    The interval is parameterized: the previous f-string truncated fractional
+    hours with ``int()``, so the configured 1-minute guard became a zero-length
+    window and a double "done" created a second offer.
+    """
     try:
         conn = _get_db()
         if not conn:
@@ -950,9 +995,10 @@ async def get_recent_offer_for_lead(lead_id: str, within_hours: int = 24) -> dic
                 "offer_date, valid_until, terms, sent_via, whatsapp_sid, "
                 "email_id, sent_at, response_at, created_at, updated_at "
                 "FROM offer_letters "
-                f"WHERE lead_id = %s AND sent_at > NOW() - INTERVAL '{int(within_hours)} hours' "
+                "WHERE lead_id = %s "
+                "AND sent_at > NOW() - (%s * INTERVAL '1 hour') "
                 "ORDER BY sent_at DESC LIMIT 1",
-                (lead_id,),
+                (lead_id, float(within_hours)),
             )
             row = cur.fetchone()
         conn.close()

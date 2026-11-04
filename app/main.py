@@ -2923,8 +2923,10 @@ async def _whatsapp_offer_on_done(
     documents are uploaded ("done").
 
     Checks readiness, requires at least one uploaded document, then calls
-    generate_and_send_offer — which is itself idempotent (24h guard), so
-    a repeated "done" does not re-send a second offer letter.
+    generate_and_send_offer — which is itself idempotent (the configured guard
+    window), so a repeated "done" does not re-send a second offer letter.
+    When the marks gate is enforced, a blocked decision is returned to the
+    student instead of an offer.
     """
     from app.offers.models import list_documents
     from app.offers.service import (
@@ -2941,6 +2943,14 @@ async def _whatsapp_offer_on_done(
                 "{fields}.",
                 fields=whatsapp_offer_fields(readiness["missing"], language),
             )
+
+        decision = readiness.get("decision")
+        if (
+            not settings.OFFER_ELIGIBILITY_SHADOW
+            and decision is not None
+            and decision.action != "issue"
+        ):
+            return decision.message
 
         docs = await list_documents(lead_id)
         if not docs:
@@ -5165,7 +5175,9 @@ async def api_upload_document(
     return {
         "document": doc,
         "offer_letter": offer_result,
-        "offer_readiness": readiness,   # additive — old clients ignore unknown keys
+        # additive — old clients ignore unknown keys; the decision carries the
+        # student-facing message when enforcement blocks the offer
+        "offer_readiness": _readiness_payload(readiness),
     }
 
 
@@ -5210,6 +5222,17 @@ async def api_delete_document(document_id: str):
 
 # ── REST API: Offer readiness check ──────────────────────────────────
 
+def _readiness_payload(readiness: dict) -> dict:
+    """Make the dataclass decision JSON-friendly without leaking objects."""
+    from dataclasses import asdict
+
+    decision = readiness.get("decision")
+    return {
+        **readiness,
+        "decision": asdict(decision) if decision is not None else None,
+    }
+
+
 @app.get("/api/leads/{lead_id}/offer-readiness")
 async def api_offer_readiness(lead_id: str):
     """Return what prerequisites are missing before an offer can be generated."""
@@ -5217,7 +5240,7 @@ async def api_offer_readiness(lead_id: str):
     readiness = await evaluate_offer_readiness(lead_id)
     if readiness["lead"] is None:
         return JSONResponse({"error": "Lead not found"}, status_code=404)
-    return readiness
+    return _readiness_payload(readiness)
 
 
 # ── REST API: Offer letters ──────────────────────────────────────────

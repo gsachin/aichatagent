@@ -206,6 +206,20 @@ async def push_offer_released(
     )
 
 
+async def push_offer_decision(crm_user_id: str, action: str) -> bool:
+    """Record why an offer was not issued, without claiming one was.
+
+    A missing or wrong document keeps the application at ``Documents Pending``;
+    every other block is ``Under Review`` for a human. The final rejection is
+    deliberately not automatic.
+    """
+    if action in ("block_missing", "block_wrong_document"):
+        status = "Documents Pending"
+    else:
+        status = "Under Review"
+    return await push_profile(crm_user_id, Admission_Status__c=status)
+
+
 async def push_offer_response(crm_user_id: str, response: object) -> bool:
     """
     Publish the student's answer: accepted or declined.

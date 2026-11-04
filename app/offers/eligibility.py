@@ -69,17 +69,33 @@ def _reason_codes(row: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _active_gate_row(
+def _gate_evidence(
     validation_results: Sequence[Mapping[str, Any]] | None,
     gate_type: str,
-) -> Mapping[str, Any] | None:
-    """The latest active row for the gate document type, if any."""
+) -> tuple[Mapping[str, Any] | None, bool]:
+    """The gate document's evidence and whether it is active.
+
+    An active row is the current evidence. If there is none, a *failure* or
+    *review-required* row is still useful: the API marks a wrong-level or
+    unreadable upload inactive, and the student should be told to upload the
+    right document rather than that nothing arrived. An inactive PASSED row is
+    never used to issue — only to ask for a current document.
+    """
     candidates = [
         row
         for row in (validation_results or [])
-        if row.get("is_active") is True and _canonical_type(row) == gate_type
+        if _canonical_type(row) == gate_type
     ]
-    return candidates[-1] if candidates else None
+    active = [row for row in candidates if row.get("is_active") is True]
+    if active:
+        return active[-1], True
+
+    if candidates:
+        latest = candidates[-1]
+        status = str(latest.get("validation_status") or "").strip().upper()
+        if status in ("FAILED", "REVIEW_REQUIRED"):
+            return latest, False
+    return None, False
 
 
 def _mark(row: Mapping[str, Any]) -> str:
@@ -129,7 +145,7 @@ def assess_offer_eligibility(
 
     gate_type = GATE_DOCUMENTS[level]
     gate_label = GATE_LABELS[gate_type]
-    row = _active_gate_row(validation_results, gate_type)
+    row, active = _gate_evidence(validation_results, gate_type)
     if row is None:
         return OfferDecision(
             action="block_missing",
@@ -139,6 +155,19 @@ def assess_offer_eligibility(
         )
 
     status = str(row.get("validation_status") or "").strip().upper()
+    if not active and status == "PASSED":
+        # A superseded pass is not current evidence; ask for a fresh document.
+        return OfferDecision(
+            action="block_missing",
+            reason="gate-document-not-current",
+            message=f"Please upload a current copy of your {gate_label}.",
+            evidence={
+                "program_level": level,
+                "gate_document": gate_type,
+                "is_active": False,
+            },
+        )
+
     requirement = str(row.get("requirement_status") or "").strip().upper()
     codes = _reason_codes(row)
     mark = _mark(row)
@@ -153,6 +182,8 @@ def assess_offer_eligibility(
         "validation_status": status,
         "requirement_status": requirement,
         "reason_codes": codes,
+        "is_active": active,
+        "uploaded_at": str(row.get("uploaded_at") or ""),
     }
 
     if status == "PASSED":

@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–3 implemented; Gate 3 green for correctness (API live + live UD shadow).
-Operator view and latency measurement are still pending. Phase 4 (enforcement) not started.
+**Status:** Phases 1–4 implemented; Gate 4 live enforcement is green. Phase 5 (cutover) not
+started. Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view, latency.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -843,39 +843,34 @@ mappings, and program-detection failures before a student is denied an offer.
 
 ### Phase 4 — Enforce the marks gate, and put the evidence in the offer
 
-`UD`:
-- [ ] Add `OFFER_ELIGIBILITY_MODE=academic` (default) / `strict`; add
-      `OFFER_ELIGIBILITY_SHADOW=false` at enforcement.
-- [ ] `evaluate_offer_readiness` returns `decision`; the gate document is derived from the lead's
-      program (Class 12 for Bachelor; UG transcript for Master/MBA). Keep name/email/phone/
-      program checks; replace “at least one document” with “gate document present and decided”.
-- [ ] `generate_and_send_offer` refuses unless `decision.action == "issue"` and returns the
-      decision to every caller. `force=True` bypasses only the idempotency guard; add a separate,
-      logged `override_eligibility` for staff.
-- [ ] Web upload (`app/main.py:5152-5163`): issue only on `issue`; otherwise return
-      `{decision, message}` and show it in the chat.
-- [ ] WhatsApp “done” and document replies: issue only on `issue`; send `decision.message`
-      otherwise. Do not create an `offer_letters` row for a blocked decision.
-- [ ] Fix the idempotency guard (`app/offers/models.py:800-835`) before enforcing, so a double
-      “done” cannot create two offers under the new gate.
-- [ ] Store the decision on the offer row and render “Basis of Offer” in `app/offers/pdf.py`
-      (§3.6). The PDF must show the extracted mark, the program requirement, and the validation
-      date — never ID/passport data.
-- [ ] Map the decision to `Admission_Status__c` per §3.8; never send `Offer_Status__c=Offered` for
-      a blocked decision. Do not auto-send `Rejected` for below threshold without sign-off.
-- [ ] Deduplicate identical re-uploads by `sha256`; keep the existing offer-document duplicate
-      defence unchanged.
+`UD` — done:
+- [x] `OFFER_ELIGIBILITY_MODE` (default `academic`) and `OFFER_ELIGIBILITY_SHADOW` settings.
+- [x] `evaluate_offer_readiness` returns the decision; enforced mode requires
+      `decision.action == "issue"`.
+- [x] `generate_and_send_offer` refuses a blocked decision and publishes the CRM status;
+      `override_eligibility` is the staff-only bypass (`force` bypasses only the idempotency guard).
+- [x] The web upload response carries the decision; WhatsApp “done” returns `decision.message`.
+- [x] The idempotency guard is parameterized — 1/60 hour stays one minute instead of truncating to
+      zero.
+- [x] The offer row stores `eligibility_action` / `eligibility_evidence` / gate fields, and the PDF
+      renders “Basis of Offer” with the mark, requirement and validation date.
+- [x] Blocked decisions map to `Admission_Status__c`: `Documents Pending` for missing/wrong
+      document, `Under Review` otherwise. `Offer_Status__c` is untouched.
+- [x] Inactive wrong/review evidence is used to name the block; an inactive pass never issues.
+- [ ] `sha256` dedupe: the column and lookup helper exist; the upload entry points are not wired.
+- [ ] `strict` mode is not implemented; the config accepts it but the decision module is academic.
+- [ ] Operator view pending.
 
-**Gate 4 (enforced):**
-- `PASSED` gate document → exactly one offer row, one PDF, one CRM upload, `Offer_Status__c=Offered`,
-  `Offer_Letter_Released__c=True`, and the PDF shows the mark/threshold.
-- `BELOW_THRESHOLD` → zero offer rows, zero PDFs, `Offer_Status__c` untouched, student receives the
-  mark-vs-requirement message.
-- `REVIEW_REQUIRED`, `WRONG_DOCUMENT`, `MISSING`, `UNKNOWN` → zero offers and the matching message.
-- Re-upload a better score after a below-threshold attempt → the next trigger issues an offer.
-- Re-upload a worse scan after a pass → the previous pass stays active; no regression.
-- Double “done” / duplicate webhook → one offer (idempotency).
-- Full regression suite green; the existing four live gates still pass.
+**Gate 4 — live enforcement green (2026-11-04):**
+- Wrong-level upload (Class 10 as Class 12) → `block_wrong_document`; readiness `false`;
+  `generate_and_send_offer` returned `None` and recorded the CRM action. No offer row.
+- Passing 70.83% → `issue`; readiness `true`; evidence 70.83 / 70.0.
+- No offer was sent during the check.
+- **Unit:** 292 CRM/offer tests pass; the PDF test asserts the Basis of Offer lines.
+- **Residue:** ContentVersions `068T100000njnQCIAY` and `068T100000nk7AOIAY` on `APP-D817B4ECCD`.
+- The live `.env` remains `shadow` / `legacy` until Phase 5.
+- Still to verify in Phase 5: a real WhatsApp/web offer under the enforced gate, the re-upload
+  paths, and duplicate “done”.
 
 ### Phase 5 — Cutover and hardening
 

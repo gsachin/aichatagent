@@ -8,6 +8,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
@@ -74,16 +75,29 @@ async def evaluate_offer_readiness(lead_id: str) -> dict:
             "missing": [str],     # list of missing prerequisite keys
             "lead": dict | None,  # the lead row (for reuse by callers)
             "documents": int,     # number of documents already uploaded
+            "decision": OfferDecision | None,  # marks-based decision
         }
+
+    In shadow mode ``ready`` keeps the historical "fields plus any document"
+    rule. When enforcement is on, ``ready`` additionally requires
+    ``decision.action == "issue"``.
 
     Never raises — degrades gracefully on DB errors.
     """
+    from app.config import settings
     from app.leads.models import get_lead
-    from app.offers.models import list_documents
+    from app.offers.eligibility import assess_offer_eligibility
+    from app.offers.models import list_documents, list_validation_results
 
     lead = await get_lead(lead_id)
     if not lead:
-        return {"ready": False, "missing": ["lead"], "lead": None, "documents": 0}
+        return {
+            "ready": False,
+            "missing": ["lead"],
+            "lead": None,
+            "documents": 0,
+            "decision": None,
+        }
 
     missing = [
         f for f in REQUIRED_OFFER_FIELDS
@@ -94,11 +108,22 @@ async def evaluate_offer_readiness(lead_id: str) -> dict:
     if not docs:
         missing.append("document")
 
+    rows = await list_validation_results(lead_id)
+    decision = assess_offer_eligibility(
+        lead, lead.get("program_interest", ""), rows
+    )
+
+    if settings.OFFER_ELIGIBILITY_SHADOW:
+        ready = len(missing) == 0
+    else:
+        ready = len(missing) == 0 and decision.action == "issue"
+
     return {
-        "ready": len(missing) == 0,
+        "ready": ready,
         "missing": missing,
         "lead": lead,
         "documents": len(docs),
+        "decision": decision,
     }
 
 
@@ -111,12 +136,15 @@ async def generate_and_send_offer(
     *,
     channel: str = "whatsapp",
     conversation_id: str = "",
+    override_eligibility: bool = False,
 ) -> dict | None:
     """
     Generate a PDF offer letter, send via WhatsApp + email, and return the offer dict.
 
-    Idempotency: skips if an offer was already sent to this lead within 24h,
-    unless ``force=True``.
+    Idempotency: skips if an offer was already sent to this lead within the
+    configured guard window, unless ``force=True``. When the marks gate is
+    enforced, a non-``issue`` decision blocks the offer unless
+    ``override_eligibility`` is set by staff.
 
     ``channel`` is the channel the *request* came from, recorded on the logged
     conversation. It used to be hardcoded to "whatsapp", so an offer generated
@@ -147,11 +175,32 @@ async def generate_and_send_offer(
 
     # ── Pre-offer readiness validation ────────────────────────────────
     readiness = await evaluate_offer_readiness(lead_id)
-    if not readiness["ready"]:
+    decision = readiness.get("decision")
+    blocked = (
+        not settings.OFFER_ELIGIBILITY_SHADOW
+        and decision is not None
+        and decision.action != "issue"
+    )
+
+    if readiness["missing"]:
         logger.warning(
             f"Lead {lead_id}: offer skipped — missing: {readiness['missing']}"
         )
         return None
+
+    if blocked and not override_eligibility:
+        logger.warning(
+            f"Lead {lead_id}: offer blocked — {decision.action} "
+            f"({decision.reason})"
+        )
+        await _publish_blocked_decision(lead_id, decision)
+        return None
+
+    if blocked and override_eligibility:
+        logger.warning(
+            f"Lead {lead_id}: eligibility override — was {decision.action} "
+            f"({decision.reason})"
+        )
 
     lead_name = lead.get("name") or "Prospective Student"
     program_interest = lead.get("program_interest", "")
@@ -198,10 +247,34 @@ async def generate_and_send_offer(
         logger.error(f"Lead {lead_id}: failed to create offer_letter row")
         return None
 
+    # Keep the evidence that justified the offer on the offer row.
+    if decision is not None:
+        try:
+            from app.offers.models import set_offer_eligibility
+
+            await set_offer_eligibility(
+                offer["id"],
+                action=decision.action,
+                evidence_json=json.dumps(decision.evidence, default=str),
+                gate_document_id=str(decision.evidence.get("document_id") or ""),
+                gate_score=str(decision.evidence.get("score") or ""),
+                gate_threshold=str(decision.evidence.get("threshold") or ""),
+            )
+        except Exception:
+            logger.exception(
+                f"Lead {lead_id}: could not store eligibility evidence"
+            )
+
     # Build PDF
     try:
         out_dir = data_dir / "offers"
-        pdf_path = build_offer_pdf(lead, course, offer, out_dir)
+        pdf_path = build_offer_pdf(
+            lead,
+            course,
+            offer,
+            out_dir,
+            evidence=decision.evidence if decision is not None else None,
+        )
 
         # Update the row with the actual pdf_path
         from app.offers.models import update_offer_letter_status
@@ -412,4 +485,19 @@ async def record_validation_and_shadow(
     except Exception:
         logger.exception(
             f"offer shadow: could not record validation evidence for doc {doc_id}"
+        )
+
+
+async def _publish_blocked_decision(lead_id: str, decision) -> None:
+    """Tell the CRM why no offer was issued. Never raises."""
+    try:
+        from app.crm.status import push_offer_decision
+        from app.leads.models import get_lead_crm_user_id
+
+        crm_user_id = await get_lead_crm_user_id(lead_id)
+        if crm_user_id:
+            await push_offer_decision(crm_user_id, decision.action)
+    except Exception:
+        logger.exception(
+            f"Lead {lead_id}: could not publish the blocked offer decision"
         )

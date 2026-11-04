@@ -124,6 +124,25 @@ def test_inactive_rows_are_ignored():
     assert decision.action == "issue"
 
 
+def test_an_inactive_wrong_document_is_reported_as_wrong():
+    """The API marks a wrong-level upload inactive; still name the problem."""
+    decision = assess_offer_eligibility(
+        {"program_interest": "B.Tech Computer Science"},
+        "B.Tech Computer Science",
+        [row("FAILED", active=False, codes="DOCUMENT_TYPE_MISMATCH,ACADEMIC_LEVEL_MISMATCH")],
+    )
+    assert decision.action == "block_wrong_document"
+
+
+def test_an_inactive_review_is_reported_as_review():
+    decision = assess_offer_eligibility(
+        {"program_interest": "B.Tech Computer Science"},
+        "B.Tech Computer Science",
+        [row("REVIEW_REQUIRED", active=False)],
+    )
+    assert decision.action == "block_review"
+
+
 def test_unclassified_program_blocks_unknown():
     decision = assess_offer_eligibility(
         {"program_interest": "Computer Science"},
@@ -148,3 +167,146 @@ def test_program_level_mapping():
     assert ident.program_level("MCA") == "Master's"
     assert ident.program_level("MBA") == "Master's"
     assert ident.program_level("Computer Science") is None
+
+
+def test_offer_pdf_shows_the_basis_of_offer(tmp_path):
+    from pypdf import PdfReader
+
+    from app.offers.pdf import build_offer_pdf
+
+    lead = {"name": "Test Student", "program_interest": "B.Tech Computer Science"}
+    course = {
+        "name": "B.Tech Computer Science",
+        "duration": "4 years",
+        "fees": "INR 100000",
+        "intake": "Fall",
+        "payment_link": "",
+    }
+    offer = {
+        "id": "abcd1234-0000-0000-0000-000000000000",
+        "program": "B.Tech Computer Science",
+        "offer_date": "2026-11-04",
+        "valid_until": "2026-12-04",
+        "terms": "",
+    }
+    evidence = {
+        "gate_document": "CLASS_12_MARKSHEET",
+        "score": "70.83",
+        "threshold": "70.0",
+        "uploaded_at": "2026-11-04T10:00:00+00:00",
+    }
+
+    path = build_offer_pdf(lead, course, offer, tmp_path, evidence=evidence)
+    text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(str(path)).pages
+    )
+    assert "Basis of Offer" in text
+    assert "Class 12 percentage" in text
+    assert "70.83" in text
+    assert "70.0" in text
+
+
+def test_blocked_decision_maps_to_crm_status(monkeypatch):
+    import asyncio
+
+    from app.crm import status as status_mod
+
+    sent = {}
+
+    async def fake_push(crm_user_id, **fields):
+        sent.update(fields)
+        return True
+
+    monkeypatch.setattr(status_mod, "push_profile", fake_push)
+
+    assert asyncio.run(status_mod.push_offer_decision("U", "block_missing")) is True
+    assert sent["Admission_Status__c"] == "Documents Pending"
+
+    sent.clear()
+    assert (
+        asyncio.run(status_mod.push_offer_decision("U", "block_not_eligible"))
+        is True
+    )
+    assert sent["Admission_Status__c"] == "Under Review"
+
+
+def test_offer_guard_keeps_fractional_hours(monkeypatch):
+    import asyncio
+
+    from app.offers import models as offer_models
+
+    captured = {}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(offer_models, "_get_db", lambda: Conn())
+
+    result = asyncio.run(
+        offer_models.get_recent_offer_for_lead("lead-1", within_hours=1 / 60)
+    )
+    assert result is None
+    assert "INTERVAL '1 hour'" in captured["sql"]
+    assert captured["params"][1] == 1 / 60
+
+
+def test_generate_does_not_issue_when_the_gate_blocks(
+    monkeypatch, override_settings
+):
+    import asyncio
+
+    from app.offers import service as svc
+    from app.offers.eligibility import OfferDecision
+
+    override_settings(OFFER_ELIGIBILITY_SHADOW=False)
+    decision = OfferDecision(
+        "block_not_eligible", "below-threshold", "no offer", {}
+    )
+
+    async def fake_lead(lead_id):
+        return {
+            "id": lead_id,
+            "name": "Test",
+            "email": "test@example.com",
+            "phone_number": "+1234567890",
+            "program_interest": "B.Tech Computer Science",
+        }
+
+    async def fake_readiness(lead_id):
+        return {
+            "ready": False,
+            "missing": [],
+            "lead": {"id": lead_id},
+            "documents": 1,
+            "decision": decision,
+        }
+
+    published = {}
+
+    async def fake_publish(lead_id, dec):
+        published["action"] = dec.action
+
+    monkeypatch.setattr("app.leads.models.get_lead", fake_lead)
+    monkeypatch.setattr(svc, "evaluate_offer_readiness", fake_readiness)
+    monkeypatch.setattr(svc, "_publish_blocked_decision", fake_publish)
+
+    assert asyncio.run(svc.generate_and_send_offer("lead-1")) is None
+    assert published["action"] == "block_not_eligible"

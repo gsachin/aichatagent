@@ -121,6 +121,11 @@ ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_document_id   VARCHAR(32)
 ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_upload_status VARCHAR(16);
 ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_uploaded_at   TIMESTAMP WITH TIME ZONE;
 ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS crm_expired_at    TIMESTAMP WITH TIME ZONE;
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS eligibility_action VARCHAR(32);
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS eligibility_evidence TEXT;
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS gate_document_id  VARCHAR(32);
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS gate_score        VARCHAR(32);
+ALTER TABLE offer_letters ADD COLUMN IF NOT EXISTS gate_threshold    VARCHAR(32);
 """
 
 # The student's own uploads — transcript, ID proof — get the same treatment as
