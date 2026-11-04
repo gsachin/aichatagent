@@ -2,10 +2,10 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–4 complete. Phase 5 cutover applied; the four live gates pass and the
-Streamlit/web flow is verified end-to-end. The WhatsApp transport test is next (blocked on the
-inactive Twilio account). Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view,
-latency.
+**Status:** Phases 1–4 complete. Phase 5 cutover applied; the four live gates pass, the
+Streamlit/web flow is verified end-to-end, and the WhatsApp offer path passes a no-send dry run.
+Real WhatsApp delivery is blocked on the inactive Twilio account (status 4); email is deferred.
+Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view, latency.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -897,8 +897,14 @@ Done:
       decision `issue` with 70.83 / 70.0, offer generated, offer row
       `status=sent, crm_upload_status=uploaded, eligibility_action=issue`, CRM document
       `068T100000nkO3TIAU`. Lead and Customer cleaned up.
-- [ ] WhatsApp/email transport test. Twilio account `ACae5d…abd8` is inactive (status 4), so a real
-      WhatsApp delivery cannot be tested until it is reactivated or replaced.
+- [x] **WhatsApp offer path dry-run (2026-11-04):** real offer/PDF/evidence with the Twilio send
+      and CRM upload mocked. Recipient `whatsapp:<test>`, sender `whatsapp:+14155238886`, media URL
+      `https://<host>/api/offers/<offer-id>/pdf`, body contains the program and `ACCEPT`; offer row
+      `status=sent`. No external message and no CRM write.
+- [ ] Real WhatsApp delivery. Twilio account `ACae5d…abd8` is inactive (status 4); the supplied
+      token is byte-identical to `.env`, so this is the account, not the credentials. Reactivate it
+      or supply an active SID/token, ensure the test phone has joined the sandbox, and run the
+      tunnel/webhook. Email is deferred per the 2026-11-04 instruction.
 - [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
 - [ ] Monitor `crm_upload_status` and the decision log.
 
