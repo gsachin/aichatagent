@@ -182,6 +182,15 @@ def pdf(tmp_path):
     return str(p)
 
 
+@pytest.fixture
+def jpg(tmp_path):
+    from PIL import Image
+
+    p = tmp_path / "photo.jpg"
+    Image.new("RGB", (800, 600), "white").save(p, "JPEG")
+    return str(p)
+
+
 def ok_listing() -> httpx.Response:
     return httpx.Response(200, json=[])
 
@@ -264,6 +273,37 @@ async def test_updated_mode_validates_a_transcript(crm_updated, client, store, p
     assert recorded["score_threshold"] == "3.2"
     assert recorded["is_active"] is True
     assert store["course_eligibility"] == "Eligible"
+
+
+@pytest.mark.anyio
+async def test_an_image_is_converted_for_validation(crm_updated, client, store, jpg):
+    """A JPEG is converted to PDF before upload-and-verify."""
+    sent, state = client
+    state["responses"] = scripted(
+        ok_listing(),
+        httpx.Response(200, json={
+            "application_no": "APP-28B9A16C28",
+            "document_id": "068VAL0002",
+            "document_type": "UNDERGRADUATE_TRANSCRIPT",
+            "validation_status": "PASSED",
+            "requirement_status": "SATISFIED",
+            "extracted_gpa": "3.9",
+            "minimum_required_gpa": "3.2",
+            "reason_codes": [],
+            "message": "Transcript passed.",
+            "action_required": "NONE",
+            "is_active": True,
+            "course_eligibility": "Eligible",
+        }),
+    )
+
+    assert await upload(path=jpg, doc_type="transcript", name="photo.jpg") == "068VAL0002"
+
+    fields, files = multipart_parts(sent[-1])
+    assert sent[-1]["path"].endswith("/documents/upload-and-verify")
+    assert fields["document_type"] == "UNDERGRADUATE_TRANSCRIPT"
+    assert files["file"][0] == "C852F7D9_photo.pdf"
+    assert files["file"][1].startswith(b"%PDF-")
 
 
 @pytest.mark.anyio

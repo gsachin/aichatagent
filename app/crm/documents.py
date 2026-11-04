@@ -475,6 +475,28 @@ def _mime_type(file_name: str) -> str:
     return mimetypes.guess_type(str(file_name))[0] or "application/octet-stream"
 
 
+def _as_pdf(blob: bytes, file_name: str) -> bytes:
+    """Convert an image upload to a single-page PDF for the validation lane.
+
+    The validation endpoint accepts PDF only; WhatsApp frequently delivers a
+    JPEG. Pillow is imported lazily so the rest of the module keeps working if
+    it is not installed — the caller falls back to the raw lane on failure.
+    """
+    if str(file_name).lower().endswith(".pdf"):
+        return blob
+
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(blob)) as image:
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        output = BytesIO()
+        image.save(output, format="PDF", resolution=150)
+        return output.getvalue()
+
+
 async def _transfer_offer_letter(
     *,
     application: str,
@@ -858,6 +880,19 @@ async def upload_student_document(
 
     salesforce_document_type = identity_mod.map_document_type(doc_type)
     canonical_type = identity_mod.validation_document_type(doc_type)
+    upload_blob = blob
+
+    if canonical_type:
+        try:
+            # Use the original name for the format check: the CRM file name is
+            # always *.pdf, even when the local file is a JPEG.
+            upload_blob = _as_pdf(blob, path.name)
+        except Exception:
+            logger.exception(
+                f"crm.documents: could not convert {file_name} to PDF for "
+                f"validation — sending it through the raw lane"
+            )
+            canonical_type = ""
 
     if upload_mode() == "updated":
         if canonical_type:
@@ -866,7 +901,7 @@ async def upload_student_document(
             result = await _transfer_and_verify(
                 application=application,
                 file_name=file_name,
-                blob=blob,
+                blob=upload_blob,
                 document_type=canonical_type,
                 source=settings.CRM_OFFER_DOCUMENT_SOURCE,
                 label=f"document {doc_id}",

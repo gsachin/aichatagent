@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–3 implemented; Gate 3 is partially green (API live + unit shadow). Phase 4
-(enforcement) not started.
+**Status:** Phases 1–3 implemented; Gate 3 green for correctness (API live + live UD shadow).
+Operator view and latency measurement are still pending. Phase 4 (enforcement) not started.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -804,7 +804,8 @@ mappings, and program-detection failures before a student is denied an offer.
 - [x] Shadow mode (`OFFER_ELIGIBILITY_SHADOW=true`) stores the evidence and logs
       `offer shadow: ... action=... reason=... evidence=...`; `generate_and_send_offer` is
       unchanged.
-- [ ] Convert image documents to PDF (still pending; images stay in the raw lane).
+- [x] Images are converted to a single-page PDF before `upload-and-verify` (Pillow, lazy import);
+      a conversion failure falls back to the raw lane with a logged error. Unit-tested with a JPEG.
 - [ ] Operator dashboard view: document → mark → threshold → status → decision (pending).
 - [ ] Offer-row evidence columns and “Basis of Offer” (Phase 4).
 
@@ -831,10 +832,14 @@ mappings, and program-detection failures before a student is denied an offer.
     ACADEMIC_SCORE_UNCERTAIN`; the Customer stayed `Eligible` because the earlier pass remains
     active.
   - test Customer deleted; its two ContentVersions cannot be deleted through the API.
-- **UD unit:** 283 CRM/offer tests pass, including the full decision matrix and the evidence
-  storage/shadow path.
-- **Not yet done:** image→PDF conversion, the operator view, a real student-upload shadow run, and
-  latency measurement. **No offer behavior changed.**
+- **Live UD shadow:** `upload_student_document` called
+  `POST /admissions/APP-195DE5DF8D/documents/upload-and-verify` (200 OK); stored
+  `CLASS_12_MARKSHEET / PASSED / SATISFIED / 70.83 / 70.0 / active`, `course_eligibility=Eligible`;
+  the log read `offer shadow: ... action=issue reason=requirement-satisfied`. Test Customer deleted;
+  ContentVersion `068T100000nisOjIAI` remains on `APP-195DE5DF8D`.
+- **UD unit:** 284 CRM/offer tests pass, including the full decision matrix, evidence storage,
+  shadow path, and JPEG→PDF conversion.
+- **Not yet done:** the operator view and latency measurement. **No offer behavior changed.**
 
 ### Phase 4 — Enforce the marks gate, and put the evidence in the offer
 
