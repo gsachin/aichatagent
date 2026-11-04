@@ -2,8 +2,9 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–4 implemented; Gate 4 live enforcement is green. Phase 5 (cutover) not
-started. Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view, latency.
+**Status:** Phases 1–4 complete. Phase 5 cutover applied and the four live gates pass on `:8098`;
+the live demo send and status-doc update are still pending. Remaining polish: `sha256` dedupe
+wiring, `strict` mode, operator view, latency.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -874,21 +875,30 @@ mappings, and program-detection failures before a student is denied an offer.
 
 ### Phase 5 — Cutover and hardening
 
-- [ ] Stop the `:8098` process; point `start_services.ps1` `$CrmApiRoot` at the merged `NEW` repo
-      (or set `SALESFORCE_API_ROOT`); keep the same port and health check.
-- [ ] Keep the old repo and `.env` untouched for rollback.
-- [ ] Set `OFFER_ELIGIBILITY_SHADOW=false` and `OFFER_ELIGIBILITY_MODE=academic` (or `strict` if
-      the admissions team has signed off) in the live `.env`.
-- [ ] Run a full demo scenario end to end: pass mark → offer with evidence; below-threshold mark →
-      no offer; unreadable scan → review message; re-upload better mark → offer.
-- [ ] Update `doc/salesforce/STATUS_AND_VALIDATION.md` and `STATUS_2026-09-13.md` with the new
-      contract and the new offer rule; note `GET /users/lookup` removal and the new upload
-      endpoints.
-- [ ] Re-run all gates against `:8098`; monitor `offer_letters.crm_upload_status`, the outbox, and
-      the shadow/enforced decision log for divergences.
+Done:
+- [x] No old `:8098` process was running. `start_services.ps1` `$CrmApiRoot` now defaults to the
+      merged `NEW` repo; the port and `/health` check are unchanged. The old repo remains at
+      `D:\project\salesforce\salesforce-admission-api` for rollback.
+- [x] Live `.env` now has `CRM_UPLOAD_MODE=updated`, `OFFER_ELIGIBILITY_MODE=academic`,
+      `OFFER_ELIGIBILITY_SHADOW=false`, `CRM_UPLOAD_TIMEOUT_S=120`. Backup:
+      `.env.bak-cutover-20261104`.
+- [x] New API started from the `NEW` venv on `127.0.0.1:8098`; `/health` returns 200.
+- [x] Four gates re-run on `:8098`: offer upload **10/0**, webchat **6/0**, status **17/0**,
+      voice **5/0**.
+- [x] The 118 stale test outbox entries were drained through the app's own `flush_outbox` (not
+      truncated); Gate 7 C7 then passed.
+- [ ] Full live demo send (pass → offer with evidence; below threshold; re-upload). Pending a
+      decision on the test contact / transport.
+- [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
+- [ ] Monitor `crm_upload_status` and the decision log.
 
-**Gate 5:** all gates pass on `:8098`; no `failed`/`unknown` offer uploads for a full demo run; the
-decision log shows no unexplained “issue” on a below-threshold mark or vice versa.
+**Gate 5 — cutover gates green (2026-11-04).** The four live harnesses pass against the new API on
+`:8098`. The email/WhatsApp offer send has **not** been exercised in this cutover; the Twilio
+account returned 401 (status 4) in earlier background logs. Rollback: stop the new API, restore
+`.env.bak-cutover-20261104`, and revert the `$CrmApiRoot` default — the old repo is untouched.
+
+Residue from the Gate 5 offer-upload run: ContentVersion `068T100000njN7oIAE` on
+`APP-4D2E91425A`.
 
 ---
 

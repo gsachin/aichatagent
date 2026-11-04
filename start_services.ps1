@@ -48,8 +48,12 @@ $StreamlitDashboardPort = 8502
 # path, so it reads .env from the working directory — launched from here it would
 # load THIS project's .env and fail to authenticate. Override the location with
 # $env:SALESFORCE_API_ROOT when it lives somewhere else.
+#
+# 2026-11-04 cutover: the default points at the updated build that adds document
+# validation and the offer-letter/raw upload paths. The previous repo remains at
+# D:\project\salesforce\salesforce-admission-api for rollback.
 $CrmApiPort  = 8098
-$CrmApiRoot  = if ($env:SALESFORCE_API_ROOT) { $env:SALESFORCE_API_ROOT } else { "D:\project\salesforce\salesforce-admission-api" }
+$CrmApiRoot  = if ($env:SALESFORCE_API_ROOT) { $env:SALESFORCE_API_ROOT } else { "D:\project\salesforce\salesforce-admission-api-main_updated_offer_letter\salesforce-admission-api-main" }
 $CrmPython   = Join-Path $CrmApiRoot "venv\Scripts\python.exe"
 
 # Prefer the project venv (created by bootstrap_services) when present,
