@@ -104,6 +104,18 @@ def test_review_required_sends_the_review_message(harness):
     assert harness["messages"][0]["body"] == "decision message for manual-review"
 
 
+def test_wrong_document_sends_the_correct_document_message(harness):
+    """A marksheet filed as 'transcript' is caught after validation."""
+    harness["readiness"]["decision"] = _decision(
+        "block_wrong_document", "wrong-document"
+    )
+
+    run()
+
+    assert harness["generated"] == []
+    assert harness["messages"][0]["body"] == "decision message for wrong-document"
+
+
 def test_missing_documents_do_not_send_anything(harness):
     harness["readiness"]["decision"] = _decision("block_missing", "gate-document-missing")
 

@@ -460,7 +460,9 @@ async def maybe_send_offer_after_validation(
 
         if decision.action == "issue":
             await generate_and_send_offer(lead_id, channel="whatsapp")
-        elif decision.action in ("block_not_eligible", "block_review"):
+        elif decision.action in (
+            "block_not_eligible", "block_review", "block_wrong_document"
+        ):
             phone = lead.get("phone_number") or ""
             if phone:
                 send_whatsapp_message(

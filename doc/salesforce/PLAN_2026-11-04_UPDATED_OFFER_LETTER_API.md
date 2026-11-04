@@ -8,7 +8,8 @@ the WhatsApp document-type menu is implemented and tested.
 Real WhatsApp delivery is blocked on the inactive Twilio account (status 4); email is deferred.
 Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view, latency.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`; WhatsApp
-document-type menu `c95a785`.
+document-type menu `c95a785`; natural replies + auto-offer `9f476aa` (with a follow-up for
+`block_wrong_document`).
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
 "any document uploaded → offer" to "document validated → marks meet the program requirement →
@@ -923,6 +924,26 @@ Done:
         “✅ Filed as 12th Marksheet”, the DB row was `doc_type=marksheet`, and the pending columns
         were cleared; a later `hello` showed the language menu. Test lead, document, and
         conversations were deleted afterwards.
+- [x] **Sandbox chat post-mortem and fixes (2026-11-05).** The 01:36–01:39 chat (MBA lead,
+      `whatsapp:+917757057985`) did not produce an offer for four separate reasons, now addressed:
+      1. `its transcript` re-sent the menu because matching was exact-only. Matching now strips
+         conversational fillers and falls back to distinctive keywords with word boundaries
+         (`great` ≠ GRE, `satisfied` ≠ SAT); a bare digit remains a menu position, so `12` is
+         Recommendation Letter, not Class 12.
+      2. The student chose `1` (12th Marksheet) on an **MBA** lead. The API correctly rejected it
+         as `DOCUMENT_NOT_ACCEPTED_FOR_PROGRAM` (DB evidence: `validation_status=FAILED`,
+         `requirement_status=SATISFIED`, 85.33), but the reply only said “Filed as …”. The reply
+         now names the gate document for the lead's program and asks for it when the wrong
+         academic record was filed.
+      3. The offer previously waited for `done`, which was never typed. After validation, the
+         background upload now evaluates readiness and sends the offer when the gate document
+         passed, or the below-threshold / review / wrong-document message when it did not. It acts
+         only on the document that produced the decision, so an ID proof uploaded later cannot
+         re-send the offer. `done` remains a fallback.
+      4. The second upload at 01:39 was **the same Class 12 marksheet** (1,284,352 bytes, HSC
+         statement, 85.33%), so no MBA offer can follow from it even if it is filed. The MBA gate
+         is the undergraduate transcript (GPA ≥ 3.2/4.0); a Bachelor's lead is the one this
+         marksheet can unlock (≥ 70%).
 - [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
 - [ ] Monitor `crm_upload_status` and the decision log.
 
