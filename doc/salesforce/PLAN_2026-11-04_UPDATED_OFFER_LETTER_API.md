@@ -3,10 +3,12 @@
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
 **Status:** Phases 1–4 complete. Phase 5 cutover applied; the four live gates pass, the
-Streamlit/web flow is verified end-to-end, and the WhatsApp offer path passes a no-send dry run.
+Streamlit/web flow is verified end-to-end, the WhatsApp offer path passes a no-send dry run, and
+the WhatsApp document-type menu is implemented and tested.
 Real WhatsApp delivery is blocked on the inactive Twilio account (status 4); email is deferred.
 Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view, latency.
-**Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
+**Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`; WhatsApp
+document-type menu `c95a785`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
 "any document uploaded → offer" to "document validated → marks meet the program requirement →
@@ -905,9 +907,22 @@ Done:
       token is byte-identical to `.env`, so this is the account, not the credentials. Reactivate it
       or supply an active SID/token, ensure the test phone has joined the sandbox, and run the
       tunnel/webhook. Email is deferred per the 2026-11-04 instruction.
-- [ ] WhatsApp document-type selection. The handler currently infers PDF → transcript and
-      image → id_proof, so GMAT/TOEFL/marksheet files are misclassified. Add a menu using the
-      Streamlit `UPLOAD_DOCUMENT_TYPES` list before the live test.
+- [x] **WhatsApp document-type menu (2026-11-04).** An upload is saved but held as *pending* on
+      the lead (three `leads.pending_document_*` columns, 30-minute TTL); no `lead_documents` row
+      exists until the student answers. The webhook sends the numbered menu built from the same
+      `UPLOAD_DOCUMENT_TYPES` vocabulary as the Streamlit dropdown, and `match_upload_document_type`
+      resolves a number, an exact label, or an alias (`GMAT`, `12th`, `transcript`). The pending
+      branch runs **before the conversation-start language menu**, so `1` means 12th Marksheet
+      rather than English; invalid replies re-send the menu and keep the file pending. After a
+      choice the document is filed and the normal CRM validation is scheduled. The handler no
+      longer infers PDF → transcript / image → ID proof.
+      - Covered by `tests/test_whatsapp_document_menu.py` (number, alias, invalid reply, language-
+        menu ordering).
+      - Live check on a temporary `:8100` server with `CRM_ENABLED=false` (so no Salesforce write):
+        a seeded pending document answered `banana` re-sent the menu, `1` replied
+        “✅ Filed as 12th Marksheet”, the DB row was `doc_type=marksheet`, and the pending columns
+        were cleared; a later `hello` showed the language menu. Test lead, document, and
+        conversations were deleted afterwards.
 - [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
 - [ ] Monitor `crm_upload_status` and the decision log.
 
