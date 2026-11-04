@@ -64,6 +64,9 @@ def store(monkeypatch):
         "recorded": [],
         "cleared": [],
         "application_pushes": [],
+        "validation": [],
+        "validation_rows": [],
+        "course_eligibility": "",
     }
 
     async def get_lead_crm_user_id(lead_id):
@@ -93,6 +96,31 @@ def store(monkeypatch):
     monkeypatch.setattr("app.leads.models.set_lead_crm_application_no", set_lead_crm_application_no)
     monkeypatch.setattr("app.offers.models.get_document_crm_upload", get_document_crm_upload)
     monkeypatch.setattr("app.offers.models.set_document_crm_upload", set_document_crm_upload)
+
+    async def get_lead(lead_id):
+        return {"id": lead_id, "program_interest": "MCA"}
+
+    async def set_course_eligibility(lead_id, value):
+        state["course_eligibility"] = value
+        return True
+
+    async def list_validation_results(lead_id):
+        return state["validation_rows"]
+
+    async def set_document_validation(doc_id, **kwargs):
+        state["validation"].append({"doc_id": doc_id, **kwargs})
+        return True
+
+    monkeypatch.setattr("app.leads.models.get_lead", get_lead)
+    monkeypatch.setattr(
+        "app.leads.models.set_lead_crm_course_eligibility", set_course_eligibility
+    )
+    monkeypatch.setattr(
+        "app.offers.models.list_validation_results", list_validation_results
+    )
+    monkeypatch.setattr(
+        "app.offers.models.set_document_validation", set_document_validation
+    )
     return state
 
 
@@ -192,8 +220,57 @@ async def test_a_transcript_reaches_the_crm(crm_on, client, store, pdf):
 
 
 @pytest.mark.anyio
-async def test_updated_mode_posts_one_raw_request(crm_updated, client, store, pdf):
-    """The updated contract is one multipart call to /documents/raw."""
+async def test_updated_mode_validates_a_transcript(crm_updated, client, store, pdf):
+    """A canonical type goes to /documents/upload-and-verify and stores evidence."""
+    sent, state = client
+    state["responses"] = scripted(
+        ok_listing(),
+        httpx.Response(200, json={
+            "application_no": "APP-28B9A16C28",
+            "document_id": "068VAL0001",
+            "document_type": "UNDERGRADUATE_TRANSCRIPT",
+            "validation_status": "PASSED",
+            "requirement_status": "SATISFIED",
+            "extracted_gpa": "3.9",
+            "minimum_required_gpa": "3.2",
+            "reason_codes": [],
+            "message": "Transcript passed.",
+            "action_required": "NONE",
+            "is_active": True,
+            "course_eligibility": "Eligible",
+            "salesforce_updated": True,
+        }),
+    )
+
+    assert await upload(path=pdf, doc_type="transcript") == "068VAL0001"
+
+    paths = [s["path"] for s in sent]
+    assert paths == [
+        "/admissions/APP-28B9A16C28/documents",
+        "/admissions/APP-28B9A16C28/documents/upload-and-verify",
+    ]
+    fields, files = multipart_parts(sent[-1])
+    assert fields["document_type"] == "UNDERGRADUATE_TRANSCRIPT"
+    assert fields["source"] == "Internal Upload"
+    assert files["file"][0] == "C852F7D9_RAG.md.pdf"
+    assert files["file"][1] == PDF
+
+    recorded = store["validation"][-1]
+    assert recorded["doc_id"] == DOC_ID
+    assert recorded["api_document_type"] == "UNDERGRADUATE_TRANSCRIPT"
+    assert recorded["validation_status"] == "PASSED"
+    assert recorded["requirement_status"] == "SATISFIED"
+    assert recorded["extracted_score"] == "3.9"
+    assert recorded["score_threshold"] == "3.2"
+    assert recorded["is_active"] is True
+    assert store["course_eligibility"] == "Eligible"
+
+
+@pytest.mark.anyio
+async def test_updated_mode_sends_an_unsupported_type_to_raw(
+    crm_updated, client, store, pdf
+):
+    """A type the validator does not model stays on the raw lane."""
     sent, state = client
     state["responses"] = scripted(
         ok_listing(),
@@ -204,13 +281,13 @@ async def test_updated_mode_posts_one_raw_request(crm_updated, client, store, pd
             "document": {
                 "document_id": "068RAW0001",
                 "file_name": "C852F7D9_RAG.md.pdf",
-                "document_type": "Academic Transcript",
+                "document_type": "Resume",
                 "source": "Internal Upload",
             },
         }),
     )
 
-    assert await upload(path=pdf, doc_type="transcript") == "068RAW0001"
+    assert await upload(path=pdf, doc_type="resume") == "068RAW0001"
 
     paths = [s["path"] for s in sent]
     assert paths == [
@@ -218,13 +295,11 @@ async def test_updated_mode_posts_one_raw_request(crm_updated, client, store, pd
         "/admissions/APP-28B9A16C28/documents/raw",
     ]
     fields, files = multipart_parts(sent[-1])
-    assert fields["document_type"] == "Academic Transcript"
+    assert fields["document_type"] == "Resume"
     assert fields["source"] == "Internal Upload"
     assert files["file"][0] == "C852F7D9_RAG.md.pdf"
     assert files["file"][1] == PDF
-    assert store["recorded"][-1] == {
-        "document_id": "068RAW0001", "status": "uploaded"
-    }
+    assert store["validation"] == []
 
 
 def init_fields(request_body: bytes) -> dict:

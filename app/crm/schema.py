@@ -100,6 +100,14 @@ ALTER_LEADS_CRM_CONVERSATION_SQL = """
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_conversation_id VARCHAR(64);
 """
 
+# The program level we pushed (Bachelor's / Master's), so the per-turn link
+# does not re-send it; and the last Course_Eligibility__c the validation API
+# reported, for the offer decision and operator visibility.
+ALTER_LEADS_CRM_EDUCATION_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_education_level VARCHAR(32);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_course_eligibility VARCHAR(32);
+"""
+
 # offer_letters is created by app/offers/schema.py, but the CRM integration owns
 # the columns CRM writes — the same precedent as the conversations ALTER above.
 # This is why ALL_CRM_SQL must stay last in init_db(): it ALTERs tables that the
@@ -123,6 +131,16 @@ ALTER_LEAD_DOCUMENTS_CRM_SQL = """
 ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_document_id   VARCHAR(32);
 ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_upload_status VARCHAR(16);
 ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS crm_uploaded_at   TIMESTAMP WITH TIME ZONE;
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS api_document_type VARCHAR(64);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS validation_status VARCHAR(32);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS requirement_status VARCHAR(32);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS extracted_score VARCHAR(32);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS score_threshold VARCHAR(32);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS reason_codes TEXT;
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS validation_message TEXT;
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS action_required VARCHAR(64);
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
+ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS sha256 VARCHAR(64);
 """
 
 ALL_CRM_SQL = "\n".join(
@@ -135,6 +153,7 @@ ALL_CRM_SQL = "\n".join(
         ALTER_LEADS_CRM_APPLICATION_SQL,
         ALTER_LEADS_CRM_COURSE_SQL,
         ALTER_LEADS_CRM_CONVERSATION_SQL,
+        ALTER_LEADS_CRM_EDUCATION_SQL,
         ALTER_OFFER_LETTERS_CRM_SQL,
         ALTER_LEAD_DOCUMENTS_CRM_SQL,
     ]

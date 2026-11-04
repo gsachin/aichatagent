@@ -759,6 +759,16 @@ class Settings:
     OFFER_GUARD_MINUTES: int = field(
         default_factory=lambda: _env_int("OFFER_GUARD_MINUTES", 1)
     )
+    # Offer eligibility gate (2026-11). "academic" gates on the program's
+    # academic document (Class 12 / UG transcript); "strict" requires all four
+    # document categories. Shadow mode computes and logs the decision without
+    # changing whether an offer is sent; Phase 4 turns it off.
+    OFFER_ELIGIBILITY_MODE: str = field(
+        default_factory=lambda: _env("OFFER_ELIGIBILITY_MODE", "academic").strip().lower()
+    )
+    OFFER_ELIGIBILITY_SHADOW: bool = field(
+        default_factory=lambda: _env("OFFER_ELIGIBILITY_SHADOW", "true").lower() == "true"
+    )
     DEFAULT_PAYMENT_LINK: str = field(
         default_factory=lambda: _env("DEFAULT_PAYMENT_LINK", "https://pay.university.edu/admissions")
     )

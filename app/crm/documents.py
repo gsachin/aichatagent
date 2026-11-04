@@ -857,19 +857,33 @@ async def upload_student_document(
         return existing_id
 
     salesforce_document_type = identity_mod.map_document_type(doc_type)
+    canonical_type = identity_mod.validation_document_type(doc_type)
 
     if upload_mode() == "updated":
-        # Phase 2 lane: no OCR/validation for student documents yet. Phase 3
-        # switches canonical types to _transfer_and_verify.
-        result = await _transfer_raw(
-            application=application,
-            file_name=file_name,
-            blob=blob,
-            document_type=salesforce_document_type,
-            source=settings.CRM_OFFER_DOCUMENT_SOURCE,
-            label=f"document {doc_id}",
-            application_no=application_no,
-        )
+        if canonical_type:
+            # Phase 3: canonical evidence goes through validation so the marks
+            # are extracted and the eligibility fields are written.
+            result = await _transfer_and_verify(
+                application=application,
+                file_name=file_name,
+                blob=blob,
+                document_type=canonical_type,
+                source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+                label=f"document {doc_id}",
+                application_no=application_no,
+            )
+        else:
+            # Types the validator does not model (resume, financial, ...) keep
+            # the Phase 2 raw lane.
+            result = await _transfer_raw(
+                application=application,
+                file_name=file_name,
+                blob=blob,
+                document_type=salesforce_document_type,
+                source=settings.CRM_OFFER_DOCUMENT_SOURCE,
+                label=f"document {doc_id}",
+                application_no=application_no,
+            )
     else:
         result = await _transfer(
             application=application,
@@ -885,6 +899,17 @@ async def upload_student_document(
         await set_document_crm_upload(
             doc_id, document_id=result.document_id, status=STATUS_UPLOADED
         )
+        if canonical_type and result.response is not None:
+            try:
+                from app.offers.service import record_validation_and_shadow
+
+                await record_validation_and_shadow(
+                    lead_id=lead_id, doc_id=doc_id, response=result.response
+                )
+            except Exception:
+                logger.exception(
+                    "crm.documents: could not record validation evidence"
+                )
         return result.document_id
 
     await set_document_crm_upload(doc_id, status=result.status)

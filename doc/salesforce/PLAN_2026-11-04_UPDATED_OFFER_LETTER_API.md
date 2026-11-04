@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–2 implemented and Gate 2 green (2026-11-04) — Phase 3 not started.
+**Status:** Phases 1–3 implemented; Gate 3 is partially green (API live + unit shadow). Phase 4
+(enforcement) not started.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -788,68 +789,52 @@ Every upload is validated, the decision is computed and logged, and the current 
 offer” behaviour is compared against it. This is the phase that catches OCR mistakes, wrong type
 mappings, and program-detection failures before a student is denied an offer.
 
-`UD`:
-- [ ] Add `api_document_type()` to `app/crm/identity.py`: `transcript` →
-      `UNDERGRADUATE_TRANSCRIPT`, `marksheet` → `CLASS_12_MARKSHEET` (confirm: UD currently files
-      this as `10th Marksheet`, which the new API does not model), `id_proof`/`passport` →
-      `ID_PROOF`, `ielts` → `IELTS` — **UD's current `DOCUMENT_TYPE_MAP` says `IELTS Score`, which
-      is not in the org's restricted picklist; the shim already rejects it with a 400**. The
-      `test_score` value needs a disambiguation question (SAT/GRE/GMAT/TOEFL cannot be inferred
-      from “test_score”); `resume`, `financial`, `recommendation`, `other` → raw lane.
-- [ ] Add `program_level(program)` returning `Bachelor's` or `Master's`, and push it to
-      `Education_Level__c` — **`Program__c` does not exist in this org**. `_customer_program`
-      checks `Course__c == "MBA"` first, so ensure `Course__c` is exactly `"MBA"` for MBA
-      students; otherwise a `Master's` education level classifies them as `MASTER`, not `MBA`.
-      `Education_Level__c` is a restricted picklist (`Diploma`, `Bachelor's`, `Master's`).
-      Add it to `WRITABLE_FIELDS` (`app/crm/status.py:56-67`) and call it from
-      `link_conversation`/`sync_course` (`app/crm/sync.py:243-247, 311-348`). Without this,
-      `_customer_program` rejects BBA/BCA/B.Com/BA/MCA/M.Com/MA uploads.
-- [ ] Convert image documents (WhatsApp JPEGs) to PDF before upload, or keep them out of the
-      validation lane.
-- [ ] Wire `_upload_and_verify` for canonical types; keep `_upload_student_document_raw` for
-      unsupported types. Raise the validation call's timeout to 90–120 s (the offer-letter and raw
-      calls keep the short timeout).
-- [ ] Persist validation evidence. Add to `lead_documents`: `api_document_type`,
+`UD` — done:
+- [x] `validation_document_type()` maps transcript/marksheet/ID/IELTS/exams to the API's canonical
+      types; `test_score`, resume, financial, recommendation and other stay on the raw lane.
+- [x] `program_level()` maps B.Tech/BBA/BCA/B.Com/BA/B.Sc → `Bachelor's` and
+      MCA/M.Tech/M.Sc/MA/M.Com/MBA → `Master's`; `Education_Level__c` is pushed from
+      `link_conversation`, cached on the lead, and added to `WRITABLE_FIELDS`.
+- [x] Canonical types are wired to `_transfer_and_verify`; unsupported types stay on `_transfer_raw`.
+- [x] Validation evidence is persisted on `lead_documents` (`api_document_type`,
       `validation_status`, `requirement_status`, `extracted_score`, `score_threshold`,
-      `reason_codes` (JSON/text), `validation_message`, `action_required`, `is_active`, `sha256`.
-      Add to `leads`: `crm_course_eligibility`. Add to `offer_letters`:
-      `eligibility_action`, `eligibility_evidence` (JSON), `gate_document_id`, `gate_score`,
-      `gate_threshold`. Use `ADD COLUMN IF NOT EXISTS` migrations (`app/offers/schema.py`,
-      `app/leads/schema.py`).
-- [ ] Implement `app/offers/eligibility.py` with `assess_offer_eligibility(...)` returning
-      `OfferDecision` (§3.5). It must be pure: no DB, no network — it receives the lead, program,
-      and stored validation rows.
-- [ ] In shadow mode (`OFFER_ELIGIBILITY_SHADOW=true`), compute the decision after every upload,
-      store it, and log `would_issue` / `would_block:<action>` alongside the current outcome.
-      Do **not** change `generate_and_send_offer` yet.
-- [ ] Add an operator view in the dashboard: document → extracted mark → threshold →
-      `validation_status` → decision. This is how the team audits OCR accuracy before enforcement.
+      `reason_codes`, `validation_message`, `action_required`, `is_active`, `sha256`) and
+      `crm_course_eligibility` on `leads` (additive migrations in `app/crm/schema.py`).
+- [x] `app/offers/eligibility.py` is a pure decision module with `assess_offer_eligibility()`.
+- [x] Shadow mode (`OFFER_ELIGIBILITY_SHADOW=true`) stores the evidence and logs
+      `offer shadow: ... action=... reason=... evidence=...`; `generate_and_send_offer` is
+      unchanged.
+- [ ] Convert image documents to PDF (still pending; images stay in the raw lane).
+- [ ] Operator dashboard view: document → mark → threshold → status → decision (pending).
+- [ ] Offer-row evidence columns and “Basis of Offer” (Phase 4).
 
-`NEW`:
-- [ ] Ensure the compact response carries everything the decision needs. It already carries
-      `validation_status`, the extracted/minimum score fields, `reason_codes`, `message`,
-      `action_required`, `missing_documents`, and `course_eligibility`; **do not drop
-      `requirement_status`** unless UD stops needing it (it is currently omitted from the compact
-      response — add it if the decision needs to distinguish PROVISIONAL).
-- [ ] Implement the `required_categories` parameter on `evaluate_eligibility` and
-      `update_customer_document_validation` (see §3.4) if `academic` mode is chosen, so
-      `Course_Eligibility__c` matches the offer decision.
-- [ ] Extend `_customer_program` to cover the Meridian program names (BBA/BCA/B.Com/BA/MCA/
-      M.Com/MA) **or** return a 400 that names the missing program classification
-      (`Education_Level__c` / `Course__c`) — never a generic “Unable to identify…” after the
-      document has already been uploaded.
-- [ ] Add a route/contract test that pins these fields so a future change cannot silently remove
-      the decision inputs.
+`NEW` — done:
+- [x] `requirement_status` is in the compact upload response.
+- [x] `required_categories` defaults to `ACADEMIC_RECORD`; `Course_Eligibility__c` now matches
+      the marks-based rule. `ELIGIBILITY_REQUIRED_CATEGORIES` is configurable.
+- [x] `_customer_program` covers BBA/BCA/B.Com/BA/MCA/M.Com/MA and decides MBA before
+      `Education_Level__c`.
+- [x] Contract tests pin the program classification, required-category eligibility, routes and
+      picklist vocabulary; OpenAPI regenerated.
 
-**Gate 3 (shadow):**
-- Upload the sample set (`Document samples-20261103T194256Z-1-001.zip`) and a set of live demo
-  documents; for each, the stored evidence matches the PDF's actual mark.
-- Shadow decisions agree with a human reading of the document on the threshold cases
-  (70.0 vs 69.9; 3.2 vs 2.33; 1100 vs 1099; 6.5 vs 6.0; 72 vs 71).
-- Wrong-type uploads are classified `block_wrong_document`, not `block_not_eligible`.
-- Scanned/unreadable PDFs are `REVIEW_REQUIRED`, never a silent pass.
-- No change in offers sent during the shadow run; every divergence is logged and explained.
-- Upload success rate and p95 latency are recorded (OCR should stay under the 90–120 s timeout).
+**Gate 3 — partial (2026-11-04):**
+
+- **Offline:** all 19 samples extract; 19 threshold/name assertions, 2 aggregation checks and the
+  contract suite pass.
+- **Live API:** created test Customer `APP-B7CAE9FAC3` and uploaded
+  `12th_marksheet_sample_1.pdf` as `CLASS_12_MARKSHEET`:
+  - response: `PASSED` / `SATISFIED` / **70.83 ≥ 70.0** / active / `Eligible`;
+  - Customer: `Course_Eligibility__c=Eligible`, `Document_Validation_Results__c` contains
+    `document_history` (471 chars).
+  - uploaded `12th_marksheet_sample_3.pdf` (a Class-10 marksheet) as `CLASS_12_MARKSHEET`:
+    `FAILED`, inactive, reasons `DOCUMENT_TYPE_MISMATCH, ACADEMIC_LEVEL_MISMATCH,
+    ACADEMIC_SCORE_UNCERTAIN`; the Customer stayed `Eligible` because the earlier pass remains
+    active.
+  - test Customer deleted; its two ContentVersions cannot be deleted through the API.
+- **UD unit:** 283 CRM/offer tests pass, including the full decision matrix and the evidence
+  storage/shadow path.
+- **Not yet done:** image→PDF conversion, the operator view, a real student-upload shadow run, and
+  latency measurement. **No offer behavior changed.**
 
 ### Phase 4 — Enforce the marks gate, and put the evidence in the offer
 

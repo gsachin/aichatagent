@@ -737,6 +737,91 @@ async def set_lead_crm_conversation_id(lead_id: str, conversation_id: str) -> bo
             return False
 
 
+async def get_lead_crm_education_level(lead_id: str) -> str:
+    """The program level we last pushed (Bachelor's / Master's), or ""."""
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT crm_education_level FROM leads WHERE id = %s", (lead_id,)
+                )
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_education_level from lead")
+            return ""
+
+
+async def set_lead_crm_education_level(lead_id: str, level: str) -> bool:
+    """Remember the program level the CRM now holds."""
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_education_level = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (level or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to cache crm_education_level on lead")
+            return False
+
+
+async def get_lead_crm_course_eligibility(lead_id: str) -> str:
+    """The last Course_Eligibility__c the validation API reported, or ""."""
+    if not lead_id:
+        return ""
+
+    with _get_db() as conn:
+        if conn is None:
+            return ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT crm_course_eligibility FROM leads WHERE id = %s",
+                    (lead_id,),
+                )
+                row = cur.fetchone()
+            return (row[0] or "") if row else ""
+        except Exception:
+            logger.exception("Failed to read crm_course_eligibility from lead")
+            return ""
+
+
+async def set_lead_crm_course_eligibility(lead_id: str, eligibility: str) -> bool:
+    """Remember the eligibility value the API last wrote for this lead."""
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET crm_course_eligibility = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (eligibility or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to cache crm_course_eligibility on lead")
+            return False
+
+
 async def get_recent_conversation_for_phone(
     phone_number: str,
     within_seconds: float | None,

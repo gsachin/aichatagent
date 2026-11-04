@@ -55,6 +55,7 @@ logger = logging.getLogger("crm.status")
 # point at their first conversation forever (plan R6 / A4).
 WRITABLE_FIELDS = frozenset({
     "Course__c",
+    "Education_Level__c",
     "Conversation_ID__c",
     "Sentiment__c",
     "Lead_Category__c",
@@ -154,6 +155,17 @@ async def _queue(crm_user_id: str, payload: dict, error: str) -> None:
 async def push_course(crm_user_id: str, course: str) -> bool:
     """Publish the program a student is interested in. ``Course__c`` is free text."""
     return await push_profile(crm_user_id, Course__c=str(course).strip() or None)
+
+
+async def push_education_level(crm_user_id: str, level: str) -> bool:
+    """Publish the program level (Bachelor's / Master's).
+
+    The validation API uses it to choose the academic gate; it is a restricted
+    picklist, so the caller must pass a mapped value.
+    """
+    return await push_profile(
+        crm_user_id, Education_Level__c=str(level).strip() or None
+    )
 
 
 async def push_conversation_id(crm_user_id: str, conversation_id: str) -> bool:

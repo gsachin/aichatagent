@@ -83,6 +83,22 @@ DOCUMENT_TYPE_MAP: dict[str, str] = {
     "other": "Other",
 }
 
+# Canonical types accepted by the API's validation endpoint. Only documents the
+# validator models are listed; anything else goes through the raw lane.
+VALIDATION_DOCUMENT_TYPE_MAP: dict[str, str] = {
+    "transcript": "UNDERGRADUATE_TRANSCRIPT",
+    "academic_transcript": "UNDERGRADUATE_TRANSCRIPT",
+    "marksheet": "CLASS_12_MARKSHEET",
+    "id_proof": "ID_PROOF",
+    "id": "ID_PROOF",
+    "passport": "ID_PROOF",
+    "ielts": "IELTS",
+    "sat": "SAT",
+    "gre": "GRE",
+    "gmat": "GMAT",
+    "toefl": "TOEFL",
+}
+
 # app/sentiment/categorizer.py:31-35 → Sentiment__c.  A clean .upper() for all
 # five, including At-Risk, which already carries the hyphen the CRM uses. (The
 # separate Lead_Category__c field spells it "AT RISK" — do not copy across.)
@@ -399,6 +415,45 @@ def map_document_type(value: object) -> str:
             f"crm.identity: document type {value!r} has no mapping — filing as 'Other'"
         )
     return "Other"
+
+
+def validation_document_type(value: object) -> str | None:
+    """
+    Map this app's ``doc_type`` onto the API's canonical validation type.
+
+    Returns ``None`` when the type needs a student decision (``test_score``
+    could be SAT/GRE/GMAT/TOEFL) or the validator does not model it (resume,
+    financial, recommendation, other). Those go through the raw lane.
+    """
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return VALIDATION_DOCUMENT_TYPE_MAP.get(text)
+
+
+def program_level(value: object) -> str | None:
+    """
+    Map a Meridian program name onto ``Education_Level__c``.
+
+    MBA is intentionally ``Master's``: the API checks ``Course__c == "MBA"``
+    before ``Education_Level__c``, and the org's picklist has no MBA value.
+    Returns None for a name that cannot be classified, so the caller declines
+    to send rather than guessing.
+    """
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text == "MBA" or ("BUSINESS ADMINISTRATION" in text and "MASTER" in text):
+        return "Master's"
+    if text.startswith((
+        "B.TECH", "BTECH", "B.SC", "BSC", "BACHELOR",
+        "BBA", "BCA", "B.COM", "BCOM", "B.A", "BA",
+    )):
+        return "Bachelor's"
+    if text.startswith((
+        "M.TECH", "MTECH", "M.SC", "MSC", "MASTER",
+        "MCA", "M.COM", "MCOM", "M.A", "MA",
+    )):
+        return "Master's"
+    return None
 
 
 def map_lead_category(value: object) -> str | None:

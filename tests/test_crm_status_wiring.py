@@ -45,7 +45,11 @@ def client(monkeypatch):
 @pytest.fixture
 def lead_store(monkeypatch):
     """The lead columns the course and conversation syncs read and write."""
-    store = {"crm_course": "", "crm_conversation_id": ""}
+    store = {
+        "crm_course": "",
+        "crm_education_level": "",
+        "crm_conversation_id": "",
+    }
     calls = {"sets": 0}
 
     async def get_lead_crm_course(lead_id):
@@ -54,6 +58,13 @@ def lead_store(monkeypatch):
     async def set_lead_crm_course(lead_id, course):
         calls["sets"] += 1
         store["crm_course"] = course or ""
+        return True
+
+    async def get_lead_crm_education_level(lead_id):
+        return store["crm_education_level"]
+
+    async def set_lead_crm_education_level(lead_id, level):
+        store["crm_education_level"] = level or ""
         return True
 
     async def get_lead_crm_conversation_id(lead_id):
@@ -68,6 +79,12 @@ def lead_store(monkeypatch):
 
     monkeypatch.setattr("app.leads.models.get_lead_crm_course", get_lead_crm_course)
     monkeypatch.setattr("app.leads.models.set_lead_crm_course", set_lead_crm_course)
+    monkeypatch.setattr(
+        "app.leads.models.get_lead_crm_education_level", get_lead_crm_education_level
+    )
+    monkeypatch.setattr(
+        "app.leads.models.set_lead_crm_education_level", set_lead_crm_education_level
+    )
     monkeypatch.setattr(
         "app.leads.models.get_lead_crm_conversation_id", get_lead_crm_conversation_id
     )
@@ -205,8 +222,9 @@ async def test_an_already_linked_lead_still_publishes_a_changed_program(
 
     The conversation id rides the same branch for the same reason: the CRM holds
     whichever conversation was current when the record was created, so a repeat
-    caller needs this early return to repoint it (plan R6/A4). Two writes, in
-    this order — course first, so the request sequence stays stable.
+    caller needs this early return to repoint it (plan R6/A4). Three writes, in
+    this order — course, education level, conversation — so the request sequence
+    stays stable.
     """
     sent, _ = client
     store, _ = lead_store
@@ -220,9 +238,13 @@ async def test_an_already_linked_lead_still_publishes_a_changed_program(
     )
 
     assert result == USER
-    assert len(sent) == 2, "the changed program and the conversation must be published"
+    assert len(sent) == 3, (
+        "the changed program, education level and conversation must be published"
+    )
     assert sent[0]["body"] == {"Course__c": "MBA"}
-    assert sent[1]["body"] == {"Conversation_ID__c": "conv-2"}
+    assert sent[1]["body"] == {"Education_Level__c": "Master's"}
+    assert sent[2]["body"] == {"Conversation_ID__c": "conv-2"}
+    assert store["crm_education_level"] == "Master's"
     assert store["crm_conversation_id"] == "conv-2"
 
 

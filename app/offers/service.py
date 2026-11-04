@@ -344,3 +344,72 @@ async def generate_and_send_offer(
         logger.exception(f"Offer {offer['id']}: could not publish the release to the CRM")
 
     return offer
+
+
+async def record_validation_and_shadow(
+    *, lead_id: str, doc_id: str, response: dict
+) -> None:
+    """
+    Store the validation API's evidence and log the would-be offer decision.
+
+    Shadow mode only: the decision is computed and logged, never enforced. The
+    caller is the background document-upload task, so this never raises and
+    never affects the student's upload.
+    """
+    from app.config import settings
+    from app.leads.models import get_lead, set_lead_crm_course_eligibility
+    from app.offers.eligibility import assess_offer_eligibility
+    from app.offers.models import list_validation_results, set_document_validation
+
+    def first(*keys: str) -> str:
+        for key in keys:
+            value = response.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
+    try:
+        raw_codes = response.get("reason_codes") or []
+        if isinstance(raw_codes, (list, tuple)):
+            reason_text = "; ".join(str(code) for code in raw_codes)
+        else:
+            reason_text = str(raw_codes)
+
+        await set_document_validation(
+            doc_id,
+            api_document_type=str(response.get("document_type") or ""),
+            validation_status=str(response.get("validation_status") or ""),
+            requirement_status=str(response.get("requirement_status") or ""),
+            extracted_score=first(
+                "extracted_percentage", "extracted_gpa", "extracted_score"
+            ),
+            score_threshold=first(
+                "minimum_required_percentage",
+                "minimum_required_gpa",
+                "minimum_required_score",
+            ),
+            reason_codes=reason_text,
+            validation_message=str(response.get("message") or ""),
+            action_required=str(response.get("action_required") or ""),
+            is_active=response.get("is_active"),
+        )
+
+        course_eligibility = str(response.get("course_eligibility") or "")
+        if course_eligibility:
+            await set_lead_crm_course_eligibility(lead_id, course_eligibility)
+
+        lead = await get_lead(lead_id)
+        rows = await list_validation_results(lead_id)
+        decision = assess_offer_eligibility(
+            lead, (lead or {}).get("program_interest", ""), rows
+        )
+        if settings.OFFER_ELIGIBILITY_SHADOW:
+            logger.info(
+                f"offer shadow: lead={lead_id} doc={doc_id} "
+                f"action={decision.action} reason={decision.reason} "
+                f"evidence={decision.evidence}"
+            )
+    except Exception:
+        logger.exception(
+            f"offer shadow: could not record validation evidence for doc {doc_id}"
+        )

@@ -261,6 +261,7 @@ async def add_document(
     doc_type: str = "other",
     mime_type: str = "",
     size_bytes: int = 0,
+    sha256: str = "",
 ) -> dict | None:
     """Record a new document for a lead."""
     doc_id = str(_uuid.uuid4())
@@ -272,11 +273,12 @@ async def add_document(
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO lead_documents (id, lead_id, filename, stored_path, "
-                "doc_type, mime_type, size_bytes, uploaded_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "doc_type, mime_type, size_bytes, uploaded_at, sha256) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "RETURNING id, lead_id, filename, stored_path, doc_type, "
                 "mime_type, size_bytes, uploaded_at",
-                (doc_id, lead_id, filename, stored_path, doc_type, mime_type, size_bytes, now),
+                (doc_id, lead_id, filename, stored_path, doc_type, mime_type,
+                 size_bytes, now, sha256 or None),
             )
             row = cur.fetchone()
         conn.close()
@@ -665,6 +667,145 @@ async def set_document_crm_upload(
     except Exception:
         logger.exception("Failed to record CRM upload state for a document")
         return False
+
+
+async def set_document_validation(
+    doc_id: str,
+    *,
+    api_document_type: str = "",
+    validation_status: str = "",
+    requirement_status: str = "",
+    extracted_score: str = "",
+    score_threshold: str = "",
+    reason_codes: str = "",
+    validation_message: str = "",
+    action_required: str = "",
+    is_active: bool | None = None,
+    sha256: str = "",
+) -> bool:
+    """
+    Record the validation API's evidence for one document row.
+
+    Empty strings are skipped, so a partial update cannot erase a value the API
+    sent earlier. ``is_active=False`` is written explicitly (it is meaningful:
+    a later document superseded this one).
+    """
+    if not doc_id:
+        return False
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return False
+        set_parts: list[str] = []
+        values: list = []
+        for column, value in (
+            ("api_document_type", api_document_type),
+            ("validation_status", validation_status),
+            ("requirement_status", requirement_status),
+            ("extracted_score", extracted_score),
+            ("score_threshold", score_threshold),
+            ("reason_codes", reason_codes),
+            ("validation_message", validation_message),
+            ("action_required", action_required),
+            ("sha256", sha256),
+        ):
+            if value:
+                set_parts.append(f"{column} = %s")
+                values.append(value)
+        if is_active is not None:
+            set_parts.append("is_active = %s")
+            values.append(is_active)
+        if not set_parts:
+            conn.close()
+            return False
+        values.append(doc_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE lead_documents SET {', '.join(set_parts)} WHERE id = %s",
+                values,
+            )
+        conn.close()
+        return True
+    except Exception:
+        logger.exception("Failed to record validation evidence for a document")
+        return False
+
+
+async def list_validation_results(lead_id: str) -> list[dict]:
+    """Validation evidence for a lead, oldest first.
+
+    The offer decision uses the active rows; ordering makes "latest active"
+    deterministic when more than one document of a type exists.
+    """
+    if not lead_id:
+        return []
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT doc_type, api_document_type, validation_status, "
+                "requirement_status, extracted_score, score_threshold, "
+                "reason_codes, validation_message, action_required, is_active, "
+                "uploaded_at FROM lead_documents WHERE lead_id = %s "
+                "ORDER BY uploaded_at ASC",
+                (lead_id,),
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [
+            {
+                "doc_type": r[0] or "",
+                "api_document_type": r[1] or "",
+                "validation_status": r[2] or "",
+                "requirement_status": r[3] or "",
+                "extracted_score": r[4] or "",
+                "score_threshold": r[5] or "",
+                "reason_codes": r[6] or "",
+                "validation_message": r[7] or "",
+                "action_required": r[8] or "",
+                "is_active": r[9],
+                "uploaded_at": _ts_to_str(r[10]),
+            }
+            for r in rows
+        ]
+    except Exception:
+        logger.exception("Failed to list validation evidence")
+        return []
+
+
+async def find_document_by_sha256(lead_id: str, sha256: str) -> dict | None:
+    """Find an already-uploaded identical document for this lead."""
+    if not lead_id or not sha256:
+        return None
+
+    try:
+        conn = _get_db()
+        if not conn:
+            return None
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, filename, stored_path, doc_type, uploaded_at "
+                "FROM lead_documents WHERE lead_id = %s AND sha256 = %s LIMIT 1",
+                (lead_id, sha256),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "filename": row[1] or "",
+            "stored_path": row[2] or "",
+            "doc_type": row[3] or "",
+            "uploaded_at": _ts_to_str(row[4]),
+        }
+    except Exception:
+        logger.exception("Failed to look up a document by sha256")
+        return None
 
 
 async def list_expired_offers(limit: int = 20) -> list[dict]:

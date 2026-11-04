@@ -241,6 +241,9 @@ async def link_conversation(
         # This is the branch that catches it, because from the second turn
         # onward it is the only branch that runs.
         await sync_course(lead_id, existing, course or lead.get("program_interest") or "")
+        await sync_education_level(
+            lead_id, existing, course or lead.get("program_interest") or ""
+        )
 
         # The conversation linkage has the same create-time-only problem, and
         # this is the branch that can fix it on every turn after the first.
@@ -284,6 +287,7 @@ async def link_conversation(
     # a change is pushed.
     if lead_id and ident.course:
         await sync_course(lead_id, user_id, ident.course)
+        await sync_education_level(lead_id, user_id, ident.course)
 
     # Point the CRM at this conversation too — ``lookup-or-create`` will have
     # written the id for a new record, but not for an existing one.
@@ -345,6 +349,52 @@ async def sync_course(lead_id: str, crm_user_id: str, course: str) -> bool:
         except Exception:
             logger.exception("crm.sync: could not cache the pushed course")
     logger.info(f"crm.sync: course for {crm_user_id} published as {wanted!r}")
+    return True
+
+
+# ── education level ──────────────────────────────────────────────────────────
+
+async def sync_education_level(lead_id: str, crm_user_id: str, program: str) -> bool:
+    """
+    Publish the program level and skip the write if it is unchanged.
+
+    The validation API needs an explicit level to choose the academic gate.
+    Without it, programs like BBA/BCA cannot be classified and their document
+    uploads are rejected. Same shape as :func:`sync_course`: compare against the
+    last value pushed, so the common case costs a database read and no network
+    call.
+    """
+    wanted = identity_mod.program_level(program)
+    if not lead_id or not crm_user_id or not wanted:
+        return False
+
+    try:
+        from app.leads.models import (
+            get_lead_crm_education_level,
+            set_lead_crm_education_level,
+        )
+
+        if await get_lead_crm_education_level(lead_id) == wanted:
+            return False  # already published
+    except Exception:
+        logger.exception(
+            "crm.sync: could not read the cached education level — pushing anyway"
+        )
+        set_lead_crm_education_level = None  # type: ignore[assignment]
+
+    from app.crm.status import push_education_level
+
+    if not await push_education_level(crm_user_id, wanted):
+        return False
+
+    if set_lead_crm_education_level is not None:
+        try:
+            await set_lead_crm_education_level(lead_id, wanted)
+        except Exception:
+            logger.exception("crm.sync: could not cache the pushed education level")
+    logger.info(
+        f"crm.sync: education level for {crm_user_id} published as {wanted!r}"
+    )
     return True
 
 
