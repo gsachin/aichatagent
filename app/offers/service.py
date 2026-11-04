@@ -419,6 +419,59 @@ async def generate_and_send_offer(
     return offer
 
 
+async def maybe_send_offer_after_validation(
+    lead_id: str, *, doc_id: str = ""
+) -> None:
+    """
+    Continue a WhatsApp application after a document finished validating.
+
+    The CRM upload runs in the background, so the offer — or the reason it was
+    blocked — cannot be part of the webhook's reply. It is sent here instead,
+    and only for the document that produced the current decision, so uploading
+    an ID proof after the transcript does not re-send anything.
+
+    This is the "generate the offer when the marks meet the requirement" rule
+    for WhatsApp: the student does not have to type "done" after a passing
+    gate document. "done" still works as a fallback.
+
+    Never raises: it runs inside the upload task, which must not fail because
+    a follow-up message could not be delivered.
+    """
+    try:
+        from app.config import settings
+        from app.leads.models import get_lead
+        from app.messaging import send_whatsapp_message
+
+        if settings.OFFER_ELIGIBILITY_SHADOW:
+            return
+
+        lead = await get_lead(lead_id)
+        if not lead or str(lead.get("source") or "").strip().lower() != "whatsapp":
+            return
+
+        readiness = await evaluate_offer_readiness(lead_id)
+        decision = readiness.get("decision")
+        if decision is None or readiness["missing"]:
+            return
+
+        evidence_doc = str(decision.evidence.get("document_id") or "")
+        if doc_id and evidence_doc and evidence_doc != str(doc_id):
+            return
+
+        if decision.action == "issue":
+            await generate_and_send_offer(lead_id, channel="whatsapp")
+        elif decision.action in ("block_not_eligible", "block_review"):
+            phone = lead.get("phone_number") or ""
+            if phone:
+                send_whatsapp_message(
+                    _wa(phone), _wa(_whatsapp_from()), decision.message
+                )
+    except Exception:
+        logger.exception(
+            f"Lead {lead_id}: could not continue the WhatsApp offer conversation"
+        )
+
+
 async def record_validation_and_shadow(
     *, lead_id: str, doc_id: str, response: dict
 ) -> None:

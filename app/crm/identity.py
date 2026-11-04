@@ -122,23 +122,36 @@ WHATSAPP_DOCUMENT_MENU = (
 )
 
 _DOCUMENT_TYPE_ALIASES: dict[str, str] = {
-    "12": "marksheet",
+    # Bare "12" and "10" are deliberately absent: a digit is a menu number
+    # first, so "12" means item 12 (Recommendation Letter), not Class 12.
     "12th": "marksheet",
+    "12 th": "marksheet",
+    "twelfth": "marksheet",
     "class 12": "marksheet",
     "class12": "marksheet",
+    "hsc": "marksheet",
     "12th marksheet": "marksheet",
-    "10": "marksheet_10",
+    "12th marks card": "marksheet",
     "10th": "marksheet_10",
+    "10 th": "marksheet_10",
+    "tenth": "marksheet_10",
     "class 10": "marksheet_10",
     "class10": "marksheet_10",
+    "ssc": "marksheet_10",
     "10th marksheet": "marksheet_10",
+    "10th marks card": "marksheet_10",
     "transcript": "transcript",
     "academic transcript": "transcript",
     "undergraduate transcript": "transcript",
+    "degree transcript": "transcript",
+    "college transcript": "transcript",
     "id": "id_proof",
     "id proof": "id_proof",
     "id document": "id_proof",
+    "id card": "id_proof",
     "passport": "id_proof",
+    "aadhaar": "id_proof",
+    "aadhar": "id_proof",
     "sat": "sat",
     "gre": "gre",
     "gmat": "gmat",
@@ -146,40 +159,115 @@ _DOCUMENT_TYPE_ALIASES: dict[str, str] = {
     "ielts": "ielts",
     "resume": "resume",
     "cv": "resume",
+    "curriculum vitae": "resume",
     "financial": "financial",
     "financial document": "financial",
+    "bank statement": "financial",
     "recommendation": "recommendation",
     "recommendation letter": "recommendation",
+    "letter of recommendation": "recommendation",
+    "reference letter": "recommendation",
     "lor": "recommendation",
     "other": "other",
 }
+
+# Natural replies wrap the answer in words — "its transcript", "this is my
+# 12th marksheet", "i am sending the gmat score". Strip the wrappers before
+# matching so the student does not have to reproduce the menu label exactly.
+_CHOICE_FILLERS = (
+    "its", "it's", "it s", "it is", "this is", "that is", "this", "that",
+    "my", "the", "here is", "here's", "here s", "attached is", "document is",
+    "this document is", "i am sending", "i'm sending", "i m sending",
+    "sending", "i want to upload", "i uploaded", "uploaded", "file is",
+)
+
+# Distinctive words, checked in order. Short tokens use word boundaries so
+# "great" never matches GRE and "satisfied" never matches SAT.
+_CHOICE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    (r"\b(?:undergraduate|academic|college|university|degree)\s+transcript\b", "transcript"),
+    (r"\btranscript\b", "transcript"),
+    (r"\b(?:12th|12\s*th|twelfth|class\s*12|hsc)\b", "marksheet"),
+    (r"\b(?:10th|10\s*th|tenth|class\s*10|ssc)\b", "marksheet_10"),
+    (r"\bsat\b", "sat"),
+    (r"\bgre\b", "gre"),
+    (r"\bgmat\b", "gmat"),
+    (r"\btoefl\b", "toefl"),
+    (r"\bielts\b", "ielts"),
+    (r"\b(?:passport|aadhaar|aadhar|id\s+proof|id\s+document|id\s+card)\b", "id_proof"),
+    (r"\b(?:resume|cv|curriculum\s+vitae)\b", "resume"),
+    (r"\b(?:financial|bank\s+statement|fee\s+receipt|income\s+certificate)\b", "financial"),
+    (r"\b(?:recommendation|letter\s+of\s+recommendation|reference\s+letter|lor)\b", "recommendation"),
+    (r"\bother\b", "other"),
+)
+
+
+def _normalize_choice(text: str) -> str:
+    """Lowercase, strip punctuation, and drop conversational wrappers."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    previous = None
+    while previous != normalized:
+        previous = normalized
+        for filler in _CHOICE_FILLERS:
+            if normalized == filler:
+                return ""
+            if normalized.startswith(filler + " "):
+                normalized = normalized[len(filler) + 1:].strip()
+    return normalized
 
 
 def match_upload_document_type(value: object) -> str | None:
     """
     Resolve a WhatsApp reply to one of ``UPLOAD_DOCUMENT_TYPES``.
 
-    Accepts the number shown in the menu ("7"), the exact label
-    ("GMAT Score Report"), or a common alias ("gmat", "12th", "transcript").
-    Returns None when the reply is not a recognisable choice, so the caller can
-    re-send the menu instead of guessing.
+    Accepts the number shown in the menu ("7"), an exact label ("GMAT Score
+    Report"), a common alias ("gmat", "12th", "transcript"), or a natural
+    sentence ("its transcript", "this is my 12th marksheet"). Returns None when
+    the reply is not a recognisable choice, so the caller can re-send the menu
+    instead of guessing.
     """
     text = str(value or "").strip()
     if not text:
         return None
 
-    # "7", "7.", "7)" are all natural replies to a numbered menu.
+    # "7", "7.", "7)" are all natural replies to a numbered menu. A digit is
+    # always a menu position — never an alias for "12th"/"10th".
     numbered = text.rstrip(".)").strip()
     if numbered.isdigit():
         options = list(UPLOAD_DOCUMENT_TYPES.values())
         index = int(numbered) - 1
         return options[index] if 0 <= index < len(options) else None
 
-    lowered = text.lower()
+    lowered = _normalize_choice(text)
+    if not lowered:
+        return None
+
     for label, app_value in UPLOAD_DOCUMENT_TYPES.items():
-        if lowered == label.lower():
+        if lowered == _normalize_choice(label):
             return app_value
-    return _DOCUMENT_TYPE_ALIASES.get(lowered)
+    alias = _DOCUMENT_TYPE_ALIASES.get(lowered)
+    if alias:
+        return alias
+
+    for pattern, app_value in _CHOICE_KEYWORDS:
+        if re.search(pattern, lowered):
+            return app_value
+    return None
+
+
+# The academic document each program level is judged on. A student who sends
+# the other level's academic record can be told immediately, instead of waiting
+# for the API to reject it as "not accepted for this program".
+_GATE_DOCUMENTS: dict[str, tuple[str, str]] = {
+    "Bachelor's": ("CLASS_12_MARKSHEET", "12th marksheet"),
+    "Master's": ("UNDERGRADUATE_TRANSCRIPT", "undergraduate transcript"),
+}
+
+
+def program_gate_document(program: object) -> tuple[str, str] | None:
+    """The API document type and human label that gate this program, or None."""
+    level = program_level(program)
+    return _GATE_DOCUMENTS.get(level or "")
 
 # Canonical types accepted by the API's validation endpoint. Only documents the
 # validator models are listed; anything else goes through the raw lane.

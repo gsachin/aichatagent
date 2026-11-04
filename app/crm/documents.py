@@ -945,6 +945,14 @@ async def upload_student_document(
                 logger.exception(
                     "crm.documents: could not record validation evidence"
                 )
+            try:
+                from app.offers.service import maybe_send_offer_after_validation
+
+                await maybe_send_offer_after_validation(lead_id, doc_id=doc_id)
+            except Exception:
+                logger.exception(
+                    "crm.documents: could not continue the offer conversation"
+                )
         return result.document_id
 
     await set_document_crm_upload(doc_id, status=result.status)

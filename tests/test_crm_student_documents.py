@@ -544,6 +544,41 @@ def test_whatsapp_document_menu_matches_numbers_labels_and_aliases():
     assert "TOEFL Score Report" in ident.WHATSAPP_DOCUMENT_MENU
 
 
+def test_whatsapp_document_menu_accepts_natural_sentences():
+    """A student writes a sentence, not the menu label (2026-11-05 chat)."""
+    assert ident.match_upload_document_type("its transcript") == "transcript"
+    assert ident.match_upload_document_type("It's my transcript") == "transcript"
+    assert ident.match_upload_document_type("This is my 12th marksheet") == "marksheet"
+    assert ident.match_upload_document_type("i am sending the gmat score") == "gmat"
+    assert ident.match_upload_document_type("my 10th marks card") == "marksheet_10"
+    assert ident.match_upload_document_type("my bank statement") == "financial"
+    assert ident.match_upload_document_type("letter of recommendation") == "recommendation"
+    assert ident.match_upload_document_type("my aadhaar card") == "id_proof"
+
+    # A digit is always a menu position, never an alias for 10th/12th.
+    assert ident.match_upload_document_type("12") == "recommendation"
+    assert ident.match_upload_document_type("10") == "resume"
+
+    # Short exam names must not match inside ordinary words.
+    assert ident.match_upload_document_type("great") is None
+    assert ident.match_upload_document_type("satisfied") is None
+    # A bare "marksheet" is ambiguous between Class 10 and Class 12.
+    assert ident.match_upload_document_type("my marksheet") is None
+
+
+def test_program_gate_document_is_the_academic_record_the_api_gates_on():
+    assert ident.program_gate_document("MBA") == (
+        "UNDERGRADUATE_TRANSCRIPT", "undergraduate transcript",
+    )
+    assert ident.program_gate_document("M.Tech") == (
+        "UNDERGRADUATE_TRANSCRIPT", "undergraduate transcript",
+    )
+    assert ident.program_gate_document("B.Tech Computer Science") == (
+        "CLASS_12_MARKSHEET", "12th marksheet",
+    )
+    assert ident.program_gate_document("") is None
+
+
 def test_upload_labels_map_to_known_doc_types():
     for label, value in ident.UPLOAD_DOCUMENT_TYPES.items():
         assert (

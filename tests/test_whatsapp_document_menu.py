@@ -175,3 +175,37 @@ def test_invalid_reply_re_sends_the_menu_and_keeps_the_document_pending(harness)
     assert state["cleared"] == []
     assert state["pending"] is not None
     assert calls["rag"] == []
+
+
+def test_natural_sentence_files_the_type_without_re_showing_the_menu(harness):
+    """The 2026-11-05 chat replied "its transcript" and got the menu again."""
+    _session, _lead, state, _calls = harness
+
+    reply = send("its transcript")
+
+    assert "Filed as Undergraduate Transcript" in reply
+    assert "What type of document is this?" not in reply
+    assert [d["doc_type"] for d in state["added"]] == ["transcript"]
+
+
+def test_wrong_academic_document_for_an_mba_is_called_out(harness):
+    """An MBA application is judged on the UG transcript, not Class 12."""
+    _session, lead, state, _calls = harness
+    lead["program_interest"] = "MBA"
+
+    reply = send("1")
+
+    assert "Filed as 12th Marksheet" in reply
+    assert "evaluated on your undergraduate transcript" in reply
+    assert [d["doc_type"] for d in state["added"]] == ["marksheet"]
+
+
+def test_gate_document_reply_explains_that_the_offer_is_being_checked(harness):
+    _session, lead, state, _calls = harness
+    lead["program_interest"] = "MBA"
+
+    reply = send("3")
+
+    assert "Filed as Undergraduate Transcript" in reply
+    assert "checking your marks now" in reply
+    assert [d["doc_type"] for d in state["added"]] == ["transcript"]

@@ -787,7 +787,7 @@ async def list_validation_results(lead_id: str) -> list[dict]:
             return []
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT doc_type, api_document_type, validation_status, "
+                "SELECT id, doc_type, api_document_type, validation_status, "
                 "requirement_status, extracted_score, score_threshold, "
                 "reason_codes, validation_message, action_required, is_active, "
                 "uploaded_at FROM lead_documents WHERE lead_id = %s "
@@ -798,17 +798,18 @@ async def list_validation_results(lead_id: str) -> list[dict]:
         conn.close()
         return [
             {
-                "doc_type": r[0] or "",
-                "api_document_type": r[1] or "",
-                "validation_status": r[2] or "",
-                "requirement_status": r[3] or "",
-                "extracted_score": r[4] or "",
-                "score_threshold": r[5] or "",
-                "reason_codes": r[6] or "",
-                "validation_message": r[7] or "",
-                "action_required": r[8] or "",
-                "is_active": r[9],
-                "uploaded_at": _ts_to_str(r[10]),
+                "document_id": str(r[0]),
+                "doc_type": r[1] or "",
+                "api_document_type": r[2] or "",
+                "validation_status": r[3] or "",
+                "requirement_status": r[4] or "",
+                "extracted_score": r[5] or "",
+                "score_threshold": r[6] or "",
+                "reason_codes": r[7] or "",
+                "validation_message": r[8] or "",
+                "action_required": r[9] or "",
+                "is_active": r[10],
+                "uploaded_at": _ts_to_str(r[11]),
             }
             for r in rows
         ]

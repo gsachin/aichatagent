@@ -3425,6 +3425,8 @@ async def twilio_whatsapp_webhook(
                 UPLOAD_DOCUMENT_TYPES,
                 WHATSAPP_DOCUMENT_MENU,
                 match_upload_document_type,
+                program_gate_document,
+                validation_document_type,
             )
 
             chosen_type = match_upload_document_type(Body)
@@ -3484,10 +3486,32 @@ async def twilio_whatsapp_webhook(
                         ),
                         chosen_type,
                     )
-                    answer = (
-                        f"✅ Filed as {label}. Send another document, or type "
-                        "'done' when you're finished."
-                    )
+                    # Tell the student what happens next for THIS program. The
+                    # 2026-11-05 MBA chat filed a 12th marksheet and heard only
+                    # "Filed as ...", so the missing transcript looked like a
+                    # bot failure. The upload continues in the background; a
+                    # passing gate document triggers the offer from there.
+                    gate = program_gate_document(lead_program)
+                    api_type = validation_document_type(chosen_type) or ""
+                    if gate and api_type == gate[0]:
+                        answer = (
+                            f"✅ Filed as {label}. I'm checking your marks now — "
+                            f"if they meet the {gate[1]} requirement, I'll send "
+                            "your offer letter here."
+                        )
+                    elif gate and api_type in (
+                        "CLASS_12_MARKSHEET", "UNDERGRADUATE_TRANSCRIPT"
+                    ):
+                        answer = (
+                            f"✅ Filed as {label}. Your application is evaluated "
+                            f"on your {gate[1]} — please send that too. Type "
+                            "'done' when you're finished."
+                        )
+                    else:
+                        answer = (
+                            f"✅ Filed as {label}. Send another document, or type "
+                            "'done' when you're finished."
+                        )
 
             background_tasks.add_task(
                 _log_whatsapp_conversation,
