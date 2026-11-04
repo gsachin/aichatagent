@@ -15,7 +15,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from app.offers import service as svc
+
+
+@pytest.fixture(autouse=True)
+def _shadow_mode(override_settings):
+    """These tests pin the CRM hook, not the marks gate; keep it in shadow."""
+    override_settings(OFFER_ELIGIBILITY_SHADOW=True)
+
 
 LEAD = {
     "id": "lead-1",
@@ -65,6 +74,7 @@ def _stub_offer_surface(monkeypatch, *, offer_id="abcd1234-0000-0000-0000-000000
 
     monkeypatch.setattr("app.leads.models.get_lead", _async_ret(dict(LEAD)))
     monkeypatch.setattr("app.offers.models.list_documents", _async_ret([{"id": "doc-1"}]))
+    monkeypatch.setattr("app.offers.models.list_validation_results", _async_ret([]))
     monkeypatch.setattr("app.offers.models.get_recent_offer_for_lead", _async_ret(None))
     monkeypatch.setattr("app.offers.models.get_course_by_name", _async_ret(dict(COURSE)))
     monkeypatch.setattr("app.offers.models.create_offer_letter", create_offer_letter)

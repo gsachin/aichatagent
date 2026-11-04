@@ -59,6 +59,12 @@ class TestEvaluateOfferReadiness:
         }
 
     @pytest.fixture(autouse=True)
+    def _shadow_mode(self, override_settings):
+        """The historical readiness rule is the default; enforcement tests
+        override this to False."""
+        override_settings(OFFER_ELIGIBILITY_SHADOW=True)
+
+    @pytest.fixture(autouse=True)
     def _empty_validation_rows(self, monkeypatch):
         async def fake_rows(_):
             return []

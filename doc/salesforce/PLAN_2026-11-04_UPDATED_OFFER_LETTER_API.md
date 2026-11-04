@@ -2,9 +2,10 @@
 
 **Date:** 2026-11-04
 **Branch:** `salesforce-offer-update` (universityDemo)
-**Status:** Phases 1–4 complete. Phase 5 cutover applied and the four live gates pass on `:8098`;
-the live demo send and status-doc update are still pending. Remaining polish: `sha256` dedupe
-wiring, `strict` mode, operator view, latency.
+**Status:** Phases 1–4 complete. Phase 5 cutover applied; the four live gates pass and the
+Streamlit/web flow is verified end-to-end. The WhatsApp transport test is next (blocked on the
+inactive Twilio account). Remaining polish: `sha256` dedupe wiring, `strict` mode, operator view,
+latency.
 **Commits:** UD plan `60ff7a7`; `NEW` baseline `ae46db0`; `NEW` Phase 1 `0bc5aca`.
 **Scope:** Replace the live `salesforce-admission-api` at `:8098` with the updated
 `salesforce-admission-api-main_updated_offer_letter` build **and change the offer rule from
@@ -887,18 +888,28 @@ Done:
       voice **5/0**.
 - [x] The 118 stale test outbox entries were drained through the app's own `flush_outbox` (not
       truncated); Gate 7 C7 then passed.
-- [ ] Full live demo send (pass → offer with evidence; below threshold; re-upload). Pending a
-      decision on the test contact / transport.
+- [x] **Streamlit UI completed.** Both upload widgets now render the validation status, extracted
+      mark vs requirement, the blocked-decision message, and the Basis of Offer. The backend
+      `POST /api/leads/{lead_id}/documents` now **awaits validation** in updated mode before
+      deciding, fixing a race where a passing document was judged before its marks were stored.
+      The UI uses `127.0.0.1` and a 180 s upload timeout for OCR.
+- [x] **Web flow verified end-to-end (2026-11-04):** test lead + Customer, upload HTTP 200,
+      decision `issue` with 70.83 / 70.0, offer generated, offer row
+      `status=sent, crm_upload_status=uploaded, eligibility_action=issue`, CRM document
+      `068T100000nkO3TIAU`. Lead and Customer cleaned up.
+- [ ] WhatsApp/email transport test. Twilio account `ACae5d…abd8` is inactive (status 4), so a real
+      WhatsApp delivery cannot be tested until it is reactivated or replaced.
 - [ ] Add a cutover status note and update `STATUS_AND_VALIDATION.md`.
 - [ ] Monitor `crm_upload_status` and the decision log.
 
 **Gate 5 — cutover gates green (2026-11-04).** The four live harnesses pass against the new API on
-`:8098`. The email/WhatsApp offer send has **not** been exercised in this cutover; the Twilio
-account returned 401 (status 4) in earlier background logs. Rollback: stop the new API, restore
-`.env.bak-cutover-20261104`, and revert the `$CrmApiRoot` default — the old repo is untouched.
+`:8098`, and the Streamlit web flow issues an offer with evidence and uploads it to the CRM. The
+email/WhatsApp offer send has **not** been exercised; the Twilio account returns 401 (status 4).
+Rollback: stop the new API, restore `.env.bak-cutover-20261104`, and revert the `$CrmApiRoot`
+default — the old repo is untouched.
 
-Residue from the Gate 5 offer-upload run: ContentVersion `068T100000njN7oIAE` on
-`APP-4D2E91425A`.
+Residue: ContentVersion `068T100000njN7oIAE` on `APP-4D2E91425A` (Gate 5 offer upload) and
+`068T100000nkO3TIAU` on the deleted web-flow test Customer.
 
 ---
 

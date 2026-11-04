@@ -5146,18 +5146,36 @@ async def api_upload_document(
             pass
         return JSONResponse({"error": "Database unavailable"}, status_code=503)
 
-    # Hand the student's document to the CRM (backgrounded — three HTTP calls
-    # must not sit in the student's upload request).
+    # Hand the student's document to the CRM. In updated mode the validation
+    # must finish before the offer decision below: the background scheduler
+    # returns immediately, so the decision would race the marks extraction and
+    # a passing document could be judged as "missing". The update is one HTTP
+    # call with the OCR performed upstream; the client timeout is raised to
+    # match.
     if doc.get("id"):
-        try:
-            from app.crm.documents import schedule_document_upload
+        if settings.CRM_UPLOAD_MODE.strip().lower() == "updated":
+            try:
+                from app.crm.documents import upload_student_document
 
-            schedule_document_upload(
-                lead_id=lead_id, doc_id=str(doc["id"]), file_path=str(stored_path),
-                doc_type=doc_type, original_name=safe_name,
-            )
-        except Exception:
-            logger.exception("Could not schedule the CRM upload for a document")
+                await upload_student_document(
+                    lead_id=lead_id, doc_id=str(doc["id"]),
+                    file_path=str(stored_path), doc_type=doc_type,
+                    original_name=safe_name,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not validate the document before the offer decision"
+                )
+        else:
+            try:
+                from app.crm.documents import schedule_document_upload
+
+                schedule_document_upload(
+                    lead_id=lead_id, doc_id=str(doc["id"]), file_path=str(stored_path),
+                    doc_type=doc_type, original_name=safe_name,
+                )
+            except Exception:
+                logger.exception("Could not schedule the CRM upload for a document")
 
     # Auto-trigger offer letter if the lead is fully ready
     offer_result = None

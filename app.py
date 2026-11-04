@@ -89,6 +89,93 @@ def _resolve_public_backend() -> str:
     return "http://localhost:8000"
 
 
+# ── Upload feedback: validation, marks and the offer decision ───────
+
+def _evidence_line(evidence: dict) -> str:
+    """One-line, student-safe summary of the marks that decided the offer."""
+    if not evidence:
+        return ""
+    gate = str(evidence.get("gate_document") or "")
+    if gate == "CLASS_12_MARKSHEET":
+        label, suffix = "Class 12 marksheet", "%"
+    elif gate == "UNDERGRADUATE_TRANSCRIPT":
+        label, suffix = "Undergraduate transcript", ""
+    else:
+        label, suffix = "Academic document", ""
+
+    parts = [label]
+    mark = str(evidence.get("score") or "")
+    threshold = str(evidence.get("threshold") or "")
+    status = str(evidence.get("validation_status") or "")
+    if mark:
+        parts.append(f"mark {mark}{suffix}")
+    if threshold:
+        parts.append(f"requirement {threshold}{suffix}")
+    if status:
+        parts.append(status.replace("_", " ").title())
+    return " · ".join(parts)
+
+
+def render_upload_result(data: dict) -> str:
+    """
+    Render the backend upload response, including the marks decision.
+
+    Returns ``offer`` / ``missing`` / ``blocked`` / ``pending`` / ``unknown``
+    so both upload widgets can update session state the same way. The decision
+    message is authored by the decision module and is already student-facing.
+    """
+    readiness = data.get("offer_readiness") or {}
+    decision = readiness.get("decision") or {}
+    evidence = decision.get("evidence") or {}
+    offer = data.get("offer_letter")
+
+    if offer:
+        offer_id = offer.get("id", "")
+        pdf_url = f"{_resolve_public_backend()}/api/offers/{offer_id}/pdf"
+        st.success(f"🎓 Offer letter for *{offer.get('program','')}* generated!")
+        st.markdown(
+            f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})"
+        )
+        line = _evidence_line(evidence)
+        if line:
+            st.info(f"Basis of offer: **{line}**")
+        return "offer"
+
+    if readiness.get("missing"):
+        st.success(
+            "✅ Document uploaded! Your file is saved, but your offer is on hold."
+        )
+        st.warning(
+            "Before I can generate your offer letter, I still need: "
+            f"**{missing_fields_text(readiness['missing'])}**."
+        )
+        return "missing"
+
+    action = str(decision.get("action") or "")
+    message = str(decision.get("message") or "")
+    if action and action != "issue":
+        st.success("✅ Document uploaded and checked.")
+        st.warning(
+            message or "Your document needs review before an offer can be issued."
+        )
+        line = _evidence_line(evidence)
+        if line:
+            st.caption(f"Validation: {line}")
+        return "blocked"
+
+    if action == "issue":
+        st.success(
+            "✅ Document uploaded and validated. Your offer is being prepared."
+        )
+        line = _evidence_line(evidence)
+        if line:
+            st.caption(f"Validation: {line}")
+        return "pending"
+
+    st.success("✅ Document uploaded! You can upload more or start asking questions.")
+    return "unknown"
+
+
 # ── Background helper: log interaction + trigger sentiment ──────────
 
 def _with_answer_language(text: str) -> str:
@@ -322,35 +409,36 @@ with st.sidebar:
                 footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
                 body = header + uploaded_file.getvalue() + footer
                 resp = requests.post(
-                    f"http://localhost:8000/api/leads/{lead_id}/documents",
+                    # 127.0.0.1, not "localhost": this box resolves ::1 first
+                    # and waits for the IPv6 attempt to fail.
+                    f"http://127.0.0.1:8000/api/leads/{lead_id}/documents",
                     data=body,
                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-                    timeout=30,
+                    # Validation/OCR now runs before the offer decision, so the
+                    # backend may legitimately take longer than 30 s on a scan.
+                    timeout=180,
                 )
                 if resp.ok:
                     data = resp.json()
-                    readiness = data.get("offer_readiness")
-                    if data.get("offer_letter"):
-                        offer = data["offer_letter"]
-                        offer_id = offer.get("id", "")
-                        pdf_url = f"{_resolve_public_backend()}/api/offers/{offer_id}/pdf"
-                        st.success(f"✅ Document uploaded! Offer letter for {offer.get('program','')} generated and sent!")
-                        st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
+                    readiness = data.get("offer_readiness") or {}
+                    outcome = render_upload_result(data)
+                    if outcome == "offer":
                         st.balloons()
                         st.session_state["offer_generated"] = True
                         st.session_state["show_apply_prompt"] = False
                         st.session_state["awaiting_field"] = None
-                    elif readiness and readiness.get("missing"):
-                        st.success("✅ Document uploaded! Your file is saved, but your offer is on hold.")
-                        st.warning(
-                            f"Before I can generate your offer letter, I still need: "
-                            f"**{missing_fields_text(readiness['missing'])}**."
+                    elif (
+                        outcome == "missing"
+                        and readiness.get("missing") == ["program_interest"]
+                    ):
+                        st.session_state["awaiting_field"] = "program"
+                        st.info(
+                            "Just type the program you want, e.g. *MBA* or "
+                            "*B.Tech Computer Science*."
                         )
-                        if readiness["missing"] == ["program_interest"]:
-                            st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
-                    else:
-                        st.success("✅ Document uploaded successfully! To trigger an offer letter, make sure you've set your program interest in the chat.")
+                    elif outcome == "blocked":
+                        # Keep the upload widget visible for the correct document.
+                        st.session_state["show_apply_prompt"] = True
                 else:
                     st.error(f"Upload failed (HTTP {resp.status_code}). Please try again.")
             except Exception as e:
@@ -1076,35 +1164,36 @@ if st.session_state.get("awaiting_field") == "awaiting_docs" or st.session_state
                 ]
                 body = "".join(parts).encode("utf-8") + chat_upload.getvalue() + f"\r\n--{boundary}--\r\n".encode("utf-8")
                 resp = requests.post(
-                    f"http://localhost:8000/api/leads/{lead_id}/documents",
+                    # 127.0.0.1, not "localhost": this box resolves ::1 first
+                    # and waits for the IPv6 attempt to fail.
+                    f"http://127.0.0.1:8000/api/leads/{lead_id}/documents",
                     data=body,
                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-                    timeout=30,
+                    # Validation/OCR now runs before the offer decision, so the
+                    # backend may legitimately take longer than 30 s on a scan.
+                    timeout=180,
                 )
                 if resp.ok:
                     data = resp.json()
-                    readiness = data.get("offer_readiness")
-                    if data.get("offer_letter"):
-                        offer = data["offer_letter"]
-                        offer_id = offer.get("id", "")
-                        pdf_url = f"{_resolve_public_backend()}/api/offers/{offer_id}/pdf"
-                        st.success(f"🎓 Offer letter for *{offer.get('program','')}* generated!")
-                        st.markdown(f"📄 [**Click here to view/download your Offer Letter (PDF)**]({pdf_url})")
+                    readiness = data.get("offer_readiness") or {}
+                    outcome = render_upload_result(data)
+                    if outcome == "offer":
                         st.balloons()
                         st.session_state["offer_generated"] = True
                         st.session_state["awaiting_field"] = None
                         st.session_state["show_apply_prompt"] = False
-                    elif readiness and readiness.get("missing"):
-                        st.success("✅ Document uploaded! Your file is saved, but your offer is on hold.")
-                        st.warning(
-                            f"Before I can generate your offer letter, I still need: "
-                            f"**{missing_fields_text(readiness['missing'])}**."
+                    elif (
+                        outcome == "missing"
+                        and readiness.get("missing") == ["program_interest"]
+                    ):
+                        st.session_state["awaiting_field"] = "program"
+                        st.info(
+                            "Just type the program you want, e.g. *MBA* or "
+                            "*B.Tech Computer Science*."
                         )
-                        if readiness["missing"] == ["program_interest"]:
-                            st.session_state["awaiting_field"] = "program"
-                            st.info("Just type the program you want, e.g. *MBA* or *B.Tech Computer Science*.")
-                    else:
-                        st.success("✅ Document uploaded! You can upload more or start asking questions.")
+                    elif outcome == "blocked":
+                        # Keep the upload widget visible for the correct document.
+                        st.session_state["show_apply_prompt"] = True
                 else:
                     st.error(f"Upload failed (HTTP {resp.status_code})")
             except Exception as e:
