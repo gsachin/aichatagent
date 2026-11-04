@@ -24,7 +24,7 @@ import logging
 import os
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("leads.models")
 
@@ -819,6 +819,106 @@ async def set_lead_crm_course_eligibility(lead_id: str, eligibility: str) -> boo
             return True
         except Exception:
             logger.exception("Failed to cache crm_course_eligibility on lead")
+            return False
+
+
+# ── Pending WhatsApp document type ──────────────────────────────────────────
+#
+# A WhatsApp document is saved to disk before the student says what it is. The
+# pending state lives on the lead, not in lead_documents, so it cannot count
+# toward readiness or be uploaded under the wrong type.
+
+_PENDING_DOCUMENT_TTL_MINUTES = 30
+
+
+async def set_lead_pending_document(lead_id: str, path: str, name: str) -> bool:
+    """Remember a saved document until the student chooses its type."""
+    if not lead_id or not path:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET pending_document_path = %s, "
+                    "pending_document_name = %s, pending_document_at = NOW(), "
+                    "updated_at = NOW() WHERE id = %s",
+                    (path, name or None, lead_id),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to set the pending document on the lead")
+            return False
+
+
+async def get_lead_pending_document(lead_id: str) -> dict | None:
+    """The document awaiting a type choice, or None.
+
+    Expires after 30 minutes so a student who abandoned the menu does not have
+    a much later message interpreted as a document-type answer.
+    """
+    if not lead_id:
+        return None
+
+    with _get_db() as conn:
+        if conn is None:
+            return None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pending_document_path, pending_document_name, "
+                    "pending_document_at FROM leads WHERE id = %s",
+                    (lead_id,),
+                )
+                row = cur.fetchone()
+            if not row or not row[0]:
+                return None
+
+            path, name, created_at = row
+            if isinstance(created_at, datetime):
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - created_at
+                if age > timedelta(minutes=_PENDING_DOCUMENT_TTL_MINUTES):
+                    return None
+
+            return {
+                "path": path,
+                "name": name or "",
+                "created_at": (
+                    created_at.isoformat()
+                    if isinstance(created_at, datetime)
+                    else ""
+                ),
+            }
+        except Exception:
+            logger.exception("Failed to read the pending document from the lead")
+            return None
+
+
+async def clear_lead_pending_document(lead_id: str) -> bool:
+    """Clear the pending document after it has been filed or abandoned."""
+    if not lead_id:
+        return False
+
+    with _get_db() as conn:
+        if conn is None:
+            return False
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET pending_document_path = NULL, "
+                    "pending_document_name = NULL, pending_document_at = NULL, "
+                    "updated_at = NOW() WHERE id = %s",
+                    (lead_id,),
+                )
+            return True
+        except Exception:
+            logger.exception("Failed to clear the pending document on the lead")
             return False
 
 

@@ -2616,10 +2616,11 @@ async def _handle_whatsapp_document(
     body_text: str = "",
 ):
     """
-    Download a document sent via WhatsApp, save to data/documents/,
-    record in lead_documents table, and nudge the student to type
-    'done' when everything is uploaded — the webhook generates the
-    offer letter at that point, never per upload.
+    Download a document sent via WhatsApp, save it, and ask the student what
+    type it is. The ``lead_documents`` row and the CRM upload/validation are
+    created only after the choice (see the pending-document branch in
+    ``twilio_whatsapp_webhook``). A pending file must not count toward offer
+    readiness or be validated under a guessed type.
     """
     import uuid
     import urllib.request
@@ -2673,68 +2674,37 @@ async def _handle_whatsapp_document(
         stored_path = lead_dir / safe_name
         stored_path.write_bytes(file_bytes)
 
-        # Map content_type to doc_type
-        doc_type = "other"
-        if "pdf" in content_type.lower():
-            doc_type = "transcript"
-        elif "image" in content_type.lower():
-            doc_type = "id_proof"
+        # Hold the file as pending until the student says what it is. No
+        # lead_documents row is created here, so readiness cannot count it and
+        # the validator cannot be given a guessed type.
+        from app.crm.identity import WHATSAPP_DOCUMENT_MENU
+        from app.leads.models import set_lead_pending_document
 
-        # Record in DB
-        from app.offers.models import add_document
-        doc = await add_document(
-            lead_id=lead_id,
-            filename=safe_name,
-            stored_path=str(stored_path),
-            doc_type=doc_type,
-            mime_type=content_type,
-            size_bytes=len(file_bytes),
-        )
-        if doc and doc.get("id"):
-            # Hand the file to the CRM too — the admissions team needs the
-            # transcript, not only the offer letter it justified.
-            try:
-                from app.crm.documents import schedule_document_upload
+        await set_lead_pending_document(lead_id, str(stored_path), safe_name)
+        try:
+            from app.messaging import send_whatsapp_message
 
-                schedule_document_upload(
-                    lead_id=lead_id, doc_id=str(doc["id"]), file_path=str(stored_path),
-                    doc_type=doc_type, original_name=safe_name,
-                )
-            except Exception:
-                logger.exception("Could not schedule the CRM upload for a document")
-
-        if doc and lead.get("program_interest", "").strip():
-            # Offer letters are generated only when the student types "done"
-            # (see twilio_whatsapp_webhook) — never auto-triggered per upload.
-            logger.info(
-                f"WhatsApp document saved for {lead_id} — awaiting 'done' to generate offer"
+            send_whatsapp_message(
+                _wa(from_number),
+                _wa(_whatsapp_from()),
+                WHATSAPP_DOCUMENT_MENU,
             )
-        elif doc:
-            # Program not set — proactively ask what the student wants
-            from app.offers.service import evaluate_offer_readiness, missing_fields_text
-            readiness = await evaluate_offer_readiness(lead_id)
-            logger.info(
-                f"WhatsApp document saved but offer not ready — "
-                f"missing: {readiness['missing']}"
-            )
-            try:
-                from app.messaging import send_whatsapp_message
-                send_whatsapp_message(
-                    _wa(from_number),
-                    _wa(_whatsapp_from()),
-                    (
-                        "I received your document! But before I can generate "
-                        "your offer letter, I still need: "
-                        f"{missing_fields_text(readiness['missing'])}."
-                    ),
-                )
-            except Exception:
-                logger.exception("Failed to send WhatsApp readiness nudge")
-        else:
-            logger.error("Failed to record WhatsApp document in DB")
+        except Exception:
+            logger.exception("Failed to send the WhatsApp document-type menu")
 
     except Exception:
         logger.exception("_handle_whatsapp_document failed")
+        try:
+            from app.messaging import send_whatsapp_message
+
+            send_whatsapp_message(
+                _wa(from_number),
+                _wa(_whatsapp_from()),
+                "I couldn't read that file. Please send it again as a PDF or "
+                "a clear photo.",
+            )
+        except Exception:
+            logger.exception("Failed to send the document failure message")
 
 
 # ── Meridian program-name capture ──────────────────────────────────
@@ -3310,10 +3280,9 @@ async def twilio_whatsapp_webhook(
             )
             twiml = WHATSAPP_TWIML_TEMPLATE.format(
                 answer=escape(whatsapp_text(
-                    "media_document_received", _early_language,
-                    "📄 Got your document! I'm processing it now. If you have "
-                    "more documents, send them too, or type 'done' when "
-                    "you're finished.",
+                    "media_document_ask_type", _early_language,
+                    "📄 Got your document! I just need to confirm what type it "
+                    "is — sending the options now.",
                 ))
             )
             return Response(content=twiml, media_type="application/xml")
@@ -3439,6 +3408,101 @@ async def twilio_whatsapp_webhook(
         _thread_language = _lead_language
         if wa_session is not None:
             wa_session.language = _lead_language
+
+    # ── Pending WhatsApp document type ───────────────────────────
+    # A document was saved but its type is unknown. This must run before the
+    # language menu and every name/question branch: "1" here answers the
+    # document menu, not "English", and "GMAT" is not a name.
+    if lead_id:
+        from app.leads.models import (
+            clear_lead_pending_document,
+            get_lead_pending_document,
+        )
+
+        pending_document = await get_lead_pending_document(lead_id)
+        if pending_document:
+            from app.crm.identity import (
+                UPLOAD_DOCUMENT_TYPES,
+                WHATSAPP_DOCUMENT_MENU,
+                match_upload_document_type,
+            )
+
+            chosen_type = match_upload_document_type(Body)
+            if not chosen_type:
+                answer = (
+                    "Please reply with the number of the document type:\n\n"
+                    f"{WHATSAPP_DOCUMENT_MENU}"
+                )
+            else:
+                import mimetypes
+                import os
+
+                from app.offers.models import add_document
+
+                path = pending_document["path"]
+                name = pending_document["name"]
+                mime = mimetypes.guess_type(name)[0] or ""
+                try:
+                    size_bytes = os.path.getsize(path)
+                except OSError:
+                    size_bytes = 0
+
+                doc = await add_document(
+                    lead_id=lead_id,
+                    filename=name,
+                    stored_path=path,
+                    doc_type=chosen_type,
+                    mime_type=mime,
+                    size_bytes=size_bytes,
+                )
+                if not doc or not doc.get("id"):
+                    answer = (
+                        "I couldn't save that document. Please send it again."
+                    )
+                else:
+                    await clear_lead_pending_document(lead_id)
+                    try:
+                        from app.crm.documents import schedule_document_upload
+
+                        schedule_document_upload(
+                            lead_id=lead_id,
+                            doc_id=str(doc["id"]),
+                            file_path=path,
+                            doc_type=chosen_type,
+                            original_name=name,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Could not schedule the CRM upload for the chosen document"
+                        )
+
+                    label = next(
+                        (
+                            label
+                            for label, value in UPLOAD_DOCUMENT_TYPES.items()
+                            if value == chosen_type
+                        ),
+                        chosen_type,
+                    )
+                    answer = (
+                        f"✅ Filed as {label}. Send another document, or type "
+                        "'done' when you're finished."
+                    )
+
+            background_tasks.add_task(
+                _log_whatsapp_conversation,
+                phone_number=From,
+                transcript=f"User: {Body}\nAssistant: {answer}",
+                conversation_id=conversation_id,
+                language=resolve_answer_language(
+                    _thread_language,
+                    _form_language,
+                    settings.DEFAULT_LANGUAGE,
+                ),
+                language_source="",
+            )
+            twiml = WHATSAPP_TWIML_TEMPLATE.format(answer=escape(answer))
+            return Response(content=twiml, media_type="application/xml")
 
     # ── WhatsApp conversation-start language menu ───────────────
     # Hold this first message, ask which language to continue in, and replay

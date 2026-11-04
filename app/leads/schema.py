@@ -95,10 +95,21 @@ CREATE INDEX IF NOT EXISTS idx_follow_ups_scheduled ON follow_ups(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_call_queue_status  ON call_queue(status);
 """
 
+# ── Pending WhatsApp document type ───────────────────────────────────
+# A document is saved before the student says what it is. Until that choice
+# arrives, no lead_documents row exists — so a pending upload cannot count
+# toward offer readiness or be validated under the wrong type.
+ALTER_LEADS_PENDING_DOCUMENT_SQL = """
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pending_document_path VARCHAR(512);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pending_document_name VARCHAR(255);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pending_document_at   TIMESTAMP WITH TIME ZONE;
+"""
+
 # ── Convenience: run everything in one shot ──────────────────────────
 ALL_TABLES_SQL = "\n".join(
     [
         CREATE_LEADS_TABLE,
+        ALTER_LEADS_PENDING_DOCUMENT_SQL,
         CREATE_CONVERSATIONS_TABLE,
         CREATE_FOLLOW_UPS_TABLE,
         CREATE_CALL_QUEUE_TABLE,

@@ -111,6 +111,76 @@ UPLOAD_DOCUMENT_TYPES: dict[str, str] = {
     "Other": "other",
 }
 
+# The WhatsApp equivalent of the Streamlit dropdown. Numbered because a phone
+# reply is easier to type than a label, and WhatsApp has no select widget.
+WHATSAPP_DOCUMENT_MENU = (
+    "📄 What type of document is this? Reply with the number:\n\n"
+    + "\n".join(
+        f"{index}. {label}"
+        for index, label in enumerate(UPLOAD_DOCUMENT_TYPES, 1)
+    )
+)
+
+_DOCUMENT_TYPE_ALIASES: dict[str, str] = {
+    "12": "marksheet",
+    "12th": "marksheet",
+    "class 12": "marksheet",
+    "class12": "marksheet",
+    "12th marksheet": "marksheet",
+    "10": "marksheet_10",
+    "10th": "marksheet_10",
+    "class 10": "marksheet_10",
+    "class10": "marksheet_10",
+    "10th marksheet": "marksheet_10",
+    "transcript": "transcript",
+    "academic transcript": "transcript",
+    "undergraduate transcript": "transcript",
+    "id": "id_proof",
+    "id proof": "id_proof",
+    "id document": "id_proof",
+    "passport": "id_proof",
+    "sat": "sat",
+    "gre": "gre",
+    "gmat": "gmat",
+    "toefl": "toefl",
+    "ielts": "ielts",
+    "resume": "resume",
+    "cv": "resume",
+    "financial": "financial",
+    "financial document": "financial",
+    "recommendation": "recommendation",
+    "recommendation letter": "recommendation",
+    "lor": "recommendation",
+    "other": "other",
+}
+
+
+def match_upload_document_type(value: object) -> str | None:
+    """
+    Resolve a WhatsApp reply to one of ``UPLOAD_DOCUMENT_TYPES``.
+
+    Accepts the number shown in the menu ("7"), the exact label
+    ("GMAT Score Report"), or a common alias ("gmat", "12th", "transcript").
+    Returns None when the reply is not a recognisable choice, so the caller can
+    re-send the menu instead of guessing.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    # "7", "7.", "7)" are all natural replies to a numbered menu.
+    numbered = text.rstrip(".)").strip()
+    if numbered.isdigit():
+        options = list(UPLOAD_DOCUMENT_TYPES.values())
+        index = int(numbered) - 1
+        return options[index] if 0 <= index < len(options) else None
+
+    lowered = text.lower()
+    for label, app_value in UPLOAD_DOCUMENT_TYPES.items():
+        if lowered == label.lower():
+            return app_value
+    return _DOCUMENT_TYPE_ALIASES.get(lowered)
+
 # Canonical types accepted by the API's validation endpoint. Only documents the
 # validator models are listed; anything else goes through the raw lane.
 VALIDATION_DOCUMENT_TYPE_MAP: dict[str, str] = {

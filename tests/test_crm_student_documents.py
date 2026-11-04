@@ -530,6 +530,20 @@ def test_exam_types_file_under_test_score():
         assert ident.map_document_type(value) == "Test Score"
 
 
+def test_whatsapp_document_menu_matches_numbers_labels_and_aliases():
+    assert ident.match_upload_document_type("1") == "marksheet"
+    assert ident.match_upload_document_type("7") == "gmat"
+    assert ident.match_upload_document_type("7.") == "gmat"
+    assert ident.match_upload_document_type("GMAT") == "gmat"
+    assert ident.match_upload_document_type("gmat score report") == "gmat"
+    assert ident.match_upload_document_type("12th marksheet") == "marksheet"
+    assert ident.match_upload_document_type("transcript") == "transcript"
+    assert ident.match_upload_document_type("passport") == "id_proof"
+    assert ident.match_upload_document_type("nonsense") is None
+    assert "GMAT Score Report" in ident.WHATSAPP_DOCUMENT_MENU
+    assert "TOEFL Score Report" in ident.WHATSAPP_DOCUMENT_MENU
+
+
 def test_upload_labels_map_to_known_doc_types():
     for label, value in ident.UPLOAD_DOCUMENT_TYPES.items():
         assert (
