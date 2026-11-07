@@ -1,0 +1,346 @@
+"""
+Offer-letter orchestration — auto-trigger, PDF generation, and sending.
+
+Usage:
+    from app.offers.service import generate_and_send_offer
+    result = await generate_and_send_offer(lead_id)
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date, timedelta
+from pathlib import Path
+
+logger = logging.getLogger("offers.service")
+
+
+def _resolve_host() -> str:
+    """Resolve the public tunnel host for building media URLs.
+
+    Delegates to app.config.tunnel_host() — one home for a resolution that was
+    implemented four times across the app.
+    """
+    from app.config import tunnel_host
+
+    return tunnel_host()
+
+
+def _wa(num: str) -> str:
+    """Ensure WhatsApp prefix is present exactly once."""
+    n = str(num or "")
+    return n if n.startswith("whatsapp:") else f"whatsapp:{n}"
+
+
+def _whatsapp_from() -> str:
+    """Return the WhatsApp sender number (sandbox or dedicated), falling back to voice number."""
+    from app.config import settings
+    return settings.TWILIO_WHATSAPP_NUMBER or settings.TWILIO_PHONE_NUMBER
+
+
+# ── Offer readiness validation (shared by WhatsApp + Streamlit) ──────────
+
+# Fields that must be non-empty on the lead before an offer can be generated.
+REQUIRED_OFFER_FIELDS = ("name", "email", "phone_number", "program_interest")
+
+_FIELD_LABELS: dict[str, str] = {
+    "name": "your full name",
+    "email": "your email address",
+    "phone_number": "your phone number",
+    "program_interest": "which program you're interested in",
+    "document": "at least one document (transcript, ID, or marksheet)",
+    "lead": "your profile",
+}
+
+
+def missing_fields_text(missing: list[str]) -> str:
+    """Human-readable explanation of what is missing before an offer can be generated."""
+    if not missing:
+        return ""
+    labels = [_FIELD_LABELS.get(f, f) for f in missing]
+    if len(labels) == 1:
+        return labels[0]
+    return ", ".join(labels[:-1]) + ", and " + labels[-1]
+
+
+async def evaluate_offer_readiness(lead_id: str) -> dict:
+    """
+    Check whether an offer letter can be generated for a lead.
+
+    Returns::
+
+        {
+            "ready": bool,        # True iff all prerequisites are satisfied
+            "missing": [str],     # list of missing prerequisite keys
+            "lead": dict | None,  # the lead row (for reuse by callers)
+            "documents": int,     # number of documents already uploaded
+        }
+
+    Never raises — degrades gracefully on DB errors.
+    """
+    from app.leads.models import get_lead
+    from app.offers.models import list_documents
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        return {"ready": False, "missing": ["lead"], "lead": None, "documents": 0}
+
+    missing = [
+        f for f in REQUIRED_OFFER_FIELDS
+        if not str(lead.get(f, "") or "").strip()
+    ]
+
+    docs = await list_documents(lead_id) or []
+    if not docs:
+        missing.append("document")
+
+    return {
+        "ready": len(missing) == 0,
+        "missing": missing,
+        "lead": lead,
+        "documents": len(docs),
+    }
+
+
+# ── Core offer generation ────────────────────────────────────────────────
+
+
+async def generate_and_send_offer(
+    lead_id: str,
+    force: bool = False,
+    *,
+    channel: str = "whatsapp",
+    conversation_id: str = "",
+) -> dict | None:
+    """
+    Generate a PDF offer letter, send via WhatsApp + email, and return the offer dict.
+
+    Idempotency: skips if an offer was already sent to this lead within 24h,
+    unless ``force=True``.
+
+    ``channel`` is the channel the *request* came from, recorded on the logged
+    conversation. It used to be hardcoded to "whatsapp", so an offer generated
+    from the web chat was logged as a WhatsApp conversation — which is wrong in
+    the one place anyone would look to answer "how did this student reach us?".
+
+    ``conversation_id`` is the conversation this offer belongs to, when the
+    caller knows it. Without it the log mints a fresh id, so one web chat ended
+    up as two unrelated conversation rows — one of which the CRM has never heard
+    of, since Salesforce names the conversation by the chat's own id.
+
+    Returns the offer-letter dict on success, None if skipped or failed.
+    """
+    from app.config import settings
+    from app.leads.models import get_lead
+    from app.offers.models import (
+        create_offer_letter,
+        get_course_by_name,
+        get_recent_offer_for_lead,
+        update_offer_letter_status,
+    )
+    from app.offers.pdf import build_offer_pdf
+
+    lead = await get_lead(lead_id)
+    if not lead:
+        logger.warning(f"generate_and_send_offer: lead {lead_id} not found")
+        return None
+
+    # ── Pre-offer readiness validation ────────────────────────────────
+    readiness = await evaluate_offer_readiness(lead_id)
+    if not readiness["ready"]:
+        logger.warning(
+            f"Lead {lead_id}: offer skipped — missing: {readiness['missing']}"
+        )
+        return None
+
+    lead_name = lead.get("name") or "Prospective Student"
+    program_interest = lead.get("program_interest", "")
+    lead_email = lead.get("email", "")
+    lead_phone = lead.get("phone_number", "")
+
+    # ── Idempotency guard ────────────────────────────────────────────
+    if not force:
+        guard_minutes = settings.OFFER_GUARD_MINUTES
+        recent = await get_recent_offer_for_lead(lead_id, within_hours=guard_minutes / 60.0)
+        if recent:
+            logger.info(
+                f"Lead {lead_id}: offer already sent within 24h (id={recent['id']}) — skipping"
+            )
+            return recent
+
+    # ── Match course ─────────────────────────────────────────────────
+    course = await get_course_by_name(program_interest)
+    if course:
+        logger.info(f"Lead {lead_id}: matched course '{course['name']}'")
+    else:
+        logger.info(f"Lead {lead_id}: no course match for '{program_interest}' — using raw name")
+
+    # ── Compute dates ────────────────────────────────────────────────
+    today = date.today()
+    offer_date = today.isoformat()
+    valid_until = (today + timedelta(days=settings.OFFER_VALID_DAYS)).isoformat()
+
+    # ── Generate PDF ─────────────────────────────────────────────────
+    data_dir = Path(settings.DATA_DIR)
+    offer_id = None  # placeholder until we insert the row
+
+    # We need the offer id before building the PDF (it's part of the filename).
+    # Create the row with an empty pdf_path first, then update.
+    offer = await create_offer_letter(
+        lead_id=lead_id,
+        program=course["name"] if course else program_interest,
+        course_id=course["id"] if course else "",
+        offer_date=offer_date,
+        valid_until=valid_until,
+        sent_via=("both" if lead_email else "whatsapp"),
+    )
+    if not offer:
+        logger.error(f"Lead {lead_id}: failed to create offer_letter row")
+        return None
+
+    # Build PDF
+    try:
+        out_dir = data_dir / "offers"
+        pdf_path = build_offer_pdf(lead, course, offer, out_dir)
+
+        # Update the row with the actual pdf_path
+        from app.offers.models import update_offer_letter_status
+        offer = await update_offer_letter_status(offer["id"], "sent", pdf_path=str(pdf_path))
+        if offer is None:
+            logger.warning("Failed to update offer after PDF gen — continuing")
+        else:
+            offer["pdf_path"] = str(pdf_path)
+    except Exception:
+        logger.exception(f"Lead {lead_id}: PDF generation failed")
+        return offer  # still return the row for debugging
+
+    # ── Send via WhatsApp ────────────────────────────────────────────
+    if lead_phone:
+        host = _resolve_host()
+        if host and host != "localhost:8000":
+            try:
+                media_url = f"https://{host}/api/offers/{offer['id']}/pdf"
+                # Resolve payment link
+                payment_link = (course or {}).get("payment_link", "") or settings.DEFAULT_PAYMENT_LINK
+                payment_section = ""
+                if payment_link:
+                    payment_section = (
+                        f"\n\n💳 *Secure Your Seat:*\n"
+                        f"Complete payment here: {payment_link}\n"
+                        f"Amount: {(course or {}).get('fees', 'See fee structure')}"
+                    )
+                body = (
+                    f"Congratulations {lead_name}! 🎓\n\n"
+                    f"Your offer letter for the *{offer['program']}* program is attached. "
+                    f"Please review it and reply *ACCEPT* or *DECLINE*.\n\n"
+                    f"This offer is valid until {valid_until}."
+                    f"{payment_section}"
+                )
+                from app.messaging import send_whatsapp_message
+                ok, sid = send_whatsapp_message(
+                    _wa(lead_phone),
+                    _wa(_whatsapp_from()),
+                    body,
+                    media_url=media_url,
+                )
+                if ok:
+                    await update_offer_letter_status(
+                        offer["id"], "sent", message_sid=sid, sent_at=offer.get("sent_at", "")
+                    )
+                    logger.info(f"Offer {offer['id']}: WhatsApp sent → {lead_phone} (sid={sid})")
+                else:
+                    logger.error(f"Offer {offer['id']}: WhatsApp send failed — {sid}")
+            except Exception:
+                logger.exception(f"Offer {offer['id']}: WhatsApp send exception")
+        else:
+            logger.warning("No tunnel host configured — cannot send WhatsApp media")
+
+    # ── Send via Email ───────────────────────────────────────────────
+    if lead_email:
+        try:
+            from app.emailer import send_email
+
+            payment_link = (course or {}).get("payment_link", "") or settings.DEFAULT_PAYMENT_LINK
+            payment_section = ""
+            if payment_link:
+                payment_section = (
+                    f"\n💳 Payment Link: {payment_link}\n"
+                    f"   Amount: {(course or {}).get('fees', 'See fee structure')}\n\n"
+                )
+
+            subject = f"Offer of Admission — {offer['program']}"
+            body = (
+                f"Dear {lead_name},\n\n"
+                f"Congratulations! Your offer of admission for the {offer['program']} "
+                f"program is attached to this email.\n\n"
+                f"Offer Date: {offer_date}\n"
+                f"Valid Until: {valid_until}\n\n"
+                f"{payment_section}"
+                f"Please reply to this email to accept or decline the offer.\n\n"
+                f"Sincerely,\nAdmissions Office\n{settings.OFFER_EMAIL}"
+            )
+            ok = send_email(lead_email, subject, body, pdf_path=str(pdf_path))
+            if ok:
+                await update_offer_letter_status(
+                    offer["id"], "sent", email_id="sent"
+                )
+                logger.info(f"Offer {offer['id']}: email sent → {lead_email}")
+            else:
+                logger.warning(f"Offer {offer['id']}: email send failed")
+        except Exception:
+            logger.exception(f"Offer {offer['id']}: email send exception")
+
+    # ── Hand the PDF to the CRM (best-effort, off this path) ─────────
+    # Scheduled rather than awaited: this function is reached inline inside the
+    # Twilio WhatsApp webhook (app/main.py:1587), so three upload calls here
+    # would sit in the webhook window. Nothing about the offer — delivery, the
+    # returned row, the conversation log — depends on the outcome.
+    try:
+        from app.crm.documents import schedule_offer_upload
+
+        schedule_offer_upload(
+            lead_id=lead_id, offer_id=offer["id"], pdf_path=str(pdf_path)
+        )
+    except Exception:
+        logger.exception(f"Offer {offer['id']}: could not schedule the CRM upload")
+
+    # ── Log conversation ─────────────────────────────────────────────
+    # Bound before the try so the CRM push below cannot hit an unbound name if
+    # the import inside fails.
+    crm_user_id = ""
+    try:
+        from app.leads.models import create_conversation, get_lead_crm_user_id
+
+        # Attach the Salesforce user when the lead has one, so the local record
+        # of this conversation points at the same person the CRM knows.
+        try:
+            crm_user_id = await get_lead_crm_user_id(lead_id)
+        except Exception:
+            logger.exception("Offer: could not read the CRM link for the log")
+
+        await create_conversation(
+            lead_id=lead_id,
+            phone_number=lead_phone,
+            channel=channel,
+            transcript=f"Offer letter ({offer['program']}) generated and sent to {lead_name}",
+            summary=f"Offer letter sent for {offer['program']}",
+            outcome="offer_sent",
+            conversation_id=conversation_id or None,
+            crm_user_id=crm_user_id or None,
+        )
+    except Exception:
+        logger.exception("Failed to log offer conversation")
+
+    # ── Tell the CRM the offer is out ────────────────────────────────
+    # Without this the CRM holds the offer letter while reporting that no offer
+    # was ever released. Best-effort and off the request path: the student's
+    # offer does not depend on it.
+    try:
+        if crm_user_id:
+            from app.crm.status import push_offer_released
+
+            await push_offer_released(crm_user_id, sent_at=offer.get("sent_at") or "")
+    except Exception:
+        logger.exception(f"Offer {offer['id']}: could not publish the release to the CRM")
+
+    return offer

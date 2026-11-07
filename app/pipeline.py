@@ -21,22 +21,28 @@ Usage (from run_pipeline_test.py or FastAPI transport):
     runner, task = await create_local_voice_pipeline(transport)
 """
 
+import asyncio
 import json
 import logging
 import os
 from pathlib import Path
 
+from app.config import settings
+
 logger = logging.getLogger("voice_pipeline")
 
 # ── Configuration ────────────────────────────────────────────────────
 
-CHROMA_DB_PATH = Path(__file__).resolve().parent.parent / "chroma_local_db"
-DEFAULT_LLM_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q3_K_M")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-STT_MODEL = os.environ.get("WHISPER_MODEL", "small.en")
-TTS_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
-NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
-RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "2"))
+STT_MODEL = settings.WHISPER_MODEL
+#: This one omits the `.strip() or "af_heart"` guard the other readers of
+#: KOKORO_VOICE apply (app/voice_handler.py, app/admission.py). Settings carries
+#: the normalised value, so this path now agrees with them instead of passing
+#: an empty string to KokoroTTSService. KOKORO_VOICE itself stays on the
+#: dynamic allowlist for admission.asset_drift()'s per-call read.
+TTS_VOICE = settings.KOKORO_VOICE
+# Single source of truth: app.llm_backend.DEFAULT_NUM_CTX.
+# Voice calls run the full production voice system prompt plus the document.
+from app.llm_backend import DEFAULT_NUM_CTX as NUM_CTX  # noqa: E402
 
 # ── Platform Detection (Multi-GPU Support) ──────────────────────────
 from app.platform import detect_compute_device
@@ -50,94 +56,105 @@ GPU_AVAILABLE = PLATFORM_CONFIG["device"] != "cpu"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _vram_info() -> str:
-    """Human-readable GPU VRAM string for logging."""
+    """Human-readable GPU VRAM string for logging (CUDA or Apple unified)."""
     if not GPU_AVAILABLE:
         return "VRAM: N/A"
     try:
-        import torch
-        total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        used = torch.cuda.memory_allocated(0) / (1024**3)
-        return f"VRAM: {used:.2f} GB used / {total:.2f} GB total"
+        if PLATFORM_CONFIG["device"] == "cuda":
+            import torch
+            total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            used = torch.cuda.memory_allocated(0) / (1024**3)
+            return f"VRAM: {used:.2f} GB used / {total:.2f} GB total"
+        if PLATFORM_CONFIG["platform"] == "apple_silicon":
+            from app.platform import _get_system_memory_gb
+            total = _get_system_memory_gb()
+            if total > 0:
+                return f"Unified memory: {total:.1f} GB (Metal/MLX shared)"
     except Exception:
-        return "VRAM: N/A"
+        pass
+    return "VRAM: N/A"
 
 
 # ── ChromaDB context retriever ───────────────────────────────────────
+# NOTE: retrieval is centralized in app.rag (single source of truth).
+# The live voice path uses app.pipeline.run_rag_query_sync -> app.rag.query_rag.
+# The local retrieve_context() duplicate was removed 2026-08-14 — use
+#   from app.rag import retrieve_context
 
-def retrieve_context(query: str, top_k: int = RAG_TOP_K) -> str:
+
+def build_rag_prompt_parts(transcript: str, language: str | None = None) -> tuple[str, str]:
+    """The same prompt as `build_rag_prompt`, split into (system, user).
+
+    The split is the fix for a measured defect, not tidiness: with the
+    instructions glued onto the front of the user turn, the model answered the
+    instructions instead of the caller ("I'd be happy to help you with this
+    role-play scenario", "You are now the inbound voice AI agent for…"). Over
+    38 replayed caller turns, moving them to a system turn took scaffold,
+    self-grading and prompt-recital defects from 3 to 0.
+
+    `language` adds the answer-language rule to the USER turn, after the stable
+    system + document prefix, so the cacheable prefix does not change with the
+    language.
     """
-    Search the persisted ChromaDB for admissions documents relevant to
-    *query*. Returns formatted context text, or empty string on failure.
+    from app.rag import bind_context_bundle, context_bundle_for_query
+    from app.voice_system_prompt import build_voice_system_prompt, language_instruction
+
+    bundle = context_bundle_for_query(transcript)
+    bind_context_bundle(bundle)
+    context = bundle.text
+    user = f"Student's question: {transcript}"
+    if language:
+        user = f"{user}\n\n{language_instruction(language)}"
+    return (build_voice_system_prompt(context), user)
+
+
+def build_rag_prompt(transcript: str, language: str | None = None) -> str:
     """
-    try:
-        import chromadb
-    except ImportError:
-        logger.warning("chromadb not installed — skipping RAG context")
-        return ""
-
-    if not CHROMA_DB_PATH.is_dir():
-        logger.warning(f"ChromaDB not found at {CHROMA_DB_PATH} — skipping RAG context")
-        return ""
-
-    try:
-        # Use Ollama embedding function to match the nomic-embed-text (768-dim)
-        # that was used when building the persisted index.
-        from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
-
-        embed_fn = OllamaEmbeddingFunction(
-            model_name="nomic-embed-text",
-            url=OLLAMA_BASE_URL,
-        )
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-        collections = client.list_collections()
-
-        if not collections:
-            logger.warning("ChromaDB has no collections — run app.py to build index")
-            return ""
-
-        # ChromaDB 1.x returns Collection objects; get name for get_collection()
-        first = collections[0]
-        coll_name = first if isinstance(first, str) else first.name
-        collection = client.get_collection(coll_name, embedding_function=embed_fn)
-        results = collection.query(query_texts=[query], n_results=top_k)
-
-        if not results.get("documents") or not results["documents"][0]:
-            return ""
-
-        chunks = results["documents"][0]
-        context = "\n".join(f"- {c}" for c in chunks)
-        logger.debug(f"RAG: retrieved {len(chunks)} chunks for query: {query[:60]}...")
-        return context
-
-    except Exception:
-        logger.exception("ChromaDB retrieval failed")
-        return ""
-
-
-def build_rag_prompt(transcript: str) -> str:
-    """
-    Enrich the transcribed user query with ChromaDB context.
-    Uses shared RAG module for consistent retrieval quality.
+    Enrich the transcribed user query with ChromaDB context and wrap it
+    in the production voice system prompt (app.voice_system_prompt).
+    Retrieval stays centralized in app.rag; the voice behavioral rules
+    (interruption handling, turn-taking, spoken-output) live in the
+    voice prompt so chat interfaces keep their Markdown-oriented prompt.
 
     This function is called between STT output and LLM input.
+
+    Kept returning a single string because three callers want one
+    (`test_pipeline_with_text`, the US-015 screening tool, and any text
+    surface). Anything that actually sends to the model should use
+    `build_rag_prompt_parts` so the roles are right.
     """
-    from app.rag import retrieve_context, SYSTEM_PROMPT
-
-    context = retrieve_context(transcript)
-
-    if context:
-        prompt = SYSTEM_PROMPT.format(context=context)
-    else:
-        prompt = (
-            "You are a helpful university admissions assistant. "
-            "Answer the user's question to the best of your ability. "
-            "If you're unsure, say so.\n\n"
-        )
-    prompt += f"Student's question: {transcript}"
-    return prompt
+    system, user = build_rag_prompt_parts(transcript, language=language)
+    return f"{system}\n\n{user}"
 
 
 # ── Pipeline factory ─────────────────────────────────────────────────
+
+def _build_llm_service():
+    """Build the Pipecat OpenAI LLM service.
+
+    The local Ollama/MLX services were removed with RAG; every generation
+    service points at OpenAI. Returns None when the service is unavailable.
+    """
+    from app.llm_backend import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, provider_name
+
+    try:
+        provider_name()
+        from pipecat.services.openai.llm import OpenAILLMService
+
+        llm = OpenAILLMService(
+            settings=OpenAILLMService.Settings(model=LLM_MODEL),
+            base_url=LLM_BASE_URL,
+            api_key=LLM_API_KEY,
+        )
+        logger.info(f"  [OK] OpenAILLMService initialized (model={LLM_MODEL})")
+        return llm
+    except ImportError:
+        logger.warning("  [SKIP] OpenAI LLM service not available")
+        return None
+    except Exception as e:
+        logger.warning(f"  [SKIP] LLM init failed: {e}")
+        return None
+
 
 async def create_local_voice_pipeline(transport=None):
     """
@@ -152,44 +169,46 @@ async def create_local_voice_pipeline(transport=None):
         (PipelineRunner, PipelineTask) tuple.
 
     Pipecat 1.6.0 pipeline flow:
-        transport.input() → VAD → STT → [RAG enrichment] → LLM → TTS → transport.output()
+        transport.input() → VAD → STT → [document context] → LLM → TTS → transport.output()
     """
     logger.info("Creating local voice pipeline...")
     logger.info(f"  Device: {DEVICE}, Compute: {COMPUTE_TYPE}")
-    logger.info(f"  LLM: {DEFAULT_LLM_MODEL} @ {OLLAMA_BASE_URL}")
+    logger.info(f"  LLM: {settings.LLM_MODEL} @ {settings.LLM_BASE_URL}")
     logger.info(f"  {_vram_info()}")
 
     # ---- 1. Voice Activity Detection ---------------------------------
-    # In Pipecat 1.6.0, SileroVADAnalyzer is configured at the transport
-    # level (e.g. FastAPIWebsocketTransport params) rather than as a
-    # pipeline processor. We construct it here for use by the transport.
-    vad_analyzer = None
-    try:
-        from pipecat.audio.vad.silero import SileroVADAnalyzer, VADParams
-
-        vad_params = VADParams(
-            confidence=0.7,
-            start_secs=0.3,
-            stop_secs=0.5,
-            min_volume=0.6,
-        )
-        vad_analyzer = SileroVADAnalyzer(sample_rate=16000, params=vad_params)
-        logger.info("  [OK] SileroVADAnalyzer initialized (for transport config)")
-    except ImportError:
-        logger.warning("  [SKIP] SileroVADAnalyzer not available — VAD disabled")
-    except Exception as e:
-        logger.warning(f"  [SKIP] VAD init failed: {e}")
+    # REMOVED, deliberately -- BRD-04: "The system shall have exactly one live
+    # end-of-speech decision." This used to construct a SileroVADAnalyzer with
+    # `stop_secs=0.5` and log "[OK] SileroVADAnalyzer initialized (for
+    # transport config)". It was never attached to anything: the transport is
+    # passed in by the caller, so this function cannot reach it, and the
+    # analyzer was constructed, logged as live, and dropped on the floor.
+    #
+    # That left two problems. It cost a Silero model load per pipeline build.
+    # And it presented a SECOND end-of-speech delay -- 500 ms -- as the live
+    # setting while the one that actually closes a caller's turn is
+    # VoiceCallSession's 600 ms (`VAD_SILENCE_MS`). Two delays disagreeing
+    # about when a caller stopped talking is exactly what BRD-04 forbids, and
+    # the log line made it look reconciled.
+    #
+    # The live decision is `VAD_SILENCE_MS` in app/voice_handler.py. If a
+    # pipecat transport is ever given a VAD again, it must take its delay from
+    # that setting rather than declaring a second one here.
 
     # ---- 2. Speech-to-Text (Faster-Whisper) --------------------------
     try:
         from pipecat.services.whisper.stt import WhisperSTTService, WhisperSTTSettings
+        from app.platform import get_whisper_device_config
 
+        # CTranslate2 has no Metal backend — on Apple Silicon this maps
+        # mps -> cpu + int8 (NEON-accelerated) instead of raising.
+        stt_device, stt_compute = get_whisper_device_config()
         stt = WhisperSTTService(
             settings=WhisperSTTSettings(model=STT_MODEL),
-            device=DEVICE,
-            compute_type=COMPUTE_TYPE,
+            device=stt_device,
+            compute_type=stt_compute,
         )
-        logger.info(f"  [OK] WhisperSTTService initialized (model={STT_MODEL}, device={DEVICE})")
+        logger.info(f"  [OK] WhisperSTTService initialized (model={STT_MODEL}, device={stt_device})")
     except ImportError:
         logger.warning("  [SKIP] WhisperSTTService not available")
         stt = None
@@ -197,22 +216,8 @@ async def create_local_voice_pipeline(transport=None):
         logger.warning(f"  [SKIP] STT init failed: {e}")
         stt = None
 
-    # ---- 3. LLM (Ollama / Qwen) --------------------------------------
-    try:
-        from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
-
-        llm = OLLamaLLMService(
-            model=DEFAULT_LLM_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            settings=OllamaLLMSettings(),
-        )
-        logger.info(f"  [OK] OLLamaLLMService initialized (model={DEFAULT_LLM_MODEL})")
-    except ImportError:
-        logger.warning("  [SKIP] OLLamaLLMService not available")
-        llm = None
-    except Exception as e:
-        logger.warning(f"  [SKIP] LLM init failed: {e}")
-        llm = None
+    # ---- 3. LLM (Ollama on Windows/Linux, MLX server on Apple Silicon)
+    llm = _build_llm_service()
 
     # ---- 4. Text-to-Speech (Kokoro) ----------------------------------
     try:
@@ -231,8 +236,10 @@ async def create_local_voice_pipeline(transport=None):
     from pipecat.pipeline.pipeline import Pipeline
 
     # Build the processor list.
-    # Note: VAD is not a pipeline processor in Pipecat 1.6.0;
-    # it is configured on the transport via params.vad_analyzer.
+    # Note: VAD is deliberately NOT here. In Pipecat 1.6.0 it would live on the
+    # transport, but this function is handed a transport it cannot configure,
+    # and the end-of-speech decision belongs to VAD_SILENCE_MS (BRD-04) -- see
+    # the removal note above.
     processors = []
     if stt is not None:
         processors.append(stt)
@@ -295,50 +302,133 @@ async def post_call_handler(transcript: str, phone_number: str = "") -> bool:
         return False
 
 
-def run_rag_query_sync(user_text: str) -> str | None:
+def _bg_priority_enabled() -> bool:
+    """US-017 AC-5: the policy is reversed by one setting, not a code change."""
+    return os.environ.get("BG_PRIORITY_ENABLED", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def run_rag_query_sync(user_text: str, mode: str = "voice",
+                       retrieval_query: str | None = None,
+                       history: list[str] | None = None,
+                       profile: dict | None = None,
+                       language: str | None = None,
+                       voice_fast: bool = False,
+                       agentic_text: bool = False,
+                       channel: str | None = None,
+                       conversation_id: str | None = None,
+                       reference_sink: list | None = None) -> str | None:
     """
     Synchronous RAG query — safe to call from asyncio.to_thread().
     Uses shared RAG module for consistent quality across all interfaces.
+
+    mode: "voice" (default, phone calls) or "chat" (text UIs — Markdown
+    SYSTEM_PROMPT, same style as the Streamlit chat).
+
+    retrieval_query (C3/N1): when the caller pre-builds an instruction prompt,
+    retrieval embeds this instead of the whole prompt.
+
+    history / profile: the conversation so far and the fields already known
+    about this student. Text channels have no session object and used to send
+    neither, so every WhatsApp question was answered as the first turn of a
+    new conversation. Both default to None, which leaves the prompt
+    byte-identical for callers that do not pass them.
+
+    US-017 / BRD-20: `mode` already distinguished the two callers, so it is
+    also the admission key. A voice turn holds the gate open for its whole
+    duration; a background unit waits for the line to be clear and runs at most
+    one at a time. `BRD-20`'s operating scenario is two voice callers plus one
+    background request, and this is the single point where that ordering is
+    decided.
     """
     from app.rag import query_rag
-    return query_rag(user_text)
+    if not _bg_priority_enabled():
+        return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
+                         history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
+
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
+
+    work_class, defect = classify(mode)
+    if work_class == VOICE:
+        label = "voice" if defect is None else f"unclassified:{mode}"
+        with GATE.voice_turn(label=label):
+            return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
+                             history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
+    try:
+        with GATE.background_unit(label="background", mode=mode):
+            return query_rag(user_text, mode=mode, retrieval_query=retrieval_query,
+                             history=history, profile=profile, language=language,
+                         voice_fast=voice_fast, agentic_text=agentic_text,
+                         channel=channel, conversation_id=conversation_id,
+                         reference_sink=reference_sink)
+    except BackgroundDeferred:
+        # Refused because the line stayed busy past its budget. It answers
+        # nothing rather than being interleaved -- and this is NOT a
+        # caller-facing failure: no caller is waiting on it, and it must not
+        # appear in any caller-facing failure figure (AC-2). The gate has
+        # already recorded the reason and the wait (TAC-6).
+        logger.info("background query deferred past its budget and refused: %r", mode)
+        return None
 
 
-async def test_pipeline_with_text(user_text: str) -> str | None:
+async def test_pipeline_with_text(user_text: str, mode: str = "chat",
+                                  language: str | None = None) -> str | None:
     """
     Test the full RAG → LLM chain with a text query (no audio).
     Returns the LLM response string, or None on failure.
 
     This bypasses STT/TTS and tests only the RAG + LLM path.
     Useful for validating the pipeline without audio hardware.
+
+    US-017 TAC-1: this is inference with nobody waiting to hear it, so it goes
+    through the same admission gate as every other unit of work. It used to
+    call the backend directly, which made it the one path into the model that
+    the priority policy could not see -- a caller's turn and a text query could
+    interleave with nothing counting it. `mode` defaults to "chat" because the
+    callers of this function are text UIs; pass "voice" for a caller's turn.
     """
-    logger.info(f"Testing RAG + LLM with: \"{user_text}\"")
+    from app.work_priority import BackgroundDeferred, classify, GATE, VOICE
 
-    prompt = build_rag_prompt(user_text)
+    async def _run() -> str | None:
+        system, prompt = build_rag_prompt_parts(user_text, language=language)
+        from app.llm_backend import _messages, chat as backend_chat
 
-    try:
-        import ollama
-
-        # Find available model
-        import urllib.request
-
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        model = qwen_models[0] if qwen_models else DEFAULT_LLM_MODEL
-
-        response = ollama.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": NUM_CTX},
+        # `to_thread`, because `backend_chat` is SYNCHRONOUS and performs an
+        # HTTP call to the engine. Calling it directly from an `async def`
+        # blocks the event loop for the whole inference -- the same defect as
+        # using the synchronous gate here, one layer further in, and it was
+        # worth 3-5 s of frozen loop per admitted background unit. Fixing the
+        # acquisition alone took the 2+1 window from dying at turn 3-18 to
+        # dying at 68-70; this is the rest of it.
+        answer = await asyncio.to_thread(
+            backend_chat,
+            messages=_messages(system, prompt),
+            num_ctx=NUM_CTX,
         )
-        answer = response["message"]["content"]
         logger.info(f"LLM response: {answer[:100]}...")
         return answer
 
+    work_class, _ = classify(mode)
+    try:
+        if work_class == VOICE:
+            with GATE.voice_turn(label="text:voice"):
+                return await _run()
+        # `background_unit_async`, NOT `background_unit`. This function is
+        # `async`, so it runs on the event loop; the synchronous gate blocks on
+        # a threading.Condition, which would freeze the loop -- and with it
+        # every live voice call -- for as long as the deferral lasted. Both
+        # callers died on keepalive timeout before this was changed.
+        async with GATE.background_unit_async(label="text", mode=mode):
+            return await _run()
+    except BackgroundDeferred:
+        logger.info("text query refused: the line stayed busy past its budget")
+        return None
     except Exception:
         logger.exception("RAG + LLM test failed")
         return None

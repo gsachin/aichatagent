@@ -1,0 +1,1258 @@
+<title>DSPMU Agent Failure Analysis</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
+<style>
+  :root {
+    --bg: #f5f7f3;
+    --surface: #ffffff;
+    --surface-2: #e9eee9;
+    --surface-3: #dfe6e0;
+    --fg: #172026;
+    --muted: #576568;
+    --faint: #7b8888;
+    --accent: #0b5d5a;
+    --accent-soft: #d9e9e6;
+    --accent-2: #1d4f78;
+    --accent-2-soft: #dde8f2;
+    --warn: #a33a2b;
+    --warn-soft: #f6e4df;
+    --good: #2e6b45;
+    --good-soft: #e0eee4;
+    --border: #d3dbd4;
+    --border-strong: #b9c4bb;
+    --code-bg: #edf1ec;
+    --shadow: 0 1px 2px rgb(23 32 38 / 0.05), 0 8px 28px rgb(23 32 38 / 0.06);
+    --serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1416;
+      --surface: #141d1f;
+      --surface-2: #1b2629;
+      --surface-3: #243134;
+      --fg: #e4ece8;
+      --muted: #9aaba7;
+      --faint: #7f918d;
+      --accent: #6fd3c7;
+      --accent-soft: #173b38;
+      --accent-2: #8fb8e0;
+      --accent-2-soft: #1a2b3b;
+      --warn: #f0a08f;
+      --warn-soft: #2b1b18;
+      --good: #8fd3a8;
+      --good-soft: #172b1e;
+      --border: #2a373a;
+      --border-strong: #3a4a4d;
+      --code-bg: #10191b;
+      --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 32px rgb(0 0 0 / 0.28);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1416;
+    --surface: #141d1f;
+    --surface-2: #1b2629;
+    --surface-3: #243134;
+    --fg: #e4ece8;
+    --muted: #9aaba7;
+    --faint: #7f918d;
+    --accent: #6fd3c7;
+    --accent-soft: #173b38;
+    --accent-2: #8fb8e0;
+    --accent-2-soft: #1a2b3b;
+    --warn: #f0a08f;
+    --warn-soft: #2b1b18;
+    --good: #8fd3a8;
+    --good-soft: #172b1e;
+    --border: #2a373a;
+    --border-strong: #3a4a4d;
+    --code-bg: #10191b;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 32px rgb(0 0 0 / 0.28);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 64px;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--accent-soft); color: var(--fg); }
+  a { color: var(--accent); text-underline-offset: 0.18em; }
+  a:hover { color: var(--accent-2); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  h1, h2, h3, h4 { font-family: var(--serif); font-weight: 500; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2.15rem, 5vw, 3.65rem); line-height: 1.04; letter-spacing: -0.02em; }
+  h2 { font-size: clamp(1.55rem, 3vw, 2.15rem); line-height: 1.12; letter-spacing: -0.01em; }
+  h3 { font-size: 1.22rem; line-height: 1.2; }
+  h4 { font-size: 1.02rem; line-height: 1.3; }
+  p { margin: 0 0 1em; max-width: 68ch; }
+  ul, ol { margin: 0 0 1em; padding-left: 1.25em; max-width: 68ch; }
+  li { margin: 0.3em 0; }
+  strong { font-weight: 600; }
+  code, kbd, samp {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.08em 0.32em;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  .page { max-width: 1180px; margin: 0 auto; }
+
+  .masthead {
+    padding: clamp(28px, 6vw, 76px) 0 28px;
+    border-bottom: 1px solid var(--border-strong);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; display: inline-block; }
+  .masthead h1 { max-width: 18ch; }
+  .dek {
+    font-family: var(--serif);
+    font-size: clamp(1.1rem, 2.1vw, 1.42rem);
+    line-height: 1.42;
+    color: var(--muted);
+    max-width: 62ch;
+    margin-top: 18px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    margin-top: 24px;
+    font-size: 0.82rem;
+    color: var(--faint);
+  }
+  .meta-row span { display: inline-flex; gap: 6px; align-items: baseline; }
+  .meta-row b { color: var(--muted); font-weight: 500; }
+
+  .verdict {
+    margin: 32px 0 12px;
+    padding: 22px 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+  }
+  .verdict p { margin: 0; max-width: 78ch; font-size: 1.02rem; }
+  .verdict p + p { margin-top: 12px; }
+  .verdict .label {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: clamp(28px, 4vw, 56px);
+    align-items: start;
+    padding-top: 32px;
+  }
+  .toc {
+    position: sticky;
+    top: 24px;
+    font-size: 0.82rem;
+    border-left: 1px solid var(--border);
+    padding-left: 16px;
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+  }
+  .toc .toc-label {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  .toc a {
+    display: block;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 3px 0;
+    line-height: 1.35;
+  }
+  .toc a:hover { color: var(--accent); }
+  .toc a .num { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); margin-right: 7px; }
+  .toc a.sub { padding-left: 20px; font-size: 0.78rem; }
+
+  main { min-width: 0; }
+  section { padding: 8px 0 36px; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: 0; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  .section-head .num {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    flex: none;
+  }
+  .section-head h2 { max-width: 30ch; }
+  .lede { font-family: var(--serif); font-size: 1.16rem; line-height: 1.5; color: var(--muted); max-width: 66ch; margin-bottom: 20px; }
+  h3 { margin: 28px 0 10px; }
+  h4 { margin: 22px 0 8px; }
+  .small { font-size: 0.82rem; color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: 0.82rem; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin: 18px 0 8px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 18px 18px 16px;
+    min-width: 0;
+  }
+  .card .kicker {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 1.08rem; }
+  .card p { font-size: 0.9rem; margin: 0; color: var(--muted); max-width: none; }
+  .card.warn { border-left: 3px solid var(--warn); }
+  .card.warn .kicker { color: var(--warn); }
+
+  .callout {
+    margin: 20px 0;
+    padding: 16px 18px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    font-size: 0.92rem;
+  }
+  .callout p { margin: 0; max-width: 74ch; }
+  .callout p + p { margin-top: 8px; }
+  .callout.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
+  .callout.good { background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 30%, var(--border)); }
+  .callout .title {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .callout.warn .title { color: var(--warn); }
+  .callout.good .title { color: var(--good); }
+
+  .table-wrap {
+    margin: 16px 0 22px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+    line-height: 1.45;
+    min-width: 620px;
+  }
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-strong);
+    vertical-align: bottom;
+  }
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--surface-2); }
+  .num-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .status {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .status.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, var(--border)); background: var(--good-soft); }
+  .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); background: var(--warn-soft); }
+  .status.warn-status { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, var(--border)); background: var(--surface-2); }
+
+  .chain {
+    list-style: none;
+    padding: 0;
+    margin: 18px 0 8px;
+    display: grid;
+    gap: 0;
+    max-width: 78ch;
+  }
+  .chain li {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    position: relative;
+    padding: 0 0 18px;
+    margin: 0;
+  }
+  .chain li::before {
+    content: "";
+    position: absolute;
+    left: 13px;
+    top: 26px;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-strong);
+  }
+  .chain li:last-child::before { display: none; }
+  .chain .step {
+    width: 27px;
+    height: 27px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 1;
+    flex: none;
+  }
+  .chain .body { padding-top: 2px; min-width: 0; }
+  .chain .body b { display: block; font-size: 0.93rem; margin-bottom: 2px; }
+  .chain .body span { font-size: 0.84rem; color: var(--muted); }
+  .chain .body code { font-size: 0.78em; }
+  .chain li.stop .step { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
+  .chain li.stop .body b { color: var(--warn); }
+
+  .contracts { display: grid; gap: 14px; margin-bottom: 18px; }
+  .kv {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 24px;
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+  }
+  .kv .k, .kv .v { margin: 0; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: var(--mono); font-size: 0.8rem; text-align: right; }
+  .kv div {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.86rem;
+    min-width: 0;
+  }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 0.8rem; text-align: right; }
+
+  .refs { font-size: 0.82rem; color: var(--muted); }
+  .refs code { font-size: 0.78rem; }
+
+  footer {
+    max-width: 1180px;
+    margin: 48px auto 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-strong);
+    font-size: 0.78rem;
+    color: var(--faint);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    justify-content: space-between;
+  }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    .toc {
+      position: static;
+      border-left: 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 0;
+      margin-bottom: 24px;
+      max-height: none;
+      overflow: visible;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 14px;
+    }
+    .toc .toc-label { flex-basis: 100%; margin-bottom: 4px; }
+    .toc a { display: inline-block; padding: 2px 0; }
+    .toc a.sub { padding-left: 0; }
+    .cards { grid-template-columns: 1fr; }
+    .kv { grid-template-columns: 1fr; }
+    section { padding-bottom: 30px; }
+  }
+  @media (max-width: 520px) {
+    body { font-size: 15px; }
+    .meta-row { font-size: 0.78rem; }
+    .verdict { padding: 18px; }
+    th, td { padding: 8px 10px; }
+    table { font-size: 0.82rem; }
+  }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">
+      <span class="dot"></span>
+      <span>DSPMU · NGA post-mortem</span>
+      <span>2026-10-31</span>
+      <span>Analysis only · no code changed</span>
+    </div>
+    <h1>Why the recent fixes did not fix the chat</h1>
+    <p class="dek">The agent is failing before its retrieval layers run. Four implicit contracts — conversation, navigation, evidence adequacy, and answer state — are broken, and every recent fix sits downstream of them.</p>
+    <div class="meta-row">
+      <span><b>Scope</b> NGA text / chat / WhatsApp</span>
+      <span><b>Evidence</b> live graph copy · turn events · answer cache · reproductions · live site probes</span>
+      <span><b>Verdict</b> contract mismatch cascade</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <span class="label">Bottom line</span>
+    <p>The system is a <strong>retrieve-then-generate question answerer with a citation verifier</strong>, not a conversational assistant. It decides, before any of the new machinery runs, that a conversation move is a knowledge query, that a shell page does not exist, that any retrieved text is adequate evidence, and that a refusal with no false claim is a verified answer.</p>
+    <p>Those four decisions produce the observed experience: meta questions get knowledge answers, programme questions get refusals, deep search never fires, a legitimate M.Sc. answer is blocked by a UG alias table, and the refusal is cached for a day.</p>
+  </div>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Contents">
+      <div class="toc-label">Contents</div>
+      <a href="#intent"><span class="num">01</span>What the work meant to do</a>
+      <a href="#running"><span class="num">02</span>What was actually running</a>
+      <a href="#failure"><span class="num">03</span>The failure in its own records</a>
+      <a href="#reproduction"><span class="num">04</span>Where the answer actually is</a>
+      <a href="#contracts"><span class="num">05</span>Four broken contracts</a>
+      <a href="#levels"><span class="num">06</span>Root causes by level</a>
+      <a href="#attempts"><span class="num">07</span>Why each fix missed</a>
+      <a href="#chain"><span class="num">08</span>The causal chain</a>
+      <a href="#plan"><span class="num">09</span>What to do instead</a>
+      <a href="#acceptance"><span class="num">10</span>Acceptance tests</a>
+      <a href="#ledger"><span class="num">11</span>Mistake ledger</a>
+      <a href="#appendix"><span class="num">12</span>Evidence index</a>
+    </nav>
+
+    <main>
+      <section id="intent">
+        <div class="section-head"><span class="num">01</span><h2>What the work meant to do</h2></div>
+        <p class="lede">The intent is not ambiguous. It is a live-site, conversational, navigation-grounded agent. The implementation is a one-shot lexical search plus an evidence-constrained LLM.</p>
+
+        <p>The design set states the problem as a <strong>solution-design failure, not a website-availability failure</strong>: the runtime has no path to most of the live site. The product intent is to <em>“make any published DSPMU website detail answerable, in real time, in the user’s channel and language, with a grounded and cited response.”</em></p>
+
+        <p>The agent is required to know the site hierarchy, <strong>navigate</strong> it through constrained tools, combine verified facts with live page content, keep a durable conversation record that improves follow-up retrieval, and degrade to the static answer only when the live site or a tool fails.</p>
+
+        <div class="cards">
+          <div class="card">
+            <span class="kicker">North star</span>
+            <h3>≥ 90% grounded live-answer rate</h3>
+            <p>M-01 on a frozen evaluation set. M-02 requires 100% critical-fact accuracy; M-09 requires every turn to have a plan, tools, evidence, answer, verifier result and latency.</p>
+          </div>
+          <div class="card">
+            <span class="kicker">Product promise</span>
+            <h3>Any published detail</h3>
+            <p>Not “any page whose title shares a token with the question.” The intent explicitly names library timings, the Vice-Chancellor, hostel process and the Grievance Redressal Cell as the failure cases.</p>
+          </div>
+          <div class="card">
+            <span class="kicker">Conversation</span>
+            <h3>Follow-ups resolve</h3>
+            <p>JTBD-06: “what about its fee?” after opening a topic must resolve the topic, programme and time scope without a full transcript stuff.</p>
+          </div>
+          <div class="card">
+            <span class="kicker">Architecture thesis</span>
+            <h3>Navigate, don’t just search</h3>
+            <p>Typed graph + tools + planner + evidence + verifier + event memory. The graph is meant to preserve hierarchy and per-node metadata, not merely feed a title FTS index.</p>
+          </div>
+        </div>
+
+        <p>The 2026-10-31 amendment added hybrid retrieval, a chunk corpus, a time-scoped cache and a deep-search fallback. Its own diagnosis was that the current path “misses facts that exist on the live site but are not indexed” and can reuse a cached answer outside the period the user asked about. That diagnosis was correct — but the response was applied one layer too low.</p>
+      </section>
+
+      <section id="running">
+        <div class="section-head"><span class="num">02</span><h2>What was actually running</h2></div>
+        <p class="lede">“Implemented” currently means “the code path exists.” It does not mean wired, enabled, populated, or verified end to end.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Layer</th><th>What exists</th><th>What the live path does</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>Intent</strong></td><td>8 retrieval intents + boundary; optional LLM planner</td><td>Deterministic keyword classifier by default (<code>NGA_TEXT_LLM_PLANNER=false</code>); <code>PAGE_TOPIC</code> is the catch-all</td></tr>
+              <tr><td><strong>Planner</strong></td><td><code>site.search</code>, <code>site.navigate</code>, <code>site.open</code>, <code>site.latest</code>, <code>site.documents</code>, <code>site.freshness</code>, <code>site.follow</code></td><td>Emits <code>site.search</code> for fee/programme/page-topic/contact; <code>site.latest</code> + <code>site.search</code> for date/notice. <strong>Never <code>site.navigate</code>, <code>site.documents</code>, <code>site.follow</code> or <code>site.freshness</code>.</strong></td></tr>
+              <tr><td><strong>Retrieval</strong></td><td>Graph FTS + body FTS + optional chunk FTS + optional dense vectors</td><td>Graph FTS and body FTS. Chunk path only when <code>chunk_count() &gt; 0</code>; dense only when <code>EMBEDDING_PROVIDER</code> is not off.</td></tr>
+              <tr><td><strong>Evidence</strong></td><td>Typed evidence, verified facts, citations, tables</td><td>Search results (up to 3), opened page body, verified fee/contact/leadership facts. <strong>No relevance gate.</strong></td></tr>
+              <tr><td><strong>Generation</strong></td><td>Evidence-grounded prompt with strict “say you could not verify” instruction</td><td>Same. The model is explicitly told to refuse when the evidence is insufficient.</td></tr>
+              <tr><td><strong>Verification</strong></td><td>Amount/date/URL/email/phone/person/programme claims; citation-span checks</td><td>Blocks a critical claim, rewrites a URL-only failure. <strong>A refusal has no claims and is marked <code>verified</code>.</strong></td></tr>
+              <tr><td><strong>Cache</strong></td><td><code>nga_answer_cache</code>, TTL + time scope + source revalidation</td><td>Caches <code>verified</code> and <code>rewritten</code> answers. Refusals with evidence are <code>verified</code>. 24 h TTL for untimed queries; 1 h for time-scoped; 10 min for <code>no_evidence</code>.</td></tr>
+              <tr><td><strong>Deep search</strong></td><td>Site <code>/search</code> → fetch → extract → evidence → answer → verifier</td><td>Only when the bundle is empty (or cache revalidation failed), and only for non-voice channels.</td></tr>
+              <tr><td><strong>Conversation</strong></td><td><code>nga_turn_event</code>, <code>ConversationMemory.load/plan/record</code></td><td>Records events on the normal answer path only. <strong>Never loads state for planning.</strong> Cache hits and deep-search returns skip the event write.</td></tr>
+              <tr><td><strong>Documents</strong></td><td>4,461 document nodes, PDF extraction, OCR review gate</td><td>841 <code>done</code>, 7 done + needs review, 2,548 pending, 865 empty, 198 blocked, 2 error at snapshot.</td></tr>
+              <tr><td><strong>Chunks</strong></td><td>Chunker, indexer, BM25 chunk FTS, RRF, OpenAI embeddings</td><td><code>nga_chunk = 0</code>, <code>nga_chunk_embedding = 0</code>, <code>EMBEDDING_PROVIDER=off</code> at snapshot.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Effective runtime settings</h3>
+<pre><code>NGA_ENABLED=True
+NGA_MODE=agentic
+DEEP_SEARCH_ENABLED=True
+CACHE_REVALIDATE_ENABLED=True
+NGA_TEXT_LLM_PLANNER=False
+EMBEDDING_PROVIDER=off
+LLM_MODEL=gpt-6-luna
+LLM_MAX_TOKENS=192
+NGA_TEXT_MAX_ITEMS=5
+NGA_TEXT_MAX_CHARS=4000
+
+RETRIEVAL_MODE      &lt;missing&gt;
+VERIFY_MODE         &lt;missing&gt;
+TIME_SCOPE_STRICT   &lt;missing&gt;
+CACHE_BACKEND       &lt;missing&gt;</code></pre>
+
+        <div class="callout">
+          <span class="title">The status-document gap</span>
+          <p>The amendment names <code>RETRIEVAL_MODE</code>, <code>VERIFY_MODE</code>, <code>TIME_SCOPE_STRICT</code> and <code>CACHE_BACKEND</code> as rollout flags. None of them exist in <code>app/config.py</code>. “Implemented” in the status table means a code path exists, not that the capability is live.</p>
+        </div>
+
+        <h3>Graph and index state at snapshot</h3>
+        <div class="kv">
+          <div><span class="k">Graph nodes</span><span class="v">4,802</span></div>
+          <div><span class="k">Graph edges</span><span class="v">9,443</span></div>
+          <div><span class="k">Node status</span><span class="v">4,444 ok · 198 blocked · 158 empty_shell · 2 external</span></div>
+          <div><span class="k">Pages with text</span><span class="v">157</span></div>
+          <div><span class="k">Body FTS rows</span><span class="v">998</span></div>
+          <div><span class="k">Documents</span><span class="v">4,461</span></div>
+          <div><span class="k">Documents done</span><span class="v">841 (+7 review)</span></div>
+          <div><span class="k">Documents pending</span><span class="v">2,548</span></div>
+          <div><span class="k">Documents empty</span><span class="v">865</span></div>
+          <div><span class="k">Documents blocked</span><span class="v">198</span></div>
+          <div><span class="k">Chunks</span><span class="v"><strong>0</strong></span></div>
+          <div><span class="k">Chunk embeddings</span><span class="v"><strong>0</strong></span></div>
+          <div><span class="k">Answer cache entries</span><span class="v">6</span></div>
+          <div><span class="k">Turn events</span><span class="v">8</span></div>
+        </div>
+
+        <p>The graph claims 329 nodes in the Phase 1 report and now has 4,802 because document and legacy nodes were added. The important number is not the node count; it is the 157 pages with text and the 158 shells excluded from navigation.</p>
+      </section>
+
+      <section id="failure">
+        <div class="section-head"><span class="num">03</span><h2>The failure, in the system’s own records</h2></div>
+        <p class="lede">The recent conversation is the clearest evidence. It is not a handful of isolated bugs; it is the four contracts failing in sequence.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Turn</th><th>User message</th><th>Planner</th><th>Evidence used</th><th>Answer</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="num-cell">1</td>
+                <td>“can you search deep”</td>
+                <td><code>page_topic</code> → <code>site.search</code></td>
+                <td>M.Sc. IT page + two career PDFs</td>
+                <td>“Yes—what would you like me to search for at DSPMU, such as a programme, admission dates, fees, or a contact?”</td>
+                <td><span class="status ok">verified</span></td>
+              </tr>
+              <tr>
+                <td class="num-cell">2</td>
+                <td>“which programs currently university”</td>
+                <td><code>page_topic</code> → <code>site.search</code></td>
+                <td>Best Practices, NEP 2020, NEP 2020</td>
+                <td>“I couldn’t verify which programmes are currently offered from the available evidence. Please contact the Registrar for the current list.”</td>
+                <td><span class="status ok">verified</span> <span class="status bad">cached 24 h</span></td>
+              </tr>
+              <tr>
+                <td class="num-cell">3</td>
+                <td>“do you undertstand when I ask about program what is my intent of ask?”</td>
+                <td><code>date</code> → <code>site.latest</code> + <code>site.search</code></td>
+                <td>About the University, About DSPMU, About IQAC, two notices</td>
+                <td>“Yes. I understand ‘program’ to mean an academic programme offered by DSPMU, unless you specify otherwise. [ev-1]”</td>
+                <td><span class="status ok">verified</span> <span class="status bad">cached 24 h</span></td>
+              </tr>
+              <tr>
+                <td class="num-cell">4</td>
+                <td>“can you check deep search to find university program”</td>
+                <td><code>programme</code> → <code>site.search</code></td>
+                <td>Grievance Portal, Grievance Redressal Cell, M.Sc. IT / career PDF</td>
+                <td><em>(empty)</em></td>
+                <td><span class="status bad">blocked</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>What the user saw</h3>
+        <ul>
+          <li><strong>Turn 1:</strong> a meta request (“can you search deep”) answered as a site query, with an irrelevant bundle and a canned offer to search.</li>
+          <li><strong>Turn 2:</strong> a direct programme-list question answered with a refusal, even though department pages in the graph contain “U.G History / P.G History / Syllabus &amp; Course Documents” and the live site’s <code>/search?q=programmes</code> returns the Academic Programmes and department pages. The refusal is cached as <code>verified</code> for 24 hours, so repeating the question returns the same refusal.</li>
+          <li><strong>Turn 3:</strong> a meta question about the assistant’s understanding was routed to the date/notice path because the classifier sees “when.” It produced a plausible-sounding but unsupported answer with a citation to the About page.</li>
+          <li><strong>Turn 4:</strong> the user explicitly asked for deep search. The planner produced a <code>site.search</code>; the evidence bundle was non-empty (irrelevant), so deep search was never called. The answer was blocked by the verifier and rendered as “I could not find a verified answer in the public university pages. Please contact the registrar.”</li>
+        </ul>
+
+        <p>Two other cache entries show the same pattern. <code>happending</code> → “I checked the official university website for the latest details. I could not verify…” → <code>verified</code>, cached for 1 hour: the deep-search refusal path found something, could not answer, prefixed a message that claims it checked the site, and cached the non-answer. <code>search deep</code> → “Yes—what would you like me to search for at DSPMU…” → <code>verified</code>, cached 24 hours.</p>
+
+        <p>The only demonstrated successes were <code>vice chancellor</code> (“The Vice Chancellor is Prof. Rajiv Manohar.”) and <code>exam schedule oct 2026</code> (“The schedule lists exams on 13-10-2026.”). That is exactly the profile of a lexical QA system: it works for distinctive noun phrases whose answer is in an indexed page or fact, and fails for conversational acts, broad enumeration, synonyms, PG entities and shell-shaped sections.</p>
+      </section>
+
+      <section id="reproduction">
+        <div class="section-head"><span class="num">04</span><h2>Where the answer actually is</h2></div>
+        <p class="lede">All reproductions below ran against a copy of the live graph with the same planner, search, evidence and verifier code. No LLM call was needed.</p>
+
+        <h3>4.1 The correct page is often in the graph but excluded</h3>
+        <p><code>app/sitegraph/policy.py:42–56</code> marks any <code>empty_shell</code> node unanswerable. The following nodes are all <code>empty_shell</code> and therefore invisible to every tool:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Node</th><th>Title</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td><code>cms.academic-programmes</code></td><td>Academic Programmes</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>academic-programmes.ug</code></td><td>Under Graduate (UG)</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>academic-programmes.pg</code></td><td>Post Graduate (PG)</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>cms.hostel</code></td><td>Hostel</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>student-life.hostel</code></td><td>Hostel</td><td><span class="status bad">empty_shell</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+<pre><code>site.navigate("cms.academic-programmes")  -&gt; BLOCKED: node not answerable
+site.search("academic programmes")         -&gt; Academic Council, NEP 2020,
+                                              University at a Glance, CBCS NEP 2020, NSS
+site.search("hostel")                      -&gt; 2022 Hostel Allotment Fees PDF,
+                                              University at a Glance, About pages
+site.search("library timings")             -&gt; examination-timing PDFs,
+                                              digital-library notice, no library page</code></pre>
+
+        <div class="callout warn">
+          <span class="title">The navigation contradiction</span>
+          <p>The intent says the agent must navigate empty CMS shells and follow documents. The code makes empty shells invisible to every tool. A shell is useless as evidence, but it is valuable as a <strong>navigation node</strong>: it has a URL, title, parent, children and often links to documents. The implementation conflates “cannot ground a claim” with “does not exist.”</p>
+        </div>
+
+        <h3>4.2 Ranking prefers generic body matches to the specific page</h3>
+        <p>For <code>"what programmes are offered"</code>, normalized to <code>"programmes offered"</code>:</p>
+<pre><code>1. 6.95  Cbcs Nep 2020
+2. 6.95  NEP 2020
+3. 6.95  Training &amp; Placement Cell (Legacy)
+4. 6.38  NSS
+5. 6.37  NSS
+6. 6.30  University at a Glance
+...
+20. 5.90  Results</code></pre>
+        <p>The Academic Programmes node is not in the top 20; it is excluded as an empty shell. The closest useful page, <code>faculties.vocational-studies</code> (“Self-Finance and Vocational Courses”), is not retrieved either. A department page such as <code>departments.history</code> contains “Under Graduate / U.G History / Post Graduate / P.G History / Syllabus &amp; Course Documents” but is not in the top 20.</p>
+
+        <p>The scoring still has the old shape: unweighted term overlap across title, nav, alias, path and section; BM25 capped at <code>min(2.0, -rank × 0.25)</code>; content bonus 2.5 for HTML; authority bonus 1.0; no IDF, no field weighting, no stemming, no relevance threshold. <code>_GENERIC_TOKENS</code> only drops “university”, “universities” and “upcoming”; “currently”, “list”, “programs”, “offered” and “details” remain as ranking terms.</p>
+
+        <h3>4.3 The tokenizer and classifier do not understand word forms</h3>
+        <p><code>nga_fts</code> is <code>fts5(..., tokenize='unicode61')</code>; there is no porter stemmer. So <code>programs</code> does not match <code>programme</code>; <code>courses</code> does not match <code>course</code>; <code>lists</code> does not match <code>list</code>.</p>
+<pre><code>"program"             -&gt; programme
+"programs"            -&gt; page_topic
+"programmes"          -&gt; page_topic
+"list of programmes"  -&gt; page_topic
+"do you understand when I ask about program..."
+                      -&gt; date   (because "when" is in _DATE_WORDS,
+                                 checked before _PROGRAMME_WORDS)</code></pre>
+
+        <h3>4.4 The programme detector is a UG fee table, and it collides with PG names</h3>
+        <p><code>app/programs.py:8–10</code> says it plainly: it covers the 43 undergraduate programmes in the 2026 fee sheet; postgraduate programme names are deliberately absent. <code>detect_program()</code> is used by the <strong>verifier</strong>, not just lead capture.</p>
+<pre><code>M.Sc. Information Technology             -&gt; Bachelor of Science in Information Technology (B.Sc.)
+Master of Science in Information Technology -&gt; Bachelor of Science in Information Technology (B.Sc.)
+M.A. History                             -&gt; Bachelor of Arts in History (BA)
+M.Sc. Chemistry                          -&gt; Bachelor of Science in Chemistry (B.Sc.)
+M.Sc. Mathematics                        -&gt; Bachelor of Science in Mathematics (B.Sc.)
+M.Sc. Botany                             -&gt; Bachelor of Science in Botany (B.Sc.)
+M.Sc. Zoology                            -&gt; Bachelor of Science in Zoology (B.Sc.)</code></pre>
+        <p>The subject alias <code>"information technology"</code> maps to the UG B.Sc. IT row, and the detector returns the first matching alias. A generated answer that correctly names “M.Sc. Information Technology” from the evidence is therefore treated as claiming “B.Sc. Information Technology,” which is not in the evidence, and the answer is blocked as a critical programme failure. I reproduced exactly that with the evidence from turn 4:</p>
+<pre><code>Answer: "Yes, I can search the official website. The university offers
+         programmes such as M.Sc. Information Technology [ev-3]."
+Verifier: status=blocked
+Failure:  programme "Bachelor of Science in Information Technology (B.Sc.)"
+          reason=programme_not_in_evidence</code></pre>
+        <p>This is a concrete, reproducible cause of a legitimate answer being thrown away. It is also a warning about reusing a lead-capture entity detector as a grounding verifier: the two have different universes.</p>
+
+        <h3>4.5 The planner never navigates</h3>
+        <p>The deterministic planner’s entire output surface is:</p>
+<pre><code>fee / programme / page_topic  -&gt; site.search
+notice / date                 -&gt; site.latest, maybe + site.search
+contact                       -&gt; site.search "contact registrar"
+follow-up                     -&gt; site.open(current_node) [+ site.search]
+boundary                      -&gt; no steps</code></pre>
+        <p>For ten representative questions, <code>site.navigate</code>, <code>site.documents</code>, <code>site.follow</code> and <code>site.freshness</code> never appeared. The navigation graph is used only as a ranking index. JTBD-02 (“navigate the hierarchy when the exact page is unknown”) is not implemented in the live default path. A broad question like “list all programmes offered” cannot be answered by a top-3 search; it needs an open-section-and-enumerate plan or a structured catalogue.</p>
+
+        <h3>4.6 The evidence gate is “any non-empty bundle”</h3>
+<pre><code>if (
+    (not bundle.items or revalidation_invalid)
+    and settings.DEEP_SEARCH_ENABLED
+    and channel != "voice"
+):</code></pre>
+        <p><code>assemble_evidence()</code> has no relevance gate. It takes the successful tool results and adds them, up to the item/character caps. So “library timings” returns exam-timing PDFs, “what programmes are offered” returns NEP/NSS pages, “hostel rules” returns a 2022 fee PDF and About pages, and “can you check deep search…” returns the Grievance Portal and M.Sc. IT. In every case the bundle is non-empty and deep search is skipped.</p>
+        <p>The live site’s own <code>/search</code> endpoint returns the right pages:</p>
+<pre><code>/search?q=library timings  -&gt; /facilities/central-library, /cms/central-library,
+                              /academic-programmes/ug, /academic-programmes/pg,
+                              /student-life/hostel, department pages
+/search?q=programmes       -&gt; /cms/academic-programmes, /academic-programmes/ug,
+                              /academic-programmes/pg, departments/commerce,
+                              departments/history, departments/mba, ...
+/search?q=hostel rules     -&gt; /cms/hostel, /student-life/hostel</code></pre>
+        <p>The deep-search service uses exactly this endpoint. It is the correct escape hatch. It is simply never reached because the bundle has junk in it.</p>
+
+        <h3>4.7 The live site is shell-shaped and image-shaped</h3>
+        <p>I probed the live pages. <code>/cms/academic-programmes</code>, <code>/academic-programmes/ug</code> and <code>/academic-programmes/pg</code> return ~5,500 characters of HTML, almost all navigation/footer; the content area is empty. <code>/facilities/central-library</code> and <code>/cms/central-library</code> return ~1,000 characters after stripping scripts/nav/header/footer: 11 images, alt “Library,” no timing text. <code>/student-life/hostel</code> and <code>/cms/hostel</code> are “Hostel Gallery” shells.</p>
+        <p>The graph’s <code>empty_shell</code> labels are <strong>factually correct for the extracted HTML</strong>. The problem is the assumption that the CMS HTML is the primary public surface. For these pages it is not. The information a human sees in a browser may be in images, JS-rendered blocks, the old site, department pages or PDFs. The current knowledge plane cannot see it, and the deep-search fallback rejects any page under 80 characters of text — exactly these shells.</p>
+        <div class="callout warn">
+          <span class="title">The answer to “the information is already on the website”</span>
+          <p>It is available to a human browser, but not to the HTML-only retrieval pipeline. Adding chunks, embeddings or a cache over the same extracted text cannot retrieve content that was never extracted. The pipeline needs a different acquisition strategy for these pages, or an explicit statement that they are not machine-readable and a hand-off to the published URL/contact. Right now it produces a generic refusal indistinguishable from “the university does not publish this.”</p>
+        </div>
+
+        <h3>4.8 The verifier verifies claims, not answers</h3>
+        <p>A refusal such as “I couldn’t verify which programmes are currently offered…” contains no amounts, dates, URLs, emails, phones, named people or detectable programmes. It therefore has no claims, no failures, and returns <code>status="verified"</code>. The cache stores that as a verified entry for 24 hours. The next identical question returns the refusal without calling the LLM.</p>
+        <p>The same contract flaw is why the blocked turn renders as “I could not find a verified answer in the public university pages.” The user cannot tell whether the system found nothing, found something but rejected its own answer, or hit a policy boundary. In turn 4 it had evidence and the LLM produced something; the verifier blocked it; the user was told the university pages had no verified answer. That statement is false.</p>
+
+        <h3>4.9 The cache makes one bad turn sticky</h3>
+        <p>The cache key includes normalized query, language, channel, programme, time scope, index version and policy version. It does <strong>not</strong> include the answer type (answer vs refusal vs clarification), the conversation topic/current node, the chunk index version, or the embedding model/version. <code>_cache_versions()</code> uses only the graph compile run, so rebuilding the chunk index does not invalidate the cached refusal.</p>
+        <p>Revalidation only runs near expiry. For an entry with no source URL, it returns <code>valid=True, checked=False, "no_source"</code> — a cached refusal with no citations is treated as valid without a check. A refusal with citations to unchanged junk pages survives revalidation. This is why “multiple attempts” produce the same answer: the first failure is not just displayed; it is promoted to a verified cache fact.</p>
+
+        <h3>4.10 The conversation path is not wired</h3>
+        <p><code>plan_text()</code> constructs a fresh <code>SessionState(language=language)</code> every turn. <code>ConversationMemory.load()</code> and <code>.plan()</code> exist but <code>build_text_answer()</code> calls neither. It only calls <code>.record()</code> at the end of the normal path, and even that is skipped for cache hits and deep-search returns.</p>
+        <p>The Streamlit path calls <code>query_rag_stream(prompt, ...)</code> with <code>agentic_text</code>, <code>channel</code> and <code>conversation_id</code>, but no history. <code>query_rag_stream()</code> has no <code>history</code> parameter. The synchronous path has one and passes it to <code>build_text_answer</code>, but that function uses it only in the generation prompt; the planner still gets fresh state. So even on WhatsApp, “what about its fee?” cannot resolve “it” at retrieval time. The Phase 6 demo worked because the demo passed a <code>SessionState</code> explicitly; the live seam never does.</p>
+
+        <h3>4.11 Serving and indexing share one SQLite writer</h3>
+        <p>At analysis time, <code>scripts/nga_documents.py --backfill --chunks</code> was running at ~90% CPU and held many file descriptors on <code>content/dspmu/nga_graph.sqlite3</code>. Reads from the live database failed with <code>database is locked</code>, including read-only queries. The store uses <code>sqlite3.connect(..., timeout=30.0)</code>, <code>PRAGMA busy_timeout = 30000</code>, and the database is in <code>journal_mode=delete</code> (not WAL).</p>
+        <p>The answer path and the batch indexer use the same file. A long document backfill can make a user turn wait up to 30 seconds, exceed the 8-second text deadline, raise inside <code>build_text_answer</code>, and silently fall back to the static path. That is a reliability/architecture defect, not a retrieval bug, and it explains inconsistent behavior during testing.</p>
+
+        <h3>4.12 The profile gate can hijack the first turns</h3>
+        <p>This is a channel-level issue in <code>app.py</code>, separate from the NGA core, but it contributes to “not responding as expected of a conversation.” On first load, <code>awaiting_field</code> is set to <code>"name"</code>. Any message that is not recognised as a question, admission intent, skip word or short name is treated as a name. “Tell me about the university” (5 words, no <code>?</code>, no keyword) becomes “That’s a bit long for a name. Could you just tell me your first and last name?” “hello” is short enough to be stored as the user’s name. A message containing “admission” starts the lead-capture flow rather than answering the admission question.</p>
+        <p>The observed conversation got past this gate, so it is not the cause of turns 1–4. But the first-run experience is a lead form, not a chat, and that is part of what the user is describing.</p>
+      </section>
+
+      <section id="contracts">
+        <div class="section-head"><span class="num">05</span><h2>Four broken contracts</h2></div>
+        <p class="lede">These are not module bugs. They are implicit decisions that make the current failure likely even if every module is correct.</p>
+
+        <div class="cards">
+          <div class="card warn">
+            <span class="kicker">Contract 1</span>
+            <h3>Conversation</h3>
+            <p><strong>Current:</strong> every message is a standalone knowledge query. No small talk, meta, clarification or follow-up state.<br><strong>Required:</strong> a dialogue frame with dialogue act, resolved query, topic, programme, time scope and requested shape, loaded from conversation memory before planning.</p>
+          </div>
+          <div class="card warn">
+            <span class="kicker">Contract 2</span>
+            <h3>Navigation</h3>
+            <p><strong>Current:</strong> <code>empty_shell</code> nodes are unanswerable for search <em>and</em> navigation; the planner never calls <code>site.navigate</code>.<br><strong>Required:</strong> separate “can ground” from “can navigate.” A shell is a route, not evidence.</p>
+          </div>
+          <div class="card warn">
+            <span class="kicker">Contract 3</span>
+            <h3>Evidence adequacy</h3>
+            <p><strong>Current:</strong> any non-empty bundle is evidence. No relevance, coverage or shape check.<br><strong>Required:</strong> an explicit predicate; if inadequate, navigate, deep-search, clarify, or refuse with a reason — never treat junk as adequate.</p>
+          </div>
+          <div class="card warn">
+            <span class="kicker">Contract 4</span>
+            <h3>Answer state</h3>
+            <p><strong>Current:</strong> “verified” means “no unsupported claim.” Refusals are verified and cached.<br><strong>Required:</strong> separate claim support from answer adequacy; an explicit answer state machine; only positive answers receive a positive cache TTL.</p>
+          </div>
+        </div>
+
+        <h3>D1. The product contract is conversational; the implementation is one-shot QA</h3>
+        <p>The design promises a conversation record that improves follow-up retrieval, but the live answer contract is “query → retrieve → generate → verify.” There is no dialogue-act model, no clarification state, no small-talk path, no follow-up frame. The only conversation state is a typed <code>SessionState</code> that the live path never loads. Adding more retrieval cannot make a search box conversational.</p>
+
+        <h3>D2. The navigation contract is contradicted by the answerability policy</h3>
+        <p>The architecture claims the typed graph preserves hierarchy and lets the agent navigate. But <code>is_answerable()</code> removes <code>empty_shell</code>, <code>soft_404</code>, <code>unreachable</code>, <code>removed</code> and <code>blocked</code> nodes from search and navigation, not just evidence. The site’s programme, hostel and library sections are shells. The agent cannot navigate the exact sections the design was built for.</p>
+        <p>The correct distinction is <strong>evidence answerability</strong> (can this text ground a claim?) vs <strong>navigation answerability</strong> (can this node be a route with metadata/children/links?). The code collapses both into one predicate.</p>
+
+        <h3>D3. “Verified” conflates claim safety with answer adequacy</h3>
+        <p>The verifier answers “is every critical claim supported?” It does not answer “is this a responsive answer?” A refusal has no claims, so it is safe and verified. A correct answer that mentions a PG programme is unsafe according to the UG-only detector, so it is blocked. Safety and correctness are different axes, and the system has only one axis.</p>
+
+        <h3>D4. Evidence has no relevance or sufficiency predicate</h3>
+        <p>The decision to stop retrieving and start answering is “the bundle is non-empty.” That is not a sufficiency test. A usable predicate needs top relevance, query-term coverage, evidence type/shape match, time-scope coverage and entity-catalogue match for list questions. Without it, junk evidence is indistinguishable from good evidence, deep search is suppressed, and the LLM is asked to answer from noise.</p>
+
+        <h3>D5. The knowledge model is page-centric in an entity/catalogue-shaped site</h3>
+        <p>The useful knowledge is spread across department pages, PDFs, shell pages that are navigation hubs, image galleries, legacy pages and the site’s own search index. The system models “a page with text” as the unit of knowledge. It has no first-class programme, department, notice, document, time scope or authority entity that can be queried independently of a page. The facts layer covers only fees, contacts and leadership. A question like “which programmes are offered” is an entity/list query; the system treats it as a page-search query and fails.</p>
+
+        <h3>D6. The product scope and the policy boundary contradict each other</h3>
+        <p>The intent says “any published detail,” and the evaluation catalogue includes “Postgraduate programs” and “Doctoral / PhD programs.” But the programme detector is UG-fee-only; PG programme/fee/seat/eligibility requests can be answered with a deterministic boundary refusal; and the boundary heuristic is inconsistent: <code>"list of postgraduate courses"</code> is blocked, while <code>"what PG programmes are offered"</code> is not. The verifier will block an answer that mentions a PG programme that the detector maps to a UG programme.</p>
+        <p>The product needs an explicit decision: are PG programme lists (not fees) answerable from public pages? If yes, build a PG catalogue and adjust the detector/verifier. If no, say so in the UX and do not promise “any published detail.”</p>
+
+        <h3>D7. Serving and indexing share one SQLite writer</h3>
+        <p>Even in the local demo, the answer path and a 4,461-document backfill share one <code>delete</code>-journal SQLite file. A batch job can block user turns, and the fallback is silent. The serving store and the indexing store should be separate, or the indexer should write a snapshot and swap it atomically, with WAL and a bounded busy timeout.</p>
+      </section>
+
+      <section id="levels">
+        <div class="section-head"><span class="num">06</span><h2>Root causes by level</h2></div>
+        <p class="lede">The failure is not one bug. It is a set of design decisions, wiring gaps, module defects and process choices that reinforce each other.</p>
+
+        <h3>Implementation and wiring</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Issue</th><th>Evidence / effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>I1</code></td><td>Conversation memory is write-only</td><td><code>ConversationMemory.load/plan</code> exist; <code>build_text_answer</code> calls neither; <code>plan_text</code> uses a fresh state; Streamlit passes no history. Follow-ups fail.</td></tr>
+              <tr><td><code>I2</code></td><td>Deep search is gated on zero evidence, not inadequate evidence</td><td><code>text.py:501–505</code>; no relevance gate in <code>assemble_evidence</code>. Junk evidence suppresses the escape hatch.</td></tr>
+              <tr><td><code>I3</code></td><td>Hybrid chunks are node-first decoration, not fusion</td><td><code>tools.py:330–408</code>: node hits emitted first; chunk-only nodes appended after; list truncated to <code>limit</code>; dense off. Even after backfill, ranking will not change.</td></tr>
+              <tr><td><code>I4</code></td><td>Cache promotes non-answers and ignores index changes</td><td><code>_write_answer_cache</code> stores verified refusals; key has no answer type/topic/chunk version; <code>_cache_versions</code> uses only the graph run; no-source revalidation is valid unchecked.</td></tr>
+              <tr><td><code>I5</code></td><td>The verifier’s programme check uses the wrong universe</td><td>UG-fee detector applied to every answer; PG names map to UG canonical names; critical failure blocks the whole answer; no repair loop.</td></tr>
+              <tr><td><code>I6</code></td><td>Evidence assembly skips too much and caps too early</td><td>Search results capped at 3; opened node’s stub skipped even when the open produced no body; no per-item relevance score.</td></tr>
+              <tr><td><code>I7</code></td><td>The static fallback is a different product</td><td>Static prompt says “I don’t have that specific information in the university profile”; a silent fallback to a smaller, older corpus is indistinguishable from the agent’s refusal.</td></tr>
+              <tr><td><code>I8</code></td><td>No effective-config/readiness check</td><td>No boot report of mode, flags, graph/pages/chunks/embeddings, scheduler, DB version. The proposed rollout flags do not exist.</td></tr>
+              <tr><td><code>I9</code></td><td>Turn events missing on the paths that matter</td><td>Cache hits and deep-search returns skip the event write; M-09 “100% of turns” is not met.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Module-level defects</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Module</th><th>Defect</th></tr></thead>
+            <tbody>
+              <tr><td><code>M1</code></td><td><code>sitegraph/policy.py:42–56</code></td><td><code>EMPTY_SHELL</code> nodes are unanswerable for search and navigation, not just evidence.</td></tr>
+              <tr><td><code>M2</code></td><td><code>agent/planner.py:46–64, 117–139</code></td><td>Word-boundary keyword intent; <code>programs</code> ≠ <code>program</code>; “when” in a meta question → date; <code>PAGE_TOPIC</code> catch-all.</td></tr>
+              <tr><td><code>M3</code></td><td><code>agent/planner.py:197–287</code></td><td>Deterministic plan never uses <code>site.navigate</code>, <code>site.documents</code>, <code>site.follow</code>, <code>site.freshness</code>.</td></tr>
+              <tr><td><code>M4</code></td><td><code>sitegraph/search.py:127–213</code></td><td>OR-token FTS; unweighted overlap; capped BM25; incomplete generic-token removal; no stemming; no relevance threshold.</td></tr>
+              <tr><td><code>M5</code></td><td><code>sitegraph/search.py:114–118</code> + <code>nga_fts</code></td><td>No stemming: <code>programs</code> ≠ <code>programme</code>; <code>courses</code> ≠ <code>course</code>; tokenizer is <code>unicode61</code>.</td></tr>
+              <tr><td><code>M6</code></td><td><code>sitegraph/tools.py:330–408</code></td><td>Chunk hits appended after node hits and truncated; dense optional.</td></tr>
+              <tr><td><code>M7</code></td><td><code>programs.py:132–209</code></td><td>Alias table is UG-fee-only; subject aliases collide with PG names.</td></tr>
+              <tr><td><code>M8</code></td><td><code>agent/verifier.py:332–336, 541–555, 568–583</code></td><td>Programme claim uses the UG detector; no claims → verified; critical failure blocks whole answer; no repair.</td></tr>
+              <tr><td><code>M9</code></td><td><code>agent/evidence.py:243–513</code></td><td>No relevance gate; top-3 search cap; <code>opened_ids</code> skip even when open has no body.</td></tr>
+              <tr><td><code>M10</code></td><td><code>agent/text.py:95–101, 162–235, 501–505</code></td><td>Cache versions exclude chunks; refusals cached as verified; deep search only on empty bundle.</td></tr>
+              <tr><td><code>M11</code></td><td><code>cache/answer_cache.py:22, 224–313</code></td><td><code>verified</code> is the only positive status; no answer type; 24 h default; time scope only.</td></tr>
+              <tr><td><code>M12</code></td><td><code>cache/revalidate.py:74–104</code></td><td>No source URL → <code>valid=True, checked=False</code>; no-source does not invalidate.</td></tr>
+              <tr><td><code>M13</code></td><td><code>deepsearch/service.py:104–151, 197–198, 221–249</code></td><td>Only site search results; rejects pages under 80 chars; no child/PDF following; no write-through.</td></tr>
+              <tr><td><code>M14</code></td><td><code>rag.py:494–503</code>; <code>app.py:129–137</code></td><td>Stream path has no history; Streamlit passes none; planner gets fresh state.</td></tr>
+              <tr><td><code>M15</code></td><td><code>agent/text.py:72–92, 553–570</code></td><td><code>ConversationMemory.load/plan</code> unused; event writes skipped on cache/deep paths.</td></tr>
+              <tr><td><code>M16</code></td><td><code>app.py:492, 580–626, 922–945</code></td><td>First-run name gate and admission-intent lead capture can hijack knowledge questions.</td></tr>
+              <tr><td><code>M17</code></td><td><code>sitegraph/store.py:280–284</code>; <code>nga_documents.py</code></td><td>Shared SQLite <code>delete</code> journal; 30 s busy timeout; live DB locked during backfill.</td></tr>
+              <tr><td><code>M18</code></td><td><code>config.py</code></td><td>Proposed flags <code>RETRIEVAL_MODE</code>, <code>VERIFY_MODE</code>, <code>TIME_SCOPE_STRICT</code>, <code>CACHE_BACKEND</code> missing.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Process and engineering</h3>
+        <ul>
+          <li><strong>P1. Evaluation was last.</strong> The README lists Phases 1–12 as implemented and Phase 13 (“Evaluation, dashboards, canary and default-on”) as remaining. The user became the evaluator. The design set’s own Definition of Done requires the evaluation shape and gates before implementation; M-01 is the North Star.</li>
+          <li><strong>P2. Tests validate components, not outcomes.</strong> The agent tests build a one-page fixture and inject a fake LLM. The 103-case golden set is checked only for well-formedness, not run against the agent. There is no test for empty-shell navigation, plural programme intent, PG collisions, refusal caching, deep search on low relevance, or a live follow-up.</li>
+          <li><strong>P3. Status documents overstate completion.</strong> “Implemented” means “the code path exists.” The amendment lists “deep-search fallback — implemented,” “chunk + embedding hybrid — implemented,” and then, in the same table, “graph write-through is still a follow-up,” “live chunk backfill waits for the document job.” A reader can easily conclude the capability is live.</li>
+          <li><strong>P4. Fixes are compensation layers on broken upstream contracts.</strong> Broken conversation → add optional LLM planner (off). Broken retrieval relevance → add chunks/embeddings (empty/off). Broken answer adequacy → add deep search (gated on empty bundle). Broken cache correctness → add time scope/revalidation (refusals cached). Broken verification → add span citations (UG detector blocks PG). Broken coverage → add document backfill (same SQLite writer). Each layer assumes the previous gate produced a meaningful signal. None fixes the gate.</li>
+        </ul>
+      </section>
+
+      <section id="attempts">
+        <div class="section-head"><span class="num">07</span><h2>Why each recent fix missed</h2></div>
+        <p class="lede">The common thread: the new component is downstream of the decision that failed.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Recent solution</th><th>What it improved</th><th>Why the user still saw failure</th></tr></thead>
+            <tbody>
+              <tr><td>Typed graph + lexical FTS (Phases 1–4)</td><td>Distinctive noun topics, citations, fee/VIP facts</td><td>Excludes empty shells; one-shot search; no conversation; broad questions need enumeration.</td></tr>
+              <tr><td>Deep-search fallback</td><td>A live-site escape hatch</td><td>Trigger is <code>not bundle.items</code>; junk evidence suppresses it; shells rejected; no write-through; raw conversational query.</td></tr>
+              <tr><td>Hybrid chunk + BM25 + embeddings</td><td>Passage-level recall in principle</td><td>Chunks were 0 at runtime; provider off; node hits first and truncated; no stemming; cache index version unchanged.</td></tr>
+              <tr><td>Time-scoped cache</td><td>Prevents a December schedule answering January</td><td>Caches refusals as verified; no answer type; no chunk version; 24 h TTL; no-source revalidation valid.</td></tr>
+              <tr><td>Span-level verifier</td><td>Checks a claim against its cited evidence</td><td>No claims → verified; UG-only programme detector maps PG→UG; wrong citation blocks whole answer; no repair.</td></tr>
+              <tr><td>Archive/document backfill</td><td>More PDF text (841 done)</td><td>2,548 pending / 865 empty / 198 blocked; no chunks yet; shared SQLite writer blocks the live path.</td></tr>
+              <tr><td>LLM planner (optional)</td><td>Better intent/plan in principle</td><td><code>NGA_TEXT_LLM_PLANNER=false</code>; deterministic planner is live; no navigate/enumerate plans.</td></tr>
+              <tr><td>Conversation memory (Phase 6)</td><td>Follow-ups in the demo</td><td>Never loaded in the live path; Streamlit has no history; planner gets fresh state; events skipped on cache/deep paths.</td></tr>
+              <tr><td>Profile/lead capture</td><td>Lead generation</td><td>First-run name gate can hijack open-ended questions; “admission” starts a form instead of an answer.</td></tr>
+              <tr><td>Time-scope module</td><td>Parses month/year/session</td><td>Only used for cache validity, not retrieval or answer shaping; does not fix stale/irrelevant evidence.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="chain">
+        <div class="section-head"><span class="num">08</span><h2>The causal chain</h2></div>
+        <p class="lede">One representative failure, end to end. The escape hatch is bypassed before it can run, and the refusal is promoted to a cache fact.</p>
+
+        <ol class="chain">
+          <li><span class="step">1</span><div class="body"><b>User asks “which programs currently university”</b><span>The planner’s keyword classifier returns <code>PAGE_TOPIC</code> because “programs” does not match “program.” It emits one <code>site.search</code>, limit 3.</span></div></li>
+          <li><span class="step">2</span><div class="body"><b>Search normalizes to “programs currently”</b><span>FTS OR matches generic body text. Top hits: Best Practices, NEP 2020, NEP 2020. The Academic Programmes node is excluded as <code>empty_shell</code>; the correct department pages are not in the top 3.</span></div></li>
+          <li><span class="step">3</span><div class="body"><b>Executor auto-opens the top HTML hit</b><span>CBCS/NEP page. Evidence is assembled: three irrelevant items.</span></div></li>
+          <li><span class="step">4</span><div class="body"><b>No relevance gate</b><span>The bundle is non-empty, so it is treated as adequate. There is no score/coverage/shape predicate.</span></div></li>
+          <li class="stop"><span class="step">5</span><div class="body"><b>Deep search is skipped</b><span>The condition is <code>not bundle.items</code>. The live site’s <code>/search?q=programmes</code> — which returns the right pages — is never called.</span></div></li>
+          <li><span class="step">6</span><div class="body"><b>The prompt instructs the model to refuse if evidence is insufficient</b><span>Model: “I couldn’t verify which programmes are currently offered…”</span></div></li>
+          <li><span class="step">7</span><div class="body"><b>The verifier sees no critical claims</b><span>No amounts/dates/URLs/emails/phones/people/programmes → no failures → <code>status=verified</code>.</span></div></li>
+          <li class="stop"><span class="step">8</span><div class="body"><b>The cache stores the refusal for 24 hours</b><span>Index version does not include chunks; no-source revalidation is valid unchecked. The next identical question returns the refusal without an LLM call.</span></div></li>
+        </ol>
+
+        <h3>The meta/conversational branch</h3>
+<pre><code>"can you search deep" / "do you understand when I ask…" / "hello"
+  -&gt; no CHITCHAT/META/CLARIFY intent
+  -&gt; PAGE_TOPIC (or DATE because of "when")
+  -&gt; site.search / site.latest on a conversational utterance
+  -&gt; irrelevant evidence or junk notice list
+  -&gt; plausible but non-responsive sentence
+  -&gt; verifier: no claims (or a supported claim) -&gt; verified
+  -&gt; user sees a knowledge answer to a conversation move</code></pre>
+
+        <h3>The PG/programme branch</h3>
+<pre><code>"can you check deep search to find university program"
+  -&gt; planner: PROGRAMME -&gt; site.search; evidence includes M.Sc. IT
+  -&gt; LLM mentions M.Sc. Information Technology [ev-N]
+  -&gt; detect_program("M.Sc. Information Technology")
+       -&gt; "Bachelor of Science in Information Technology (B.Sc.)"
+  -&gt; B.Sc. IT not in cited evidence -&gt; critical programme failure
+  -&gt; status=blocked, answer="" -&gt; "I could not find a verified answer…"
+  -&gt; actual cause: an alias collision in a UG fee table</code></pre>
+      </section>
+
+      <section id="plan">
+        <div class="section-head"><span class="num">09</span><h2>What to do instead</h2></div>
+        <p class="lede">Follow the causal order, not the layer order. Do not add another retrieval mechanism until the upstream contracts are explicit.</p>
+
+        <h3>9.1 Make the four contracts explicit</h3>
+
+        <div class="contracts">
+        <div class="card">
+          <span class="kicker">Contract 1 · Conversation frame</span>
+          <p>Every turn must carry <code>conversation_id</code>, <code>turn_id</code>, channel, language, <code>dialogue_act</code> (greeting / meta / thanks / backchannel / knowledge / followup / boundary / clarify), <code>resolved_query</code>, topic, programme, <code>time_scope</code> and <code>requested_shape</code> (direct / list / comparison / how-to / confirmation). The planner must receive this frame, loaded from <code>ConversationMemory</code>. Greetings, meta and thanks must not enter retrieval. Update the topic only after a turn that produced a real answer or clarification.</p>
+        </div>
+
+        <div class="card">
+          <span class="kicker">Contract 2 · Retrieval adequacy</span>
+          <p>Replace “bundle is non-empty” with a predicate: top relevance ≥ T, query-term coverage ≥ C, evidence matches the requested shape, time scope covered if asked, entity-catalogue match for list questions. If not adequate: use a different strategy (navigate, enumerate, site search, child links, PDFs), deep-search, clarify, or refuse with a specific reason. Deep search triggers on <code>not adequate</code>, not <code>not items</code>.</p>
+        </div>
+
+        <div class="card">
+          <span class="kicker">Contract 3 · Answer state machine</span>
+          <p><code>answered_verified</code> and <code>answered_rewritten</code> may be cached with a positive TTL. <code>clarification</code> is short-lived. <code>refused_policy</code>, <code>refused_no_machine_text</code>, <code>refused_low_confidence</code> and <code>failed_generation</code> must never be stored under a positive answer status. Add <code>answer_type</code>, <code>topic</code>, <code>evidence_signature</code>, <code>chunk_index_version</code> and <code>embedding_model</code> to the cache schema.</p>
+        </div>
+
+        <div class="card">
+          <span class="kicker">Contract 4 · Navigation answerability</span>
+          <p>Split <code>is_answerable</code> into <code>can_ground(node)</code> (status OK and not PII) and <code>can_navigate(node)</code> (not blocked/removed/soft-404; a shell is navigable). <code>site.search</code> may return shells with <code>content_status="empty_shell"</code> and <code>groundable=false</code>; <code>site.navigate</code> may return their children/links; <code>site.open</code> returns <code>body_available=false</code>. This is the only way to reach the department pages/PDFs behind the Academic Programmes section.</p>
+        </div>
+        </div>
+
+        <h3>9.2 Stop the bleeding (same day)</h3>
+        <ol>
+          <li><strong>Separate serving from indexing.</strong> Stop the backfill against the serving DB or move it to a copy; enable WAL; add a lock/health alarm. The serving process must never share a <code>delete</code>-journal SQLite writer with a batch job.</li>
+          <li><strong>Purge the bad cache.</strong> Delete refusal entries; change <code>_write_answer_cache</code> to never store a no-claim refusal as <code>verified</code>.</li>
+          <li><strong>Add a relevance gate.</strong> Compute query-term coverage and top-score thresholds in <code>assemble_evidence</code>; if below threshold, treat the bundle as empty for both the answer and deep-search decisions.</li>
+          <li><strong>Trigger deep search on inadequate evidence.</strong> Use the site’s <code>/search</code> as a first-class source; follow child links and PDFs; dedupe against the graph.</li>
+          <li><strong>Fix the programme detector collision.</strong> Do not run the UG lead detector against generated answers as a universal programme claim. Add a PG/PhD catalogue, or restrict the verifier’s claim to programmes named in the cited evidence plus the UG fee set. Never map a PG name to a UG canonical name.</li>
+          <li><strong>Do not render blocked as no-evidence.</strong> Say “I found a source but could not verify a specific claim,” include the reason code, and ask a clarifying question when appropriate.</li>
+          <li><strong>Fix the meta/small-talk path.</strong> Add <code>CHITCHAT</code>, <code>META</code> and <code>CLARIFY</code> intents that do not call retrieval.</li>
+          <li><strong>Fix plural/programme morphology.</strong> Normalize <code>programs</code>/<code>programmes</code>/<code>courses</code>; ideally use a porter/unicode61 FTS tokenizer plus a query-expansion alias map. Add tests for both spellings.</li>
+        </ol>
+
+        <h3>9.3 Fix the conversation contract (this week)</h3>
+        <ol>
+          <li>In <code>build_text_answer</code>, when <code>conversation_id</code> is present, load <code>SessionState</code> via <code>ConversationMemory.load()</code> (or <code>.plan()</code>), pass it to <code>Planner.plan()</code>, pass recent turns to the answer prompt, and record a turn event on every return path.</li>
+          <li>Add <code>history</code>/<code>conversation_id</code> to <code>query_rag_stream</code>; let the server load history from <code>conversation_id</code> rather than trusting the client.</li>
+          <li>Classify the dialogue act before the retrieval planner. Use deterministic rules for greetings/meta/thanks and the LLM planner only for ambiguous knowledge questions.</li>
+          <li>Make follow-ups work end to end: “what about its fee?” after a hostel page must resolve topic, programme and time scope, and open the current node before searching.</li>
+          <li>Move Streamlit profile capture out of the answer path; answer first, ask for contact only when the user wants a callback/offer, and make it skippable without hijacking short messages.</li>
+        </ol>
+
+        <h3>9.4 Fix navigation and the knowledge plane (next 1–2 weeks)</h3>
+        <ol>
+          <li><strong>Shells as navigation nodes.</strong> Return them in search/navigate with <code>groundable=false</code>; expose children/links; <code>site.open</code> says <code>body_available=false</code>.</li>
+          <li><strong>Use the site’s own search as a retrieval tool</strong>, not just a deep-search fallback. It already returns the right pages. Add relevance, allowlist, dedupe, and a fetch policy that follows child links/PDFs.</li>
+          <li><strong>Build a structured programme/department catalogue</strong> from department pages, PDFs and facts: <code>programme(id, name, level UG/PG/PhD, department, duration, eligibility, fee_fact_id, page_url, document_urls, verified_at, source)</code>. This is what “list all programmes” needs; it also gives the verifier a correct universe and the planner a list/enumerate plan.</li>
+          <li><strong>Model content shapes explicitly</strong>: <code>page_text</code>, <code>navigation_shell</code>, <code>image_page</code>, <code>pdf</code>, <code>legacy_page</code>, <code>site_search_result</code>. For image/JS shells, decide one of: OCR the published images (bounded, reviewed); use the old site/PDF/department page; render with a browser offline; or hand off with the published URL and contact, clearly labelled. Do not pretend the HTML text is the site.</li>
+          <li><strong>Planner:</strong> add <code>site.navigate</code>/<code>site.documents</code>/<code>site.follow</code> plans for broad/list questions; add a list/enumerate shape; make the LLM planner the default for text chat (validated fallback), or add a deterministic route for departments/programmes.</li>
+          <li><strong>Write deep-search results back</strong> into the graph/chunk index so the next question does not repeat the same live search.</li>
+        </ol>
+
+        <h3>9.5 Fix verification and answer quality</h3>
+        <ol>
+          <li>Separate claim verification from answer adequacy. A response can be claim-safe but non-responsive; that is a refusal/clarification, not a verified answer.</li>
+          <li>Use a programme catalogue for programme claims, not the lead-capture UG fee detector. Compare against the cited evidence and the catalogue level (UG/PG/PhD).</li>
+          <li>Add a repair loop before refusal: re-prompt once with the failure and the cited evidence; if it fails again, return a targeted clarification, not a generic no-evidence refusal.</li>
+          <li>Make citations non-fatal to the whole answer when the claim is supported elsewhere in the bundle; repair the citation or accept evidence-level support.</li>
+          <li>Add a refusal taxonomy and surface it: <code>policy</code>, <code>no_machine_readable_source</code>, <code>low_confidence</code>, <code>ambiguous</code>, <code>stale</code>, <code>error</code>. Different messages and cache rules per class.</li>
+          <li>Use a per-channel/per-shape token budget. 192 tokens is fine for voice, but it truncates lists and fee tables in chat.</li>
+        </ol>
+
+        <h3>9.6 Fix operations, observability and evaluation</h3>
+        <ol>
+          <li><strong>Boot readiness report</strong> (logged and on <code>/health</code>): mode, deep search, revalidation, graph nodes/pages/shells/docs done/pending, chunks, embeddings, embedding provider, scheduler, last compile/refresh. Warn when <code>NGA_ENABLED=true</code> but the mode is not agentic, when deep search is on but the index is empty, or when a batch writer holds the serving DB.</li>
+          <li><strong>Turn trace with a reason code</strong> for every path: <code>answered</code>, <code>cache_hit</code>, <code>deep_search</code>, <code>static_fallback</code>, <code>no_evidence</code>, <code>blocked</code>, <code>policy</code>, <code>error</code>. Include retrieval scores, relevance-gate result, evidence IDs and cache key.</li>
+          <li><strong>Outcome evaluation</strong>, not component tests: a frozen conversation set with the exact failing utterances and follow-ups; expected shape (answer/clarification/refusal) + required facts + forbidden claims + citations; run against the live graph nightly; metrics for grounded-answer rate, false-refusal rate, irrelevant-evidence rate, blocked rate, cache-hit correctness, follow-up success, p95 latency; shadow mode and canary for any retrieval change.</li>
+          <li><strong>Deployment gates:</strong> a phase is “done” only when the code is wired in the live seam, the flags are on in the target environment, the store is populated, the E2E evaluation passes, and rollback is tested. Update the status vocabulary to designed / coded / wired+enabled / verified.</li>
+          <li><strong>Keep the indexer out of the serving DB</strong> or use an atomic snapshot swap/Postgres. A live answer must never wait on a batch writer.</li>
+        </ol>
+      </section>
+
+      <section id="acceptance">
+        <div class="section-head"><span class="num">10</span><h2>Acceptance tests for the next solution</h2></div>
+        <p class="lede">These are the conversations that must pass before the next fix is called fixed. They are the observed failing cases plus the design’s own examples.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Utterance</th><th>Required behaviour</th></tr></thead>
+            <tbody>
+              <tr><td class="num-cell">1</td><td>“which programs currently university”</td><td>A programme/department list from the catalogue or a clarifying question; never a verified refusal.</td></tr>
+              <tr><td class="num-cell">2</td><td>“what programmes are offered”</td><td>Same, with UG/PG labelled; no NEP/NSS citations.</td></tr>
+              <tr><td class="num-cell">3</td><td>“can you check deep search to find university program”</td><td>A conversational acknowledgement + deep search + answer, or an explicit “I checked the site, here is what I found”; never <code>blocked</code> rendered as no-evidence.</td></tr>
+              <tr><td class="num-cell">4</td><td>“do you understand when I ask about program what is my intent of ask?”</td><td>A conversational clarification; no <code>site.latest</code>, no date intent.</td></tr>
+              <tr><td class="num-cell">5</td><td>“hello” / “who are you” / “thanks”</td><td>Conversational reply, no retrieval, no citations.</td></tr>
+              <tr><td class="num-cell">6</td><td>“what about its fee?” after a hostel/grievance topic</td><td>Resolves the current topic; opens the node; adds fee evidence; no generic search.</td></tr>
+              <tr><td class="num-cell">7</td><td>“list of postgraduate courses”</td><td>Either a PG programme list or an explicit policy answer that PG fees/seats are out of scope; not a generic no-verification refusal.</td></tr>
+              <tr><td class="num-cell">8</td><td>“library timings”</td><td>If the page is image-only: say the published page has no machine-readable timings, give the URL/contact; never cite exam-timing PDFs as the answer.</td></tr>
+              <tr><td class="num-cell">9</td><td>Repeat #1 twice</td><td>Second answer is not a cached refusal; if the index changed, the answer changes.</td></tr>
+              <tr><td class="num-cell">10</td><td>Same question in Hindi/Gujarati</td><td>Same evidence/citations and an equivalent answer.</td></tr>
+              <tr><td class="num-cell">11</td><td>“vice chancellor”</td><td>Verified fact, correct name, citation.</td></tr>
+              <tr><td class="num-cell">12</td><td>“exam schedule oct 2026”</td><td>Correct document/date; if the date is past, say so; no time-scope violation.</td></tr>
+              <tr><td class="num-cell">13</td><td>Backfill running concurrently</td><td>p95 within budget; no silent static fallback; if fallback, the reason is surfaced.</td></tr>
+              <tr><td class="num-cell">14</td><td>A hallucinated fee/VC name</td><td>Blocked, with a targeted message; the rest of the answer is not discarded.</td></tr>
+              <tr><td class="num-cell">15</td><td>A legitimate answer naming M.Sc. Information Technology</td><td>Not blocked by a B.Sc. IT alias collision.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="ledger">
+        <div class="section-head"><span class="num">11</span><h2>Mistake ledger</h2></div>
+        <p class="lede">Rules for the next solution, derived from this failure.</p>
+
+        <ol>
+          <li><strong>Fix the contract before the machinery.</strong> If the decision “is this evidence adequate?” is wrong, a better retriever, cache or verifier downstream will not save the turn.</li>
+          <li><strong>Measure the live path, not the component.</strong> A unit test with a fake LLM and a one-page fixture is not evidence that the user’s question works.</li>
+          <li><strong>Treat irrelevant evidence as equivalent to no evidence</strong> for the purpose of exploration. The deep-search trigger must use a relevance/adequacy predicate.</li>
+          <li><strong>Never cache a non-answer as a positive answer.</strong> A refusal is a result, not a verified fact.</li>
+          <li><strong>A flag is not a capability.</strong> “Implemented” means wired, enabled, populated and verified end to end. Check effective config at boot and in CI.</li>
+          <li><strong>Do not share the serving store with a batch writer.</strong> SQLite is not a queue; a backfill must not make a chat turn wait 30 seconds.</li>
+          <li><strong>Do not derive a universal entity detector from a fee table.</strong> Programme detection (UG/PG/PhD, departments), lead capture and fee grounding are three different universes.</li>
+          <li><strong>A shell is a navigation node, not a non-existent node.</strong> Distinguish “cannot ground” from “cannot navigate.”</li>
+          <li><strong>Do not let the LLM’s refusal be the only abstention signal.</strong> Classify the answer state before generation; validate adequacy after generation; use a repair loop.</li>
+          <li><strong>Do not ship a retrieval upgrade without an E2E outcome test</strong> on the exact failing conversations and the frozen evaluation set.</li>
+          <li><strong>Do not let the static path silently answer when the agent path fails.</strong> Surface the path and reason; the static corpus is smaller and older.</li>
+          <li><strong>Do not confuse “the verifier found no false claim” with “the answer is correct.”</strong> Safety and adequacy are different axes.</li>
+          <li><strong>Do not let a status document create false confidence.</strong> Say “coded” vs “live” and link the E2E evidence.</li>
+          <li><strong>Do not fix the site’s content problem with retrieval alone.</strong> If the page is an image/JS shell, HTML chunking and embeddings cannot see it. Decide the acquisition strategy per content shape.</li>
+        </ol>
+      </section>
+
+      <section id="appendix">
+        <div class="section-head"><span class="num">12</span><h2>Evidence index</h2></div>
+        <p class="lede">The raw observations behind the report. All of this is reproducible from the repo and a copy of the graph.</p>
+
+        <h3>A. Observed turn events</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Turn</th><th>Question</th><th>Intent / plan</th><th>Evidence</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td class="num-cell">1</td><td>can you search deep</td><td><code>page_topic</code> / <code>site.search</code></td><td>M.Sc. IT + career PDFs</td><td><span class="status ok">verified</span></td></tr>
+              <tr><td class="num-cell">2</td><td>which programs currently university</td><td><code>page_topic</code> / <code>site.search</code></td><td>Best Practices, NEP, NEP</td><td><span class="status ok">verified</span> <span class="status bad">24 h cache</span></td></tr>
+              <tr><td class="num-cell">3</td><td>do you undertstand when I ask about program what is my intent of ask?</td><td><code>date</code> / <code>site.latest</code> + <code>site.search</code></td><td>About pages + notices</td><td><span class="status ok">verified</span> <span class="status bad">24 h cache</span></td></tr>
+              <tr><td class="num-cell">4</td><td>can you check deep search to find university program</td><td><code>programme</code> / <code>site.search</code></td><td>Grievance Portal, Grievance Cell, M.Sc. IT</td><td><span class="status bad">blocked</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>B. Answer cache entries observed</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Normalized query</th><th>Status</th><th>TTL</th><th>Answer summary</th></tr></thead>
+            <tbody>
+              <tr><td><code>programs currently</code></td><td><span class="status ok">verified</span></td><td class="num-cell">24 h</td><td>“I couldn’t verify which programmes are currently offered…”</td></tr>
+              <tr><td><code>happending</code></td><td><span class="status ok">verified</span></td><td class="num-cell">1 h</td><td>“I checked the official university website… I could not verify…”</td></tr>
+              <tr><td><code>search deep</code></td><td><span class="status ok">verified</span></td><td class="num-cell">24 h</td><td>“Yes—what would you like me to search for at DSPMU…”</td></tr>
+              <tr><td><code>understand ask about program intent ask</code></td><td><span class="status ok">verified</span></td><td class="num-cell">24 h</td><td>“Yes. I understand ‘program’ to mean an academic programme…”</td></tr>
+              <tr><td><code>exam schedule oct 2026</code></td><td><span class="status ok">verified</span></td><td class="num-cell">1 h</td><td>“The schedule lists exams on 13-10-2026.”</td></tr>
+              <tr><td><code>vice chancellor</code></td><td><span class="status ok">verified</span></td><td class="num-cell">24 h</td><td>“The Vice Chancellor is Prof. Rajiv Manohar.”</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>C. Search reproductions</h3>
+<pre><code>Q: "what programmes are offered"  normalized: "programmes offered"
+ 1. 6.95 Cbcs Nep 2020
+ 2. 6.95 NEP 2020
+ 3. 6.95 Training &amp; Placement Cell (Legacy)
+ 4. 6.38 NSS
+ 5. 6.37 NSS
+ (Academic Programmes is excluded as empty_shell)
+
+Q: "which programs currently university"  normalized: "programs currently"
+ 1. 6.45 Best Practices
+ 2. 6.43 Cbcs Nep 2020
+ 3. 6.43 NEP 2020
+ 4. 6.40 Vishvas
+ 5. 4.40 Placement Cell Notice
+
+Q: "list of programmes"  normalized: "list programmes"
+ 1-6. 6.95 gallery pages (2026, Events, News Media Gallery,
+      Photo Gallery, Video Gallery, Photo Gallery)
+ ...</code></pre>
+
+        <h3>D. Answerability reproductions</h3>
+<pre><code>cms.academic-programmes          status=empty_shell  answerable=False
+academic-programmes.ug           status=empty_shell  answerable=False
+academic-programmes.pg           status=empty_shell  answerable=False
+cms.hostel                       status=empty_shell  answerable=False
+student-life.hostel              status=empty_shell  answerable=False
+
+site.navigate("cms.academic-programmes") -&gt; BLOCKED
+site.search("academic programmes") -&gt; Academic Council, NEP 2020,
+  University at a Glance, CBCS NEP 2020, NSS
+site.search("hostel") -&gt; 2022 Hostel Allotment Fees PDF,
+  University at a Glance, About pages
+site.search("library timings") -&gt; examination timing PDFs,
+  digital library notice</code></pre>
+
+        <h3>E. Programme detector collisions</h3>
+<pre><code>M.Sc. Information Technology    -&gt; Bachelor of Science in Information Technology (B.Sc.)
+M.A. History                    -&gt; Bachelor of Arts in History (BA)
+M.Sc. Chemistry                 -&gt; Bachelor of Science in Chemistry (B.Sc.)
+M.Sc. Mathematics               -&gt; Bachelor of Science in Mathematics (B.Sc.)
+M.Sc. Botany                    -&gt; Bachelor of Science in Botany (B.Sc.)
+M.Sc. Zoology                   -&gt; Bachelor of Science in Zoology (B.Sc.)</code></pre>
+
+        <h3>F. Verifier reproduction</h3>
+<pre><code>Answer: "Yes, I can search the official website. The university offers
+         programmes such as M.Sc. Information Technology [ev-3]."
+Result: status=blocked
+Failure: kind=programme
+         raw="Bachelor of Science in Information Technology (B.Sc.)"
+         reason=programme_not_in_evidence</code></pre>
+
+        <h3>G. Live site probes</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>URL</th><th>Server HTML content</th><th>Graph status</th></tr></thead>
+            <tbody>
+              <tr><td><code>/cms/academic-programmes</code></td><td>nav/footer + “Academic Programmes” shell (~1,000 chars after stripping)</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>/academic-programmes/ug</code></td><td>same shell</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>/academic-programmes/pg</code></td><td>same shell</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>/facilities/central-library</code></td><td>11 images, alt “Library”; no timing text</td><td><span class="status bad">empty_shell / missing</span></td></tr>
+              <tr><td><code>/cms/central-library</code></td><td>same</td><td><span class="status bad">missing</span></td></tr>
+              <tr><td><code>/student-life/hostel</code></td><td>“Hostel Gallery” shell</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>/cms/hostel</code></td><td>same</td><td><span class="status bad">empty_shell</span></td></tr>
+              <tr><td><code>/search?q=programmes</code></td><td>returns <code>/cms/academic-programmes</code>, <code>/academic-programmes/ug|pg</code>, department pages</td><td>not used except deep search</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>H. Effective config and runtime</h3>
+<pre><code>NGA_ENABLED=True
+NGA_MODE=agentic
+DEEP_SEARCH_ENABLED=True
+CACHE_REVALIDATE_ENABLED=True
+NGA_TEXT_LLM_PLANNER=False
+EMBEDDING_PROVIDER=off
+LLM_MODEL=gpt-6-luna
+LLM_MAX_TOKENS=192
+NGA_TEXT_MAX_ITEMS=5
+NGA_TEXT_MAX_CHARS=4000
+
+RETRIEVAL_MODE / VERIFY_MODE / TIME_SCOPE_STRICT / CACHE_BACKEND: missing in config
+
+Graph: nodes=4802 edges=9443 pages=157 body_fts=998
+Documents: done=841 (+7 review), pending=2548, empty=865, blocked=198, error=2
+Chunks: 0; chunk embeddings: 0
+Answer cache: 6; turn events: 8</code></pre>
+
+        <h3>I. Key file references</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Concern</th><th>File : line</th></tr></thead>
+            <tbody>
+              <tr><td>Empty-shell answerability</td><td><code>app/sitegraph/policy.py:42–56</code></td></tr>
+              <tr><td>Search/navigate filter</td><td><code>app/sitegraph/search.py:259,274</code>; <code>app/sitegraph/tools.py:211–214</code></td></tr>
+              <tr><td>Planner intents</td><td><code>app/agent/planner.py:46–64,117–139</code></td></tr>
+              <tr><td>Planner steps</td><td><code>app/agent/planner.py:197–287</code></td></tr>
+              <tr><td>Search scoring</td><td><code>app/sitegraph/search.py:127–213</code></td></tr>
+              <tr><td>Chunk integration</td><td><code>app/sitegraph/tools.py:327–408</code></td></tr>
+              <tr><td>Deep-search trigger</td><td><code>app/agent/text.py:501–505</code></td></tr>
+              <tr><td>Evidence assembly</td><td><code>app/agent/evidence.py:243–513</code></td></tr>
+              <tr><td>Verifier programme claim</td><td><code>app/agent/verifier.py:332–336,541–555,568–583</code></td></tr>
+              <tr><td>Programme aliases</td><td><code>app/programs.py:8–10,132–209</code></td></tr>
+              <tr><td>Cache write</td><td><code>app/agent/text.py:162–235</code></td></tr>
+              <tr><td>Cache validity</td><td><code>app/cache/answer_cache.py:22,224–313</code></td></tr>
+              <tr><td>Revalidation</td><td><code>app/cache/revalidate.py:74–104</code></td></tr>
+              <tr><td>Conversation memory</td><td><code>app/agent/session.py:40–83</code>; <code>app/agent/text.py:72–92,553–570</code></td></tr>
+              <tr><td>Stream path history</td><td><code>app/rag.py:494–503</code>; <code>app.py:129–137</code></td></tr>
+              <tr><td>PG boundary</td><td><code>app/site_router.py:327–356</code>; <code>app/rag.py:372–380</code></td></tr>
+              <tr><td>Static fallback prompt</td><td><code>app/rag.py:58</code></td></tr>
+              <tr><td>SQLite connection</td><td><code>app/sitegraph/store.py:280–284</code></td></tr>
+              <tr><td>Golden-set validation only</td><td><code>tests/test_dspmu_eval.py:13–39</code></td></tr>
+              <tr><td>Agent tests with fake LLM</td><td><code>tests/test_nga_text.py</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout good" style="margin-top:26px;">
+          <span class="title">One-paragraph conclusion</span>
+          <p>The recent solutions did not fail because they were badly built. They failed because they were built one layer too low. The system decides, before any of them run, that a conversation move is a knowledge query, that a shell page does not exist, that any retrieved text is adequate evidence, and that a refusal with no false claim is a verified answer. Those four decisions produce the observed experience. The next solution should start by making them explicit — conversation frame, navigation answerability, evidence adequacy, and answer state/cache semantics — and only then re-enable the retrieval, chunking, embedding and deep-search machinery behind an end-to-end evaluation that uses the failing conversations as the acceptance test.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <span>DSPMU agent · NGA failure analysis · 2026-10-31</span>
+    <span>Analysis only. No production code changed.</span>
+  </footer>
+</div>

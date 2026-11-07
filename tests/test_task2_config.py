@@ -40,22 +40,25 @@ class TestTask2Config:
         assert 1024 <= settings.PORT <= 65535, f"PORT {settings.PORT} out of valid range"
 
     def test_audio_sample_rate_is_positive(self):
-        """AUDIO_SAMPLE_RATE must be a positive integer."""
-        from app.config import settings
-        assert isinstance(settings.AUDIO_SAMPLE_RATE, int)
-        assert settings.AUDIO_SAMPLE_RATE > 0
+        """The PCM path's rate must be a positive integer (app/audio_format.py)."""
+        from app.audio_format import SAMPLE_RATE
+        assert isinstance(SAMPLE_RATE, int)
+        assert SAMPLE_RATE > 0
 
     def test_audio_channels_is_mono(self):
-        """AUDIO_CHANNELS should be 1 (mono) for telephony."""
-        from app.config import settings
-        assert settings.AUDIO_CHANNELS == 1, (
-            f"Expected 1 channel (mono), got {settings.AUDIO_CHANNELS}"
-        )
+        """CHANNELS must be 1 — audioop's u-law conversions are mono only."""
+        from app.audio_format import CHANNELS
+        assert CHANNELS == 1, f"Expected 1 channel (mono), got {CHANNELS}"
 
     def test_audio_sample_width_bytes(self):
-        """AUDIO_SAMPLE_WIDTH should be 2 (16-bit)."""
-        from app.config import settings
-        assert settings.AUDIO_SAMPLE_WIDTH == 2
+        """SAMPLE_WIDTH must be 2 — the pipeline's 16-bit linear PCM."""
+        from app.audio_format import SAMPLE_WIDTH
+        assert SAMPLE_WIDTH == 2
+
+    def test_chunk_frames_follows_the_rate(self):
+        """CHUNK_FRAMES is 20 ms of audio — derived, so it cannot desync from the rate."""
+        from app.audio_format import CHUNK_FRAMES, CHUNK_MS, SAMPLE_RATE
+        assert CHUNK_FRAMES == SAMPLE_RATE * CHUNK_MS // 1000
 
     def test_config_is_idempotent(self):
         """Importing settings twice returns the same object (singleton or module-level)."""

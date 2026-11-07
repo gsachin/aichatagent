@@ -30,6 +30,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -39,24 +40,17 @@ from datetime import datetime, timezone
 logger = logging.getLogger("voice_db")
 
 # ── Configuration ────────────────────────────────────────────────────
-
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "admissions")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+# The connection target comes from the single resolution point in
+# app/config.py. This module used to read the six DB_* keys straight from
+# os.environ at import time, without loading .env itself — so the database it
+# targeted depended on import order (US-011 TAC-1).
 
 
 def _connection_string() -> str:
     """Build a PostgreSQL connection string from config."""
-    if DATABASE_URL:
-        return DATABASE_URL
-    return (
-        f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
-        f"user={DB_USER} password={DB_PASSWORD}"
-    )
+    from app.config import database_dsn
+
+    return database_dsn()
 
 
 # ── Schema ───────────────────────────────────────────────────────────
@@ -76,7 +70,8 @@ CREATE TABLE IF NOT EXISTS lead_calls (
 
 async def init_db() -> bool:
     """
-    Initialize the database: create the lead_calls table if it doesn't exist.
+    Initialize the database: create the lead_calls table if it doesn't exist,
+    plus all lead-management tables (leads, conversations, follow_ups, call_queue).
 
     Returns True on success, False if PostgreSQL is not available
     (allows the app to run without a database in development).
@@ -92,13 +87,31 @@ async def init_db() -> bool:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE_SQL)
+            # Also initialise lead-management tables
+            from app.leads.schema import ALL_TABLES_SQL
+            cur.execute(ALL_TABLES_SQL)
+
+            # Also initialise offer-letter subsystem tables
+            from app.offers.schema import ALL_OFFERS_SQL
+            cur.execute(ALL_OFFERS_SQL)
+
+            # Also initialise sentiment-analysis subsystem tables
+            from app.sentiment.schema import ALL_SENTIMENT_SQL
+            cur.execute(ALL_SENTIMENT_SQL)
+
+            # CRM integration migration (additive columns + outbox).
+            # Must run AFTER the leads schema — it ALTERs leads/conversations.
+            from app.crm.schema import ALL_CRM_SQL
+            cur.execute(ALL_CRM_SQL)
         conn.close()
-        logger.info("Database initialized: lead_calls table ready")
+        logger.info("Database initialized: all tables ready (lead_calls + leads subsystem)")
         return True
     except Exception:
+        from app.config import database_target
+
         logger.warning(
             "PostgreSQL not available — running without database. "
-            f"Connection: {_connection_string()}"
+            f"Connection: {database_target()}"
         )
         return False
 
@@ -143,6 +156,47 @@ async def save_lead_call(
         return False
 
 
+def _as_one_string(value, key: str = "") -> str:
+    """Whittle an extracted value down to the string the schema promised.
+
+    The prompt asks for name/email/program as strings or null, and the model
+    does not always comply -- above all when the transcript it is reading
+    already contains structured output from an earlier step, which it mirrors
+    back. On the 2026-09-29 inbound call it answered `program` with
+    `[{'name': None, 'email': None, 'program': 'Business'}, ...]`, that list went
+    into `program_interest`, and psycopg2 refused it (`can't adapt type 'dict'`).
+    The refusal was not contained: the whole upsert failed, so the caller's
+    conversation was never written -- the warning the operator saw was
+    "conversation not logged" -- and on that call it was true.
+
+    So a list joins, and an object is read for the value stored under this
+    field's own name, because that is the shape a model reaches for when it
+    mirrors its input. Nothing here raises: a shape we cannot read becomes "",
+    which loses a field, where guessing would lose the conversation.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return ", ".join(p for p in (_as_one_string(v, key) for v in value) if p)
+    if isinstance(value, dict):
+        if not key:
+            return ""
+        for k in (key, key.lower()):
+            if k in value:
+                return _as_one_string(value[k], key)
+        return ""
+    if value is None or isinstance(value, bool):
+        return ""
+    return str(value)
+
+
+def _normalise_lead(data) -> dict:
+    """The parsed extraction, with every value the string the contract promises."""
+    if not isinstance(data, dict):
+        return {}
+    return {k: _as_one_string(v, k) for k, v in data.items()}
+
+
 async def extract_lead_from_transcript(transcript: str) -> dict | None:
     """
     Use the local LLM to extract structured lead data from a transcript.
@@ -151,12 +205,11 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
     Returns None if extraction fails.
 
     The LLM is called with a JSON-extraction prompt and the response is
-    parsed for structured data.
+    parsed for structured data, then normalised by `_normalise_lead` -- the
+    values are strings on the way out whether or not the model agreed.
     """
     import json as _json
     import re
-    import urllib.request
-
     prompt = (
         "Extract candidate Name, Email, and Program from the following "
         "conversation transcript. Return ONLY valid JSON with keys: "
@@ -164,32 +217,31 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         f"\n\nTranscript:\n{transcript}"
     )
 
-    # Find available Ollama model
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = _json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-        qwen_models = [m for m in models if "qwen" in m.lower()]
-        model = qwen_models[0] if qwen_models else "qwen2.5:7b"
-    except Exception:
-        model = "qwen2.5:7b"
+        from app.llm_backend import chat as backend_chat, default_model, small_task_num_ctx
 
-    try:
-        import ollama
-
-        response = ollama.chat(
-            model=model,
+        # to_thread: `backend_chat` is the SYNCHRONOUS Ollama client. Called
+        # here directly it blocks the event loop for the whole generation --
+        # and this runs from the Twilio disconnect handler, so every live call
+        # and every HTTP request freezes with it. Measured 2026-09-19: this
+        # exact call hung the process for minutes inside a socket read, with
+        # Ollama idle, and took the whole service down (py-spy: MainThread in
+        # httpx sync read <- ollama.chat <- here).
+        raw = await asyncio.to_thread(
+            backend_chat,
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 2048},
+            preferred=default_model(["qwen2.5:7b"]),
+            num_ctx=small_task_num_ctx(),
+            json_mode=True,
         )
-        raw = response["message"]["content"]
         logger.debug(f"LLM extraction raw: {raw}")
 
-        # Try to parse JSON from the response
+        # Try to parse JSON from the response. Every path returns through
+        # `_normalise_lead`: the model's shape is not the contract, and the
+        # callers write these values into typed columns.
         # 1. Direct parse
         try:
-            return _json.loads(raw)
+            return _normalise_lead(_json.loads(raw))
         except _json.JSONDecodeError:
             pass
 
@@ -197,7 +249,7 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', raw, re.DOTALL)
         if match:
             try:
-                return _json.loads(match.group(1))
+                return _normalise_lead(_json.loads(match.group(1)))
             except _json.JSONDecodeError:
                 pass
 
@@ -205,7 +257,7 @@ async def extract_lead_from_transcript(transcript: str) -> dict | None:
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             try:
-                return _json.loads(match.group(0))
+                return _normalise_lead(_json.loads(match.group(0)))
             except _json.JSONDecodeError:
                 pass
 

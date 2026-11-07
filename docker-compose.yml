@@ -4,40 +4,67 @@ version: '3.9'
 # Docker Compose - University Admissions Voice AI Assistant
 ################################################################################
 # Services:
-# 1. Ollama - LLM server (local model execution)
-# 2. FastAPI - Backend API server
+# 1. Postgres - admissions database
+# 2. FastAPI - Backend API server (OpenAI LLM, document context)
 # 3. Streamlit - Web UI frontend
 #
 # Usage:
 #   docker-compose up -d                # Start all services
 #   docker-compose down                 # Stop all services
-#   docker-compose logs -f ollama       # View logs
+#   docker-compose logs -f fastapi      # View logs
 ################################################################################
 
 services:
   # ──────────────────────────────────────────────────────────────────
-  # Ollama - LLM Service
+  # PostgreSQL 16 — Admissions database
   # ──────────────────────────────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: voice-assistant-ollama
+  postgres:
+    image: postgres:16
+    # elearning-postgres: matches every launcher script's `docker exec`
+    # probe (start_services.ps1 / check_and_tunnel.ps1 / bootstrap_services).
+    container_name: elearning-postgres
     ports:
-      - "11434:11434"
+      - "5432:5432"
     volumes:
-      - ollama_data:/root/.ollama
+      - postgres_data:/var/lib/postgresql/data
     environment:
-      - OLLAMA_HOST=0.0.0.0:11434
-      - OLLAMA_MODELS=/root/.ollama/models
+      - POSTGRES_USER=elearning
+      - POSTGRES_PASSWORD=elearning_secret
+      - POSTGRES_DB=admissions
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD", "pg_isready", "-U", "elearning", "-d", "admissions"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - voice-network
-    command: serve
+
+  # ──────────────────────────────────────────────────────────────────
+  # One-shot: pre-rendered call assets
+  # ──────────────────────────────────────────────────────────────────
+  # `app/static/audio/` is gitignored, so a fresh checkout has no greeting
+  # WAVs. Without this step every call silently falls back to live synthesis
+  # and the greeting-latency win is lost. `--ensure` renders only what is
+  # missing or stale; the bind mount writes the result back to the host, where
+  # the FastAPI container reads it. A build failure is deliberately non-fatal:
+  # the live path can still greet the caller.
+  assets:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-assistant-assets
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MACHINE_PROFILE_CHECK=0
+    command: >
+      sh -c "python scripts/build_call_assets.py --ensure ||
+             echo 'WARN: call asset build failed; missing greetings will be synthesised live'"
+    networks:
+      - voice-network
 
   # ──────────────────────────────────────────────────────────────────
   # FastAPI - Backend Server
@@ -51,19 +78,38 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-      - ./chroma_local_db:/app/chroma_local_db
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
       - PYTHONDONTWRITEBYTECODE=1
-      - OLLAMA_URL=http://ollama:11434
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
       - LOG_LEVEL=info
+      # DB + integrations come from the project .env (compose auto-loads it
+      # for substitution) — the app container must talk to the postgres
+      # SERVICE host, not localhost.
+      - DATABASE_URL=${DATABASE_URL:-postgresql://elearning:elearning_secret@postgres:5432/admissions}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
+      - TWILIO_WHATSAPP_NUMBER=${TWILIO_WHATSAPP_NUMBER:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      # Sentiment analysis scoring weights (tune for your business)
+      - SENTIMENT_W1=0.30
+      - SENTIMENT_W2=0.30
+      - SENTIMENT_W3=0.25
+      - SENTIMENT_W4=0.15
+      - SENTIMENT_EWMA_LAMBDA=0.35
+      - MIN_LABELED_OUTCOMES=100
     restart: unless-stopped
     depends_on:
-      ollama:
+      postgres:
         condition: service_healthy
+      assets:
+        condition: service_completed_successfully
     networks:
       - voice-network
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -86,12 +132,13 @@ services:
       - "8501:8501"
     volumes:
       - .:/app
-      - ./chroma_local_db:/app/chroma_local_db
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
       - PYTHONDONTWRITEBYTECODE=1
-      - OLLAMA_URL=http://ollama:11434
+      - DATABASE_URL=${DATABASE_URL:-postgresql://elearning:elearning_secret@postgres:5432/admissions}
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_SERVER_PORT=8501
       - LOG_LEVEL=info
@@ -109,6 +156,42 @@ services:
       retries: 3
       start_period: 30s
 
+  # ──────────────────────────────────────────────────────────────────
+  # Streamlit - Command Cockpit Dashboard (admin)
+  # ──────────────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-assistant-dashboard
+    ports:
+      - "8502:8502"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Containers must not drift-check against the host's machine snapshot
+      - MACHINE_PROFILE_CHECK=0
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://elearning:elearning_secret@postgres:5432/admissions}
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_PORT=8502
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    networks:
+      - voice-network
+    command: streamlit run dashboard.py --server.port 8502 --server.headless true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8502"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 ################################################################################
 # Networks
 ################################################################################
@@ -120,5 +203,5 @@ networks:
 # Volumes
 ################################################################################
 volumes:
-  ollama_data:
+  postgres_data:
     driver: local

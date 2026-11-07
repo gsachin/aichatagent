@@ -1,0 +1,911 @@
+"""
+bootstrap_services — one-click pre-req check, install, and ordered startup.
+
+Single entry point for the University Admissions Voice Assistant across
+Windows / macOS / cloud Linux:
+
+  Phase B (CHECK)   — verify every prerequisite, change nothing.
+  Phase C (INSTALL) — install whatever is missing (idempotent, never
+                      downgrades, refuses destructive actions).
+  Phase D (START)   — start services in dependency order (least dependent
+                      first): Docker -> PostgreSQL -> FastAPI -> Cloudflare
+                      tunnel -> Twilio updates -> Streamlit + per-port tunnels.
+                      LLM generation is remote (OpenAI); no local model runs.
+  Phase E (TWILIO)  — voice + status-callback webhooks via API; WhatsApp
+                      sandbox instructions (console-only, no API).
+
+Stdlib-only by design — this script must run before any pip dependency
+exists. Windows delegates the launch to the battle-tested
+start_services.ps1 + check_and_tunnel.ps1; macOS/Linux launch natively.
+
+Usage:
+    python bootstrap_services.py                 # full bootstrap + start
+    python bootstrap_services.py --check-only    # report pre-reqs, no changes
+    python bootstrap_services.py --dry-run       # print actions, do nothing
+    python bootstrap_services.py --skip-install  # launch only (assume pre-reqs)
+    python bootstrap_services.py --with-streamlit
+    python bootstrap_services.py --with-demo-data   # seeds ONLY if DB empty
+"""
+
+import argparse
+import json
+import os
+import platform
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+VENV_PY = (
+    ROOT / ".venv" / "Scripts" / "python.exe"
+    if platform.system() == "Windows"
+    else ROOT / ".venv" / "bin" / "python"
+)
+IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"
+IS_LINUX = platform.system() == "Linux"
+IS_APPLE_SILICON = IS_MACOS and platform.machine() in ("arm64", "aarch64")
+
+DOCKER_DESKTOP_WIN = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+PIP_LOCK = ROOT / ".pip-install.lock"
+
+# User-scope (no-admin) Docker Desktop installs live under LOCALAPPDATA and
+# are NOT on PATH until a new shell is opened. Probe both locations — winget
+# installs per-user by default on this project's target machine.
+DOCKER_DESKTOP_PATHS = (
+    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe")),
+    Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
+)
+DOCKER_CLI_PATHS = (
+    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe")),
+    Path(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe"),
+)
+# Standalone exe fallback when the winget MSI fails (it hung on one machine).
+CLOUDFLARED_URL = ("https://github.com/cloudflare/cloudflared/releases/latest/download/"
+                   "cloudflared-windows-amd64.exe")
+
+
+def _llm_provider() -> str:
+    """The generation provider. There is exactly one: OpenAI.
+
+    ``auto`` is accepted as a migration alias. A stale ollama/mlx value is
+    reported and ignored: the local backends and their models were removed.
+    """
+    explicit = _env_value("LLM_PROVIDER", "auto").strip().lower()
+    if explicit in ("ollama", "mlx"):
+        print(f"    WARNING: LLM_PROVIDER={explicit!r} was removed; using OpenAI")
+    return "openai"
+
+
+def _env_value(key: str, default: str) -> str:
+    """
+    Read a value from .env on disk (last definition wins, matching
+    python-dotenv). Never imports into os.environ — bootstrap must
+    reflect what scripts/predeploy.py just wrote.
+    """
+    env = ROOT / ".env"
+    if not env.is_file():
+        return default
+    try:
+        found = default
+        for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.lstrip()
+            if s.startswith("#") or "=" not in s:
+                continue
+            k, _, v = s.partition("=")
+            if k.strip() == key and v.strip():
+                found = v.strip()
+        return found
+    except OSError:
+        return default
+
+
+# winget package IDs (Windows)
+WINGET_PACKAGES = {
+    "python": "Python.Python.3.11",
+    "docker": "Docker.DockerDesktop",
+    "cloudflared": "Cloudflare.cloudflared",
+    "ffmpeg": "Gyan.FFmpeg",
+}
+
+# ── Output helpers ──────────────────────────────────────────────────────
+
+_USE_COLOR = sys.stdout.isatty() or IS_WINDOWS
+C = {"g": "\033[32m", "y": "\033[33m", "r": "\033[31m", "b": "\033[36m", "x": "\033[0m"}
+
+
+def _c(color: str, text: str) -> str:
+    return f"{C[color]}{text}{C['x']}" if _USE_COLOR else text
+
+
+def ok(msg: str) -> None:
+    print(_c("g", f"  [OK]   {msg}"))
+
+
+def warn(msg: str) -> None:
+    print(_c("y", f"  [WARN] {msg}"))
+
+
+def err(msg: str) -> None:
+    print(_c("r", f"  [DOWN] {msg}"))
+
+
+def step(title: str) -> None:
+    print(f"\n{_c('b', '--- ' + title + ' ---')}")
+
+
+# ── Command runner ──────────────────────────────────────────────────────
+
+DRY_RUN = False
+
+
+def run(cmd, check: bool = True, capture: bool = False, cwd=None, input_text=None,
+        shell: bool = False):
+    """Run a command; in dry-run mode, print it instead of executing."""
+    printable = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else cmd
+    print(f"    $ {printable}"[:200])
+    if DRY_RUN:
+        return None
+    return subprocess.run(
+        cmd, check=check, capture_output=capture, cwd=cwd, input=input_text,
+        shell=shell or isinstance(cmd, str),
+    )
+
+
+def which(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+# ── Tool discovery (user-scope winget installs are invisible to old shells) ─
+
+def _find_docker() -> str | None:
+    """Locate docker.exe: PATH first, then known per-user/system install dirs."""
+    found = shutil.which("docker")
+    if found:
+        return found
+    for p in DOCKER_CLI_PATHS:
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def _persist_user_path(bindir: str) -> None:
+    """
+    Idempotently append bindir to the Windows user PATH so FUTURE shells
+    (and start_services.ps1, which runs in a separate process) can see it.
+    """
+    ps = (
+        "$dir = '{0}'; "
+        "$p = [Environment]::GetEnvironmentVariable('Path','User'); "
+        "if ($p -notlike ('*' + $dir + '*')) {{ "
+        "[Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $dir), 'User') }}"
+    ).format(bindir)
+    subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
+                   capture_output=True, check=False)
+
+
+def ensure_docker_on_path() -> None:
+    """
+    Make the Docker CLI visible to this process AND to future shells.
+
+    winget installs Docker Desktop per-user and only refreshes PATH for new
+    shells — the bootstrap process itself never sees the CLI otherwise, and
+    the launcher scripts (separate processes) need it too.
+    """
+    if not IS_WINDOWS or shutil.which("docker"):
+        return
+    for p in DOCKER_CLI_PATHS:
+        if p.is_file():
+            bindir = str(p.parent)
+            os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
+            print(f"    docker CLI found at {bindir} (added to session + user PATH)")
+            _persist_user_path(bindir)
+            break
+
+
+def _python311_candidates() -> list:
+    """Executables that can provide Python 3.11 (py launcher first, then PATH)."""
+    cands = []
+    if shutil.which("py"):
+        cands.append(["py", "-3.11"])
+    for name in ("python", "python3"):
+        p = shutil.which(name)
+        if p:
+            cands.append([p])
+    return cands
+
+
+def _pip_wait_or_acquire() -> None:
+    """
+    Serialize pip installs with a lockfile. A second installer (e.g. the
+    launcher's self-heal running while another install is in flight) waits
+    instead of running a conflicting concurrent pip.
+    """
+    if PIP_LOCK.exists():
+        age = time.time() - PIP_LOCK.stat().st_mtime
+        if age > 3600:  # stale lock left by a crashed installer — take over
+            warn(f"stale pip lock ({age / 60:.0f} min old) — taking over")
+            PIP_LOCK.unlink(missing_ok=True)
+        else:
+            warn("another pip install is in progress (.pip-install.lock) — waiting...")
+            while PIP_LOCK.exists() and time.time() - PIP_LOCK.stat().st_mtime < 3600:
+                time.sleep(10)
+            if PIP_LOCK.exists():
+                warn("waited an hour — taking over the pip lock")
+                PIP_LOCK.unlink(missing_ok=True)
+    PIP_LOCK.write_text("pip install in progress")
+
+
+def _pip_release() -> None:
+    PIP_LOCK.unlink(missing_ok=True)
+
+
+def _install_cloudflared_manual() -> None:
+    """
+    Fallback when the winget cloudflared MSI fails: download the standalone
+    exe into %LOCALAPPDATA%\Programs\cloudflared and add it to the user PATH.
+    """
+    if not IS_WINDOWS:
+        return
+    target_dir = Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\cloudflared"))
+    target = target_dir / "cloudflared.exe"
+    if target.is_file():
+        ok(f"cloudflared already present at {target}")
+    else:
+        print("    winget install failed — downloading standalone cloudflared.exe...")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(CLOUDFLARED_URL, str(target))
+            ok(f"cloudflared downloaded to {target}")
+        except Exception as e:
+            err(f"cloudflared download failed ({e}) — install manually, then re-run")
+            return
+    os.environ["PATH"] = str(target_dir) + os.pathsep + os.environ.get("PATH", "")
+    _persist_user_path(str(target_dir))
+
+
+def _http_get(url: str, timeout: float = 3.0):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def _port_listening(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.7)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _wait_for(desc: str, fn, tries: int, delay: float, ok_msg: str) -> bool:
+    if DRY_RUN:
+        ok(f"{ok_msg} (dry-run)")
+        return True
+    for i in range(tries):
+        if fn():
+            ok(ok_msg)
+            return True
+        print(f"    waiting for {desc}... ({i + 1}/{tries})")
+        time.sleep(delay)
+    return False
+
+
+# ── Phase B: pre-req checks (never change anything) ─────────────────────
+
+def check_python() -> bool:
+    for cand in _python311_candidates():
+        try:
+            r = subprocess.run(cand + ["--version"], capture_output=True, text=True)
+        except Exception:
+            continue
+        ver = (r.stdout or r.stderr).strip()
+        if "3.11" in ver:
+            ok(f"Python {ver} ({' '.join(cand)})")
+            return True
+    err("Python 3.11 not found (the pinned stack requires 3.11, <=3.12)")
+    return False
+
+
+def check_docker() -> bool:
+    docker = _find_docker()
+    if not docker:
+        err("docker CLI not found (PATH + default install locations)")
+        return False
+    try:
+        daemon_ok = subprocess.run([docker, "info"], capture_output=True).returncode == 0
+        compose_ok = subprocess.run([docker, "compose", "version"],
+                                    capture_output=True).returncode == 0
+    except FileNotFoundError:
+        err("docker CLI not found")
+        return False
+    if daemon_ok:
+        ok(f"Docker daemon running ({docker})")
+    else:
+        warn("Docker CLI present but daemon NOT running")
+        return False
+    if compose_ok:
+        ok("docker compose plugin present")
+    else:
+        warn("docker compose plugin missing")
+    return daemon_ok and compose_ok
+
+
+def check_llm() -> bool:
+    """Verify the remote OpenAI configuration. No local model is checked."""
+    key = _env_value("LLM_API_KEY", "")
+    if not key:
+        err("LLM_API_KEY is empty (OpenAI is the only provider)")
+        return False
+    ok("OpenAI configured (remote); no local LLM service is required")
+    return True
+
+
+def check_cloudflared() -> bool:
+    if which("cloudflared"):
+        ok("cloudflared present")
+        return True
+    manual = Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\cloudflared\cloudflared.exe"))
+    if manual.is_file():
+        ok(f"cloudflared present ({manual})")
+        return True
+    err("cloudflared not found")
+    return False
+
+
+def check_ffmpeg() -> bool:
+    if which("ffmpeg"):
+        ok("ffmpeg present")
+        return True
+    warn("ffmpeg not found (audio conversion may fail)")
+    return False
+
+
+def check_gpu() -> None:
+    if which("nvidia-smi"):
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            ok(f"GPU: {r.stdout.strip().replace(chr(10), ' | ')}")
+        else:
+            warn("nvidia-smi present but query failed")
+        return
+    if IS_APPLE_SILICON:
+        try:
+            r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+            mem_gb = int(r.stdout.strip()) / (1024**3)
+            ok(f"Apple Silicon (Metal/MLX): {mem_gb:.0f} GB unified memory")
+        except Exception:
+            ok("Apple Silicon (Metal/MLX) detected")
+        return
+    warn("No NVIDIA GPU detected — STT/TTS will fall back to CPU (slow)")
+
+
+def check_env_file() -> bool:
+    env = ROOT / ".env"
+    if env.is_file():
+        ok(".env present")
+        return True
+    warn(".env missing — will be created from .env.example")
+    return False
+
+
+def check_machine_profile() -> bool:
+    """Verify .env was sized for this machine (scripts/predeploy.py --check)."""
+    predeploy = ROOT / "scripts" / "predeploy.py"
+    if not predeploy.is_file():
+        return True  # optional component
+    r = run([sys.executable, str(predeploy), "--check"], check=False)
+    if r is None:
+        return True  # dry-run
+    if r.returncode == 0:
+        ok("machine profile matches this machine (scripts/predeploy.py)")
+        return True
+    warn("machine profile missing or stale — Phase C will size .env for this machine")
+    return False
+
+
+def check_venv() -> bool:
+    if VENV_PY.is_file():
+        ok(f"venv present ({VENV_PY.name})")
+        return True
+    warn("no project venv — dependencies will be installed into .venv/")
+    return False
+
+
+def check_ports() -> None:
+    ports = [("8000 (FastAPI)", 8000), ("8501 (Chatbot)", 8501), ("8502 (Dashboard)", 8502)]
+    for name, port in ports:
+        if _port_listening(port):
+            warn(f"port {port} in use ({name}) — may already be running")
+        else:
+            print(f"    port {port} free ({name})")
+
+
+# ── Phase C: install missing (idempotent) ───────────────────────────────
+
+def _winget(pkg: str) -> bool:
+    r = run([
+        "winget", "install", "--id", pkg, "-e",
+        "--silent", "--accept-package-agreements", "--accept-source-agreements",
+    ], check=False)
+    return r is None or r.returncode == 0  # None in dry-run
+
+
+def install_windows() -> None:
+    step("Phase C — installing missing software (Windows / winget)")
+    if not which("winget"):
+        err("winget not found — install App Installer from the Microsoft Store first")
+        return
+    if not check_python():
+        if _winget(WINGET_PACKAGES["python"]):
+            warn("Python 3.11 installed — re-run the .bat shortcut to continue")
+        return
+    if not check_docker():
+        if _winget(WINGET_PACKAGES["docker"]):
+            warn("Docker Desktop installed — starting it now (first start may take minutes)")
+        # User-scope installs never touch the running shell's PATH — repair it.
+        ensure_docker_on_path()
+    if not which("cloudflared"):
+        if not _winget(WINGET_PACKAGES["cloudflared"]):
+            _install_cloudflared_manual()
+    if not which("ffmpeg"):
+        _winget(WINGET_PACKAGES["ffmpeg"])
+
+
+def install_macos() -> None:
+    step("Phase C — installing missing software (macOS / Homebrew)")
+    if not which("brew"):
+        warn("Homebrew missing — install with:")
+        print('    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
+        return
+    # Note: no local LLM on macOS; generation is remote (OpenAI).
+    # Whisper/TTS still use the local Python stack.
+    for pkg in ("python@3.11", "cloudflared", "ffmpeg"):
+        if not which(pkg):
+            run(["brew", "install", pkg])
+    if not which("docker"):
+        run(["brew", "install", "--cask", "docker"])
+        run(["open", "-a", "Docker"])
+        warn("Docker Desktop installed — wait for the daemon before starting services")
+
+
+def install_linux() -> None:
+    step("Phase C — installing missing software (Linux / apt)")
+    if os.geteuid() != 0:
+        err("Linux installs require root — run with sudo")
+        sys.exit(1)
+    run(["apt-get", "update", "-qq"])
+    run(["apt-get", "install", "-y", "-qq",
+         "python3.11", "python3.11-venv", "ffmpeg", "curl", "git",
+         "build-essential", "libssl-dev", "libffi-dev", "python3-dev"])
+    if not which("docker"):
+        run(["curl", "-fsSL", "https://get.docker.com", "-o", "/tmp/get-docker.sh"])
+        run(["sh", "/tmp/get-docker.sh"])
+        warn("Docker installed via get.docker.com — compose plugin included")
+        if not which("docker"):
+            err("docker still not on PATH — open a new shell and re-run")
+            sys.exit(1)
+    if not which("cloudflared"):
+        # Official Cloudflare apt repository
+        run(["bash", "-c",
+             "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | "
+             "gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; "
+             "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
+             "https://pkg.cloudflare.com/cloudflared any main' "
+             "> /etc/apt/sources.list.d/cloudflared.list; apt-get update -qq; "
+             "apt-get install -y -qq cloudflared"])
+
+
+def ensure_docker_daemon() -> bool:
+    ensure_docker_on_path()
+    docker = _find_docker()
+    if docker:
+        try:
+            if subprocess.run([docker, "info"], capture_output=True).returncode == 0:
+                return True
+        except FileNotFoundError:
+            docker = None
+    if IS_WINDOWS:
+        for exe in DOCKER_DESKTOP_PATHS:
+            if exe.is_file():
+                print(f"    starting Docker Desktop ({exe})...")
+                subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+        else:
+            warn("Docker Desktop.exe not found in known locations — start it manually")
+    elif IS_LINUX:
+        run(["systemctl", "start", "docker"], check=False)
+    if not docker:
+        warn("docker CLI not found — PostgreSQL will be skipped")
+        return False
+    return _wait_for("docker daemon", lambda: subprocess.run(
+        [docker, "info"], capture_output=True).returncode == 0,
+        60, 2, "Docker daemon ready")
+
+
+def _venv_python_version() -> str | None:
+    try:
+        r = subprocess.run([str(VENV_PY), "--version"], capture_output=True, text=True)
+        return (r.stdout or r.stderr).strip()
+    except Exception:
+        return None
+
+
+def ensure_venv() -> None:
+    # A venv created with the wrong Python (e.g. 3.14) must be recreated.
+    if VENV_PY.is_file() and "3.11" not in (_venv_python_version() or ""):
+        warn(f"venv exists but is {_venv_python_version()} — recreating with Python 3.11")
+        shutil.rmtree(ROOT / ".venv", ignore_errors=True)
+
+    # A venv that can already import the app's heavy deps is ready. This
+    # also covers a half-created venv (no packages installed yet) — the
+    # earlier code skipped dependency install whenever the venv existed.
+    if VENV_PY.is_file():
+        probe = subprocess.run([str(VENV_PY), "-c", "import fastapi, torch"],
+                               capture_output=True)
+        if probe.returncode == 0:
+            ok("venv ready (fastapi + torch importable) — skipping dependency install")
+            return
+        warn("venv present but dependencies missing — installing now")
+
+    step("Creating .venv + installing pinned dependencies")
+    if not VENV_PY.is_file():
+        maker = [sys.executable] if sys.version_info[:2] == (3, 11) else None
+        if maker is None:
+            for cand in _python311_candidates():
+                maker = cand
+                break
+        if maker is None:
+            err("Python 3.11 not found — install it with: winget install Python.Python.3.11")
+            sys.exit(1)
+        run(maker + ["-m", "venv", str(ROOT / ".venv")])
+
+    pip = str(VENV_PY) + " -m pip"
+    _pip_wait_or_acquire()
+    try:
+        run(pip + " install --upgrade pip setuptools wheel", shell=True)
+        if IS_WINDOWS and which("nvidia-smi"):
+            # RTX 50-series (Blackwell, sm_120) needs torch >= 2.7 with CUDA 12.8 —
+            # the cu124 wheels used by older cards cannot run on sm_120 GPUs.
+            r = run(pip + " install torch==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128",
+                    shell=True, check=False)
+            if r is not None and r.returncode != 0:
+                warn("CUDA torch install failed — requirements will pull the PyPI (CPU) "
+                     "build; STT/TTS will run on CPU. Re-run this step or see the setup doc.")
+        run(pip + " install -r " + str(ROOT / "requirements.txt"), shell=True)
+        if (IS_WINDOWS or IS_LINUX) and which("nvidia-smi"):
+            # pipecat-ai pins onnxruntime~=1.24.3, which drags the CPU wheel in
+            # next to onnxruntime-gpu. Both extract into the same directory and
+            # whichever installed last wins the import (observed: CPU 1.24.4
+            # shadowed GPU 1.28.0 -> no CUDAExecutionProvider). Reinstall the
+            # GPU wheel last so it always wins on NVIDIA machines.
+            run(pip + " install --force-reinstall --no-deps onnxruntime-gpu==1.28.0",
+                shell=True, check=False)
+    finally:
+        _pip_release()
+    ok("dependencies installed")
+
+
+#: Settings whose STALE value costs latency for no benefit. Every one is a
+#: Class A (lossless) finding from the performance engagement: same server,
+#: same bytes, same answers. The code defaults are already correct, so an
+#: explicit stale value in .env is the only way left to still get the slow
+#: behaviour -- and nothing else in the stack would ever report it. That
+#: silence is exactly how these regressions hid the first time.
+PERF_ENV_TRAPS = ()
+# Ollama/RAG latency traps were removed with the local backend. Kept as an
+# empty tuple so the existing check_perf_env caller stays simple.
+
+
+def check_perf_env(env_text: str) -> list[str]:
+    """Report .env values that are known to cost turn latency.
+
+    Returns the list of offending keys so the caller can decide whether to
+    shout. Never edits .env -- an operator's explicit setting is theirs.
+    """
+    stale = []
+    for key, slow_values, fast, why in PERF_ENV_TRAPS:
+        m = re.search(rf"(?m)^\s*{key}\s*=\s*(\S+)", env_text)
+        if m and m.group(1).strip().strip("\"'") in slow_values:
+            stale.append(key)
+            warn(f".env sets {key}={m.group(1).strip()} — {why}")
+            warn(f"       fix: {key}={fast}  (Class A: no behaviour change)")
+    return stale
+
+
+def ensure_env_file() -> None:
+    env = ROOT / ".env"
+    if DRY_RUN:
+        if not env.is_file():
+            print("    $ copy .env.example -> .env")
+        return
+    if not env.is_file():
+        example = ROOT / ".env.example"
+        if example.is_file():
+            shutil.copyfile(example, env)
+            ok(".env created from .env.example — fill in TWILIO_*/DATABASE_URL as needed")
+        else:
+            warn(".env.example missing — skipping .env creation")
+        return
+    text = env.read_text(encoding="utf-8", errors="replace")
+    for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER", "DATABASE_URL"):
+        if f"{key}=" not in text:
+            warn(f".env missing {key} — related features will degrade")
+    if not check_perf_env(text):
+        ok("no stale performance settings in .env")
+
+
+def ensure_llm_up() -> bool:
+    """The LLM is remote; there is no local backend to start."""
+    ok("remote LLM (OpenAI) - nothing to start locally")
+    return True
+
+
+def ensure_models() -> None:
+    """The LLM is remote; there are no local models to download."""
+    ok("remote LLM (OpenAI) - no local model downloads")
+
+
+def ensure_machine_profile() -> None:
+    """
+    Size .env for this machine (scripts/predeploy.py --auto).
+
+    Idempotent: exits 0 without writing when the profile already matches.
+    Only machine-derived keys inside the marked block are touched —
+    Twilio/DB creds and manual overrides are never modified.
+    """
+    predeploy = ROOT / "scripts" / "predeploy.py"
+    if not predeploy.is_file():
+        return
+    step("Machine profile (.env sizing)")
+    run([sys.executable, str(predeploy), "--auto"], check=False)
+
+
+def ensure_postgres() -> bool:
+    docker = _find_docker()
+    if not docker:
+        warn("docker CLI not found — skipping PostgreSQL (app runs DB-less)")
+        return False
+    healthy = subprocess.run(
+        [docker, "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
+        capture_output=True,
+    ).returncode == 0
+    if healthy:
+        ok("PostgreSQL accepting connections")
+        return True
+    print("    docker compose up -d postgres")
+    run([docker, "compose", "-f", str(ROOT / "docker-compose.yml"), "up", "-d", "postgres"])
+    return _wait_for("PostgreSQL", lambda: subprocess.run(
+        [docker, "exec", "elearning-postgres", "pg_isready", "-U", "elearning", "-d", "admissions"],
+        capture_output=True).returncode == 0,
+        30, 2, "PostgreSQL ready")
+
+
+def ensure_demo_data(with_demo_data: bool) -> None:
+    if not with_demo_data:
+        return
+    step("Demo data (opt-in --with-demo-data)")
+    if DRY_RUN:
+        print("    $ (check leads count == 0, then seed_demo_data.py)")
+        return
+    check_sql = (
+        "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(); "
+        "c=psycopg2.connect(os.environ.get('DATABASE_URL','postgresql://elearning:"
+        "elearning_secret@localhost:5432/admissions')); cur=c.cursor(); "
+        "cur.execute('SELECT COUNT(*) FROM leads'); print(cur.fetchone()[0])"
+    )
+    r = subprocess.run([str(VENV_PY), "-c", check_sql], capture_output=True, text=True, cwd=ROOT)
+    count = r.stdout.strip()
+    if count != "0":
+        warn(f"leads table has {count} rows — refusing to seed (destructive). "
+             "Run scripts/seed_demo_data.py manually if you are sure.")
+        return
+    run([str(VENV_PY), str(ROOT / "scripts" / "seed_demo_data.py")])
+    ok("demo data seeded (14 courses, 12 leads, 8 conversations)")
+
+
+# ── Phase D+E: ordered startup ──────────────────────────────────────────
+
+def start_windows(args) -> None:
+    step("Phase D — starting services (delegated to start_services.ps1)")
+    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", str(ROOT / "start_services.ps1")]
+    if args.with_streamlit:
+        cmd.append("-WithStreamlit")
+    if args.named_tunnel:
+        cmd.append("-NamedTunnel")
+    if DRY_RUN:
+        print(f"    $ {' '.join(cmd)}")
+        return
+    r = subprocess.run(cmd, cwd=ROOT)
+    if r.returncode != 0:
+        err("start_services.ps1 exited non-zero")
+        sys.exit(1)
+    if args.with_streamlit:
+        step("Restoring per-port tunnels (check_and_tunnel.ps1)")
+        cmd2 = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(ROOT / "check_and_tunnel.ps1")]
+        if DRY_RUN:
+            print(f"    $ {' '.join(cmd2)}")
+            return
+        subprocess.run(cmd2, cwd=ROOT)
+
+
+def _detach(cmd, log_path: Path, cwd=ROOT):
+    """Start a background process whose stdout/stderr go to log_path."""
+    print(f"    $ {' '.join(map(str, cmd))}  > {log_path}")
+    if DRY_RUN:
+        return
+    f = open(log_path, "ab")
+    subprocess.Popen(cmd, cwd=cwd, stdout=f, stderr=f, start_new_session=True)
+    f.close()
+
+
+def _prewarm_llm() -> None:
+    """The LLM is remote; there is no local model to warm."""
+    ok("remote LLM (OpenAI) - no local pre-warm")
+
+
+def start_unix(args) -> None:
+    step("Phase D — starting services (native orchestration)")
+    logs = ROOT / "logs"
+    logs.mkdir(exist_ok=True)
+    py = str(VENV_PY)
+
+    # 1. FastAPI
+    if not _port_listening(8000):
+        _detach([py, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
+                logs / "fastapi.log")
+    _wait_for("FastAPI", lambda: _port_listening(8000), 90, 2, "FastAPI up on :8000")
+
+    # 1b. Remote LLM: nothing local to warm (PS1 parity)
+    _prewarm_llm()
+
+    # 2. Cloudflare tunnel for FastAPI
+    tunnel_log = logs / "cloudflared_8000.log"
+    if not _read_tunnel_host(ROOT / ".whatsapp_tunnel"):
+        _detach(["cloudflared", "tunnel", "--url", "http://localhost:8000"], tunnel_log)
+        host = None
+        if not DRY_RUN:
+            for _ in range(25):
+                time.sleep(2)
+                host = _parse_tunnel_url(tunnel_log)
+                if host:
+                    break
+        if host:
+            (ROOT / ".whatsapp_tunnel").write_text(host)
+            ok(f"FastAPI tunnel: {host}")
+        else:
+            warn("could not capture tunnel URL — check logs/cloudflared_8000.log")
+
+    # 3. Twilio webhooks (voice + status callback)
+    host = _read_tunnel_host(ROOT / ".whatsapp_tunnel")
+    if host:
+        step("Phase E — updating Twilio webhooks")
+        run([py, str(ROOT / "scripts" / "update_twilio_webhook.py"), host])
+
+    # 4. Streamlit apps + per-port tunnels
+    if args.with_streamlit:
+        if not _port_listening(8501):
+            _detach(["streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"],
+                    logs / "streamlit.log")
+        if not _port_listening(8502):
+            _detach(["streamlit", "run", "dashboard.py", "--server.port", "8502", "--server.headless", "true"],
+                    logs / "dashboard.log")
+        _wait_for("Streamlit", lambda: _port_listening(8501) and _port_listening(8502), 30, 2,
+                  "Streamlit apps up on :8501/:8502")
+        for port, cache in ((8501, ".tunnel_8501"), (8502, ".tunnel_8502")):
+            log_f = logs / f"cloudflared_{port}.log"
+            _detach(["cloudflared", "tunnel", "--url", f"http://localhost:{port}"], log_f)
+            if DRY_RUN:
+                continue
+            for _ in range(25):
+                time.sleep(2)
+                h = _parse_tunnel_url(log_f)
+                if h:
+                    (ROOT / cache).write_text(h)
+                    ok(f"port {port} tunnel: {h}")
+                    break
+
+
+def _parse_tunnel_url(log_path: Path):
+    if not log_path.is_file():
+        return None
+    m = re.search(r"https://([a-zA-Z0-9\-]+\.trycloudflare\.com)", log_path.read_text(errors="replace"))
+    return m.group(1) if m else None
+
+
+def _read_tunnel_host(cache_file: Path):
+    if cache_file.is_file():
+        h = cache_file.read_text().strip()
+        if h and _http_get(f"https://{h}/", timeout=8) is not None:
+            return h
+    return None
+
+
+# ── Main ────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    global DRY_RUN
+    ap = argparse.ArgumentParser(description="One-click pre-req check, install, ordered start")
+    ap.add_argument("--check-only", action="store_true", help="verify pre-reqs and exit (no changes)")
+    ap.add_argument("--dry-run", action="store_true", help="print every action without executing")
+    ap.add_argument("--skip-install", action="store_true", help="skip install phase (launch only)")
+    ap.add_argument("--install-only", action="store_true",
+                    help="run check + install phases only (no service launch) — "
+                         "used by start_services.ps1 to self-heal a broken/missing venv")
+    ap.add_argument("--with-streamlit", action="store_true", help="also start chatbot (8501) + dashboard (8502)")
+    ap.add_argument("--with-demo-data", action="store_true", help="seed demo data ONLY when the DB is empty")
+    ap.add_argument("--named-tunnel", action="store_true", help="use the named Cloudflare tunnel (Windows)")
+    args = ap.parse_args()
+    DRY_RUN = args.dry_run
+
+    print(_c("b", "University Admissions — One-Click Bootstrap"))
+    print(f"Platform: {platform.system()} {platform.machine()}  (dry-run: {DRY_RUN})")
+
+    # ── Phase B: check ──
+    step("Phase B — pre-requisite check")
+    check_python()
+    check_docker()
+    check_llm()
+    check_cloudflared()
+    check_ffmpeg()
+    check_gpu()
+    check_env_file()
+    check_machine_profile()
+    check_venv()
+    check_ports()
+
+    if args.check_only:
+        print("\nCheck-only run complete — nothing was changed.")
+        return 0
+
+    # ── Phase C: install ──
+    if not args.skip_install:
+        if IS_WINDOWS:
+            install_windows()
+        elif IS_MACOS:
+            install_macos()
+        elif IS_LINUX:
+            install_linux()
+        if not DRY_RUN:
+            ensure_docker_daemon()
+            ensure_venv()
+            ensure_env_file()
+            ensure_machine_profile()  # size .env for this machine
+            ensure_llm_up()
+            ensure_models()
+            ensure_postgres()
+            ensure_demo_data(args.with_demo_data)
+    else:
+        step("Phase C skipped (--skip-install)")
+
+    if args.install_only:
+        print("\n" + _c("g", "Install-only run complete — services not started."))
+        return 0
+
+    # ── Phase D: start ──
+    if IS_WINDOWS:
+        start_windows(args)
+    else:
+        ensure_docker_daemon()
+        ensure_postgres()
+        ensure_llm_up()
+        start_unix(args)
+
+    print("\n" + _c("g", "Bootstrap complete."))
+    if DRY_RUN:
+        print("(dry-run — no changes were made)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

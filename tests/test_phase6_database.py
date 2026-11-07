@@ -23,16 +23,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _ollama_available() -> bool:
-    """Return True if Ollama API is reachable."""
-    import urllib.request
-
-    try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            return "models" in data
-    except Exception:
-        return False
+    """Return True if the active LLM backend (Ollama or MLX) is reachable."""
+    from app.llm_backend import is_ready
+    return is_ready()
 
 
 # ── Phase 6.1: Database Schema ───────────────────────────────────────
@@ -103,6 +96,51 @@ class TestPhase6DatabaseSchema:
 
 # ── Phase 6.2: Lead Extraction (LLM JSON Parsing) ────────────────────
 
+class TestExtractedLeadNormalisation:
+    """The shape the model answers in is not the shape the callers write.
+
+    On the 2026-09-29 inbound call `program` came back as a list of objects --
+    the transcript it was reading already contained structured output, and it
+    mirrored it. That list reached `program_interest` and psycopg2 rejected the
+    whole upsert (`can't adapt type 'dict'`), so the conversation was never
+    recorded: the database holds no `inbound_call` conversation, and the log's
+    only sign was "conversation not logged".
+    """
+
+    def test_the_observed_failure_becomes_a_string(self):
+        from app.database import _normalise_lead
+
+        raw = {
+            "name": None,
+            "email": None,
+            "program": [
+                {"name": None, "email": None, "program": "Business"},
+                {"name": None, "email": None, "program": "Engineering"},
+            ],
+        }
+        out = _normalise_lead(raw)
+
+        assert out["program"] == "Business, Engineering"
+        assert all(isinstance(v, str) for v in out.values()), (
+            "a value a psycopg2 typed column cannot adapt must not survive this"
+        )
+
+    def test_a_plain_answer_is_untouched(self):
+        from app.database import _normalise_lead
+
+        assert _normalise_lead({"name": " John ", "email": None,
+                                "program": "MBA"}) == {
+            "name": "John", "email": "", "program": "MBA",
+        }
+
+    def test_a_non_dict_answer_is_not_returned_as_one(self):
+        """A top-level JSON array used to reach `(lead or {}).get('name')`."""
+        from app.database import _normalise_lead
+
+        assert _normalise_lead(["Business", "Engineering"]) == {}
+        assert _normalise_lead(None) == {}
+
+
 class TestPhase6LeadExtraction:
     """Verify the LLM can extract structured lead data from transcripts."""
 
@@ -141,27 +179,18 @@ class TestPhase6LeadExtraction:
     def test_extract_lead_from_sample_transcript(self):
         """LLM must extract name, email, and program from a sample transcript."""
         if not _ollama_available():
-            pytest.skip("Ollama not reachable — cannot test LLM extraction")
+            pytest.skip("LLM backend not reachable — cannot test LLM extraction")
 
-        import ollama
-        import urllib.request
-
-        # Find an available model
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-        qwen = next((m for m in models if "qwen" in m.lower()), models[0])
+        from app.llm_backend import chat
 
         prompt = self.LEAD_EXTRACTION_PROMPT.format(transcript=self.SAMPLE_TRANSCRIPT)
 
-        response = ollama.chat(
-            model=qwen,
+        raw = chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 2048},
+            preferred=["qwen2.5:7b"],
+            num_ctx=2048,
+            json_mode=True,
         )
-
-        raw = response["message"]["content"]
         print(f"\nLLM extraction result:\n{raw}")
 
         # Try to parse JSON from the response
@@ -189,28 +218,20 @@ class TestPhase6LeadExtraction:
     def test_extraction_handles_missing_fields(self):
         """When transcript is missing data, LLM must return null for those fields."""
         if not _ollama_available():
-            pytest.skip("Ollama not reachable — cannot test LLM extraction")
+            pytest.skip("LLM backend not reachable — cannot test LLM extraction")
 
-        import ollama
-        import urllib.request
-
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            models = [m.get("name", "") for m in data.get("models", [])]
-        qwen = next((m for m in models if "qwen" in m.lower()), models[0])
+        from app.llm_backend import chat
 
         minimal_transcript = "Caller: What time does the library close?"
 
         prompt = self.LEAD_EXTRACTION_PROMPT.format(transcript=minimal_transcript)
 
-        response = ollama.chat(
-            model=qwen,
+        raw = chat(
             messages=[{"role": "user", "content": prompt}],
-            options={"num_ctx": 2048},
+            preferred=["qwen2.5:7b"],
+            num_ctx=2048,
+            json_mode=True,
         )
-
-        raw = response["message"]["content"]
         print(f"\nMinimal transcript extraction:\n{raw}")
 
         extracted = self._parse_json_from_llm_output(raw)

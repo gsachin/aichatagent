@@ -34,17 +34,17 @@ PLATFORM_BUDGETS: Dict[PlatformType, Dict[str, float]] = {
         "safe_threshold_percent": 95,  # Alert if >95% used
     },
     
-    # ── Apple Silicon: FP16 Whisper (no INT8 support) ───────────────
+    # ── Apple Silicon: MLX LLM (14B 4-bit) + CPU int8 Whisper ───────
     "apple_silicon": {
-        "description": "Apple Silicon GPU (M1/M2/M3/M3Max)",
-        "min_required_gb": 8.0,        # Larger due to FP16 Whisper
-        "recommended_gb": 16.0,        # M3 Max has 36 GB, plenty
-        "whisper_model_gb": 1.2,       # small.en, FP16 (vs 0.8 for INT8)
-        "qwen_llm_gb": 4.0,            # Ollama Metal (native)
-        "kokoro_tts_gb": 0.5,          # ONNX Runtime on Metal
+        "description": "Apple Silicon GPU (M1/M2/M3/M4) — MLX backend",
+        "min_required_gb": 12.0,       # MLX 14B 4-bit + models share unified RAM
+        "recommended_gb": 24.0,        # M3 Max 36 GB — plenty of headroom
+        "whisper_model_gb": 0.5,       # small.en, CPU int8 (CTranslate2 has no Metal)
+        "qwen_llm_gb": 9.0,            # Qwen2.5-14B-Instruct-4bit via Apple MLX
+        "kokoro_tts_gb": 0.5,          # ONNX Runtime on CPU
         "chromadb_gb": 0.05,           # Vector DB (CPU-based)
-        "ollama_overhead_gb": 0.5,     # Server memory
-        "peak_total_gb": 6.25,         # Sum of above (1.2 + 4.0 + 0.5 + 0.05 + 0.5)
+        "ollama_overhead_gb": 0.6,     # MLX runtime + mlx_lm.server overhead
+        "peak_total_gb": 10.65,        # Sum of above (0.5 + 9.0 + 0.5 + 0.05 + 0.6)
         "safe_threshold_percent": 90,  # More conservative for memory sharing
     },
     
@@ -81,19 +81,19 @@ PLATFORM_BUDGETS: Dict[PlatformType, Dict[str, float]] = {
 COMPONENT_BUDGETS: Dict[str, Dict[PlatformType, float]] = {
     "whisper_small_en": {
         "nvidia": 0.8,           # INT8 quantization
-        "apple_silicon": 1.2,    # FP16 (no INT8 support)
+        "apple_silicon": 0.5,    # CPU int8 (NEON — CTranslate2 has no Metal)
         "intel_mac": 1.2,        # FP16
         "cpu": 2.4,              # FP32
     },
     "qwen2_5_6b_q4": {
         "nvidia": 4.0,           # Via Ollama
-        "apple_silicon": 4.0,    # Via Ollama Metal
+        "apple_silicon": 9.0,    # Qwen2.5-14B-Instruct-4bit via Apple MLX
         "intel_mac": 4.0,        # Via Ollama Metal
         "cpu": 4.0,              # Via Ollama CPU (very slow)
     },
     "kokoro_82m": {
         "nvidia": 0.35,          # ONNX Runtime
-        "apple_silicon": 0.5,    # ONNX Runtime on Metal
+        "apple_silicon": 0.5,    # ONNX Runtime on CPU
         "intel_mac": 0.5,
         "cpu": 1.0,              # ONNX Runtime on CPU
     },
@@ -106,8 +106,8 @@ VRAM_THRESHOLDS: Dict[PlatformType, Dict[str, float]] = {
         "critical_gb": 4.0,     # Fail if below this
     },
     "apple_silicon": {
-        "warning_gb": 8.0,
-        "critical_gb": 6.0,
+        "warning_gb": 12.0,
+        "critical_gb": 9.0,
     },
     "intel_mac": {
         "warning_gb": 8.0,

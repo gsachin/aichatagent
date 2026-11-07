@@ -1,0 +1,351 @@
+"""
+Outbound call worker — polls the call_queue table and initiates outbound
+calls via the Twilio REST API, one at a time.
+
+Runs as a background asyncio task inside the FastAPI process.
+
+Usage:
+    from app.outbound.caller import OutboundCallWorker
+
+    worker = OutboundCallWorker()
+    await worker.start()
+    # ... app runs ...
+    worker.stop()
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import urllib.parse
+
+from twilio.base.exceptions import TwilioRestException
+from pathlib import Path
+
+logger = logging.getLogger("outbound.caller")
+
+
+def _format_twilio_error(exc: TwilioRestException) -> str:
+    """Convert a TwilioRestException into a user-friendly diagnostic message."""
+    code = getattr(exc, "code", None)
+    msg = getattr(exc, "msg", str(exc))
+
+    # Map specific Twilio error codes to actionable advice
+    FRIENDLY = {
+        21216: (
+            "Twilio blocked outbound call to this country/region. "
+            "Your account may have region-based calling restrictions. "
+            "Check Twilio Console → Voice → Geo Permissions, or contact "
+            "Twilio Support to enable outbound calling to this destination."
+        ),
+        13223: (
+            "Twilio phone number lacks Voice capability. "
+            "Check the number's capabilities in the Twilio Console."
+        ),
+        13224: "Invalid Twilio phone number. Check TWILIO_PHONE_NUMBER in .env.",
+        13225: "Invalid URL — the TwiML/callback webhook URL may be incorrect.",
+        13226: "Twilio account is suspended or closed. Contact Twilio Support.",
+        13227: "Destination number is not a valid phone number.",
+        20003: "Twilio account credentials (SID / Auth Token) are invalid.",
+        20404: "Twilio resource not found — check your Account SID.",
+    }
+
+    if code in FRIENDLY:
+        base = FRIENDLY[code]
+        return f"{base}\n\n[Twilio error {code}] {msg}"
+
+    # For unrecognized codes, give a cleaner version of the message
+    return f"Twilio error ({code or 'unknown'}): {msg}"
+
+
+def _resolve_host() -> str:
+    """
+    Resolve the public tunnel host from configuration.
+
+    Delegates to app.config.tunnel_host(). Returns just the hostname (no
+    scheme), e.g. "foo.trycloudflare.com".
+    """
+    from app.config import tunnel_host
+
+    return tunnel_host()
+
+
+def _outbound_language(lead: dict | None, override: str = "") -> str:
+    """The language this call should open in.
+
+    The per-call override wins: it is the operator's explicit selection on the
+    quick-call request, the outbound equivalent of an inbound IVR digit. Then
+    the lead's stored language, because the person was enrolled in that
+    language by the chat/voice flow. ``OUTBOUND_LANGUAGE`` remains the campaign
+    default for leads that never chose one. Empty means the session default
+    (English) -- the URL stays byte-identical to the pre-language behaviour.
+    """
+    from app.config import settings
+    from app.languages import normalize_language_code
+
+    raw = (
+        override
+        or (lead or {}).get("language")
+        or settings.OUTBOUND_LANGUAGE
+        or ""
+    )
+    return normalize_language_code(raw)
+
+
+def _outbound_language_source(lead: dict | None, override: str = "") -> str:
+    """Where the opening language came from, for the session's lock policy.
+
+    ``operator`` and ``campaign`` are explicit choices and lock the language;
+    ``lead`` is a stored preference and stays open to strong auto-detection.
+    """
+    from app.config import settings
+    from app.languages import normalize_language_code
+
+    if normalize_language_code(override):
+        return "operator"
+    if normalize_language_code((lead or {}).get("language") or ""):
+        return "lead"
+    if normalize_language_code(settings.OUTBOUND_LANGUAGE or ""):
+        return "campaign"
+    return ""
+
+
+def _outbound_context_params(
+    lead_id: str, phone_number: str, lead: dict | None,
+    override_language: str = "",
+) -> dict:
+    """The query parameters on the outbound TwiML URL.
+
+    They reach the media stream as `<Parameter>`s: lead identity for the CRM
+    link, and the language/source the call opens in. `selectLanguage=1` asks
+    the webhook to play the one-digit language menu before connecting; the
+    configured language remains the fallback for a timeout or digit 4.
+    """
+    from app.config import settings
+
+    params = {"leadId": lead_id, "phone": phone_number}
+    language = _outbound_language(lead, override_language)
+    source = _outbound_language_source(lead, override_language)
+    if language:
+        params["language"] = language
+    if source:
+        params["languageSource"] = source
+    if settings.OUTBOUND_LANGUAGE_MENU:
+        params["selectLanguage"] = "1"
+    return params
+
+
+class OutboundCallWorker:
+    """
+    Background worker that polls the ``call_queue`` table and initiates
+    outbound calls via the Twilio REST API.
+
+    Processes calls sequentially (one at a time) to avoid overwhelming
+    the local LLM / TTS pipeline.  A new call is only started after the
+    previous one completes.
+
+    Parameters:
+        poll_interval: Seconds between queue polls (default 10).
+    """
+
+    def __init__(self, poll_interval: int = 10):
+        self._poll_interval = poll_interval
+        self._running = False
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Start the polling loop as a background asyncio task."""
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._poll_loop())
+        logger.info(
+            "OutboundCallWorker started (poll every %ds)", self._poll_interval
+        )
+
+    def stop(self) -> None:
+        """Stop the polling loop and cancel the background task."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+        logger.info("OutboundCallWorker stopped")
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    async def _poll_loop(self) -> None:
+        while self._running:
+            try:
+                await self._process_next_call()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("OutboundCallWorker: unhandled error in poll loop")
+            await asyncio.sleep(self._poll_interval)
+
+    async def _process_next_call(self) -> None:
+        """
+        Pick the next queued call, claim it atomically, and initiate
+        a Twilio outbound voice call.
+        """
+        from app.leads.models import (
+            add_to_call_queue,
+            get_lead,
+            get_next_queued_call,
+            update_call_queue_status,
+            update_lead,
+        )
+        # (The TwiML is not built here — Twilio fetches it from
+        # /twilio/outbound-voice, which is where the lead context is passed.)
+        from app.config import settings
+
+        entry = await get_next_queued_call()
+        if not entry:
+            return  # Queue is empty — nothing to do
+
+        lead_id = entry["lead_id"]
+        logger.info(
+            "OutboundCallWorker: picked call_queue entry %s for lead %s",
+            entry["id"],
+            lead_id,
+        )
+
+        # Get lead details
+        lead = await get_lead(lead_id)
+        if not lead:
+            logger.warning(f"Lead {lead_id} not found — marking call as failed")
+            await update_call_queue_status(
+                entry["id"], "failed", error_message="Lead not found"
+            )
+            return
+
+        phone_number = lead.get("phone_number", "")
+        if not phone_number:
+            logger.warning(f"Lead {lead_id} has no phone number — marking call as failed")
+            await update_call_queue_status(
+                entry["id"], "failed", error_message="No phone number"
+            )
+            return
+
+        # Check Twilio credentials
+        if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+            logger.warning("Twilio credentials not configured — cannot make outbound call")
+            await update_call_queue_status(
+                entry["id"], "failed", error_message="Twilio not configured"
+            )
+            return
+
+        if not settings.TWILIO_PHONE_NUMBER:
+            logger.warning("TWILIO_PHONE_NUMBER not set — cannot make outbound call")
+            await update_call_queue_status(
+                entry["id"], "failed", error_message="TWILIO_PHONE_NUMBER not set"
+            )
+            return
+
+        # Initiate the call
+        try:
+            from twilio.rest import Client
+
+            host = _resolve_host()
+            # The lead id travels on the webhook URL so the TwiML route can put
+            # it on the <Stream> as a <Parameter> — the media stream carries no
+            # application data otherwise, and without it the call cannot be
+            # linked to the CRM (or to the lead it was placed for).
+            # Empty language/source keeps the URL byte-identical to the
+            # pre-foreign behaviour; `selectLanguage=1` adds the answered-call
+            # menu and leaves that language as its fallback.
+            context = urllib.parse.urlencode(
+                _outbound_context_params(
+                    lead_id,
+                    phone_number,
+                    lead,
+                    str(entry.get("language") or ""),
+                )
+            )
+
+            client = Client(
+                settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN
+            )
+
+            logger.info(f"Outbound call — host: {host}, phone: {phone_number}")
+
+            call = client.calls.create(
+                to=phone_number,
+                from_=settings.TWILIO_PHONE_NUMBER,
+                url=f"https://{host}/twilio/outbound-voice?{context}",
+                status_callback=(
+                    f"https://{host}/twilio/outbound/status"
+                ),
+                status_callback_event=[
+                    "initiated",
+                    "ringing",
+                    "answered",
+                    "completed",
+                    "failed",
+                    "busy",
+                    "no-answer",
+                ],
+                status_callback_method="POST",
+            )
+
+            logger.info(
+                "Outbound call initiated: SID=%s, to=%s, lead=%s",
+                call.sid,
+                phone_number,
+                lead_id,
+            )
+
+            # Update queue entry + lead
+            await update_call_queue_status(
+                entry["id"], "ringing", call_sid=call.sid
+            )
+            await update_lead(
+                lead_id,
+                status="in_progress",
+                call_attempts=(lead.get("call_attempts", 0) + 1),
+            )
+
+        except TwilioRestException as exc:
+            logger.exception(f"Twilio error for lead {lead_id}: code={exc.code}")
+            error_msg = _format_twilio_error(exc)
+            await update_call_queue_status(
+                entry["id"],
+                "failed",
+                error_message=error_msg,
+            )
+            # Re-queue if under max attempts
+            attempts = lead.get("call_attempts", 0) + 1
+            max_attempts = settings.MAX_CALL_ATTEMPTS
+            if attempts < max_attempts:
+                logger.info(
+                    f"Lead {lead_id}: attempt {attempts}/{max_attempts} — re-queuing"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="pending")
+                await add_to_call_queue(lead_id=lead_id)
+            else:
+                logger.info(
+                    f"Lead {lead_id}: max attempts ({max_attempts}) reached — marking failed"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="failed")
+
+        except Exception as exc:
+            logger.exception(f"Failed to initiate outbound call for lead {lead_id}")
+            await update_call_queue_status(
+                entry["id"],
+                "failed",
+                error_message=str(exc),
+            )
+            # Re-queue if under max attempts
+            attempts = lead.get("call_attempts", 0) + 1
+            max_attempts = settings.MAX_CALL_ATTEMPTS
+            if attempts < max_attempts:
+                logger.info(
+                    f"Lead {lead_id}: attempt {attempts}/{max_attempts} — re-queuing"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="pending")
+                await add_to_call_queue(lead_id=lead_id)
+            else:
+                logger.info(
+                    f"Lead {lead_id}: max attempts ({max_attempts}) reached — marking failed"
+                )
+                await update_lead(lead_id, call_attempts=attempts, status="failed")

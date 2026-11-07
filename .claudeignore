@@ -1,0 +1,19 @@
+# Lock files & dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+vendor/
+
+# Build artifacts & outputs
+dist/
+build/
+.next/
+*.min.js
+*.min.css
+
+# System & log files
+*.log
+.git/
+.DS_Store
+coverage/

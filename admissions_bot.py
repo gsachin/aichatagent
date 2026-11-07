@@ -9,70 +9,46 @@ Run:   python admissions_bot.py
 import os
 import sys
 import warnings
-import requests
 
 warnings.filterwarnings("ignore")
 
-# ── Step 0: Verify Ollama ──────────────────────────────────────────
+# ── Step 0: Verify LLM backend (Ollama or MLX) ─────────────────────
 print("--> Checking if AI server is running...")
-try:
-    resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
-    if resp.status_code == 200:
-        models = [m["name"] for m in resp.json().get("models", [])]
-        print(f"   Active. Models: {', '.join(models)}")
-    else:
-        print(f"   ERROR: Unexpected status {resp.status_code}")
-        sys.exit(1)
-except requests.ConnectionError:
-    print("   ERROR: AI not reachable. Is it running in system tray?")
+from app.llm_backend import is_ready, list_models, provider_name
+
+if is_ready():
+    models = list_models()
+    print(f"   Active ({provider_name()}). Models: {', '.join(models) or '(none listed)'}")
+else:
+    print(f"   ERROR: {provider_name()} backend not reachable. "
+          f"Is it running? (start_services.sh / start_services.ps1)")
     sys.exit(1)
 
-# ── Step 1: Load & chunk PDF ───────────────────────────────────────
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# ── Step 1: Load the shared vector store ────────────────────────────
+# LEGACY NOTE (2026-08-14): this bot no longer ingests documents.
+# It previously built its own Chroma store from the old UMD/FDU PDF at
+# 800/150 chunking, which polluted the shared store with duplicate
+# generations. Ingestion is now owned exclusively by
+# scripts/rebuild_rag_index.py; this bot only READS the shared store.
 
-pdf_path = os.path.join(os.getcwd(), "content", "sample_data", "UMD_and_FDU_University_Profile_Report.pdf")
-print(f"\n--> Loading PDF: {pdf_path}")
+from langchain_core.documents import Document
+from langchain_core.runnables import RunnableLambda
 
-if not os.path.exists(pdf_path):
-    # fallback
-    alt = "content/sample_data/UMD_and_FDU_University_Profile_Report.pdf"
-    if os.path.exists(alt):
-        pdf_path = alt
-    else:
-        print(f"   ERROR: PDF not found. Tried: {pdf_path}, {alt}")
-        sys.exit(1)
+from app.doc_context import document_context
 
-loader = PyPDFLoader(pdf_path)
-raw_docs = loader.load()
-print(f"   Loaded {len(raw_docs)} pages.")
-
-splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
-chunks = splitter.split_documents(raw_docs)
-print(f"   Split into {len(chunks)} chunks.")
-
-# ── Step 2: Build vector store ─────────────────────────────────────
-from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaEmbeddings
-
-print("\n--> Building vector embeddings (nomic-embed-text)...")
-embeddings = OllamaEmbeddings(model="nomic-embed-text")
-vector_store = Chroma.from_documents(
-    documents=chunks,
-    embedding=embeddings,
-    persist_directory="./chroma_local_db"
+retriever = RunnableLambda(
+    lambda _input: [Document(page_content=document_context())]
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-print("   Vector store ready.")
+print("   Document context loaded (RAG removed; no embeddings).")
 
 # ── Step 3: Build RAG chain ────────────────────────────────────────
-from langchain_ollama import ChatOllama
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from app.llm_backend import get_chat_model
 
-print("\n--> Booting Qwen 2.5 7B (temp=0.0)...")
-llm = ChatOllama(model="qwen2.5:7b", temperature=0.0)
+print(f"\n--> Booting the LLM via {provider_name()}...")
+llm = get_chat_model(model="qwen2.5:7b")
 
 system_prompt = (
     "You are a warm, helpful, and highly precise University Admissions Advisor. "
@@ -84,7 +60,7 @@ system_prompt = (
     "STRICT FACTUAL CONSTRAINTS:\n"
     "1. Rely EXCLUSIVELY on the provided context. If a detail isn't in the text, "
     "politely say so.\n"
-    "2. Never merge or confuse details between UMD and FDU.\n"
+    "2. Rely on the provided university facts only.\n"
     "3. Present structural information (tuition, deadlines, courses) in Markdown.\n\n"
     "Context:\n{context}"
 )
@@ -105,7 +81,7 @@ def ask(question: str):
 
 # ── Step 4: Chat ───────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about UMD"
+    # CLI mode: pass question as argument, e.g.  python admissions_bot.py "tell me about the BA Political Science"
     question = " ".join(sys.argv[1:])
     print("\n" + "=" * 60)
     print(f"   Student: {question}")

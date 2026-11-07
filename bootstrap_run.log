@@ -1,0 +1,59 @@
+The `msstore` source requires that you view the following agreements before using.
+Terms of Transaction: https://aka.ms/microsoft-store-terms-of-transaction
+The source requires the current machine's 2-letter geographic region to be sent to the backend service to function properly (ex. "US").
+
+Found an existing package already installed. Trying to upgrade the installed package...
+No available upgrade found.
+No newer package versions are available from the configured sources.
+Found Ollama [Ollama.Ollama] Version 0.32.15
+This application is licensed to you by its owner.
+Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
+Downloading https://github.com/ollama/ollama/releases/download/v0.32.15/OllamaSetup.exe
+Successfully verified installer hash
+Starting package install...
+Successfully installed
+Found cloudflared [Cloudflare.cloudflared] Version 2026.8.2
+This application is licensed to you by its owner.
+Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
+Downloading https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-windows-amd64.msi
+Successfully verified installer hash
+Starting package install...
+Found FFmpeg [Gyan.FFmpeg] Version 9.0
+This application is licensed to you by its owner.
+Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
+Downloading https://github.com/GyanD/codexffmpeg/releases/download/9.0/ffmpeg-9.0-full_build.zip
+Successfully verified installer hash
+Extracting archive...
+Successfully extracted archive
+Starting package install...
+Path environment variable modified; restart your shell to use the new value.
+Command line alias added: "ffmpeg"
+Command line alias added: "ffplay"
+Command line alias added: "ffprobe"
+Successfully installed
+[36mUniversity Admissions — One-Click Bootstrap[0m
+Platform: Windows AMD64  (dry-run: False)
+
+[36m--- Phase B — pre-requisite check ---[0m
+[33m  [WARN] Python Python 3.14.7 — expected 3.11.x (app requires 3.11, <=3.12)[0m
+[31m  [DOWN] docker CLI not found[0m
+[31m  [DOWN] ollama binary not found[0m
+[31m  [DOWN] cloudflared not found[0m
+[33m  [WARN] ffmpeg not found (audio conversion may fail)[0m
+[32m  [OK]   GPU: NVIDIA GeForce RTX 5060 Ti, 16311 MiB[0m
+[33m  [WARN] .env missing — will be created from .env.example[0m
+    $ C:\Users\ADMIN\AppData\Local\Python\pythoncore-3.14-64\python.exe D:\project\universityDemo\scripts\predeploy.py --check
+[33m  [WARN] machine profile missing or stale — Phase C will size .env for this machine[0m
+[33m  [WARN] no project venv — dependencies will be installed into .venv/[0m
+[33m  [WARN] RAG vector store missing/empty — will be rebuilt from content/meridian[0m
+    port 8000 free (8000 (FastAPI))
+    port 8501 free (8501 (Chatbot))
+    port 8502 free (8502 (Dashboard))
+
+[36m--- Phase C — installing missing software (Windows / winget) ---[0m
+[33m  [WARN] Python Python 3.14.7 — expected 3.11.x (app requires 3.11, <=3.12)[0m
+[31m  [DOWN] docker CLI not found[0m
+    $ winget install --id Docker.DockerDesktop -e --silent --accept-package-agreements --accept-source-agreements
+    $ winget install --id Ollama.Ollama -e --silent --accept-package-agreements --accept-source-agreements
+    $ winget install --id Cloudflare.cloudflared -e --silent --accept-package-agreements --accept-source-agreements
+    $ winget install --id Gyan.FFmpeg -e --silent --accept-package-agreements --accept-source-agreements

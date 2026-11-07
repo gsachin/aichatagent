@@ -1,0 +1,9 @@
+Pradeep, please find the user API, along with the related API handbooks that include the API endpoints.
+
+Could you please verify that the APIs are working properly?
+
+User API (GitHub):
+https://github.com/LeahXing/salesforce-admission-api/tree/main
+
+User API Handbook:
+https://docs.google.com/document/d/1iGcoFH2jYdd24pODvtw-brVgELLTXRwD2Dt0skk-v_Q/edit?usp=drive_link

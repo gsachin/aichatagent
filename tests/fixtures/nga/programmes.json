@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "generated_at": "2026-10-31",
+    "source": "fixture"
+  },
+  "programmes": [
+    {
+      "id": "ug-ba-history",
+      "name": "BA History",
+      "full_name": "Bachelor of Arts in History (BA)",
+      "level": "UG",
+      "degree": "BA",
+      "subject": "History",
+      "department": "History",
+      "page_url": "https://dspmuranchi.ac.in/departments/history",
+      "document_urls": [
+        "https://dspmuranchi.ac.in/uploads/departments/blog/ug-history.pdf"
+      ],
+      "fee_fact_id": "fee.ug.history.2026.gen",
+      "source": "fixture",
+      "source_urls": [
+        "https://dspmuranchi.ac.in/departments/history"
+      ],
+      "verified_at": "2026-10-26T00:00:00Z",
+      "status": "draft",
+      "aliases": ["BA History", "B.A. History"]
+    },
+    {
+      "id": "ug-bsc-information-technology",
+      "name": "B.Sc Information Technology",
+      "full_name": "Bachelor of Science in Information Technology (B.Sc.)",
+      "level": "UG",
+      "degree": "B.Sc",
+      "subject": "Information Technology",
+      "department": "Information Technology",
+      "page_url": "https://dspmuranchi.ac.in/departments/b.sc.-information-technology",
+      "document_urls": [
+        "https://dspmuranchi.ac.in/uploads/departments/blog/ug-it.pdf"
+      ],
+      "fee_fact_id": "fee.ug.information-technology.2026.gen",
+      "source": "fixture",
+      "source_urls": [
+        "https://dspmuranchi.ac.in/departments/b.sc.-information-technology"
+      ],
+      "verified_at": "2026-10-26T00:00:00Z",
+      "status": "draft",
+      "aliases": ["B.Sc Information Technology", "B.Sc IT"]
+    },
+    {
+      "id": "pg-msc-information-technology",
+      "name": "M.Sc Information Technology",
+      "full_name": "Master of Science in Information Technology (M.Sc.)",
+      "level": "PG",
+      "degree": "M.Sc",
+      "subject": "Information Technology",
+      "department": "Information Technology",
+      "page_url": "https://dspmuranchi.ac.in/departments/m.sc.-information-technology",
+      "document_urls": [
+        "https://dspmuranchi.ac.in/uploads/departments/blog/pg-it.pdf"
+      ],
+      "source": "fixture",
+      "source_urls": [
+        "https://dspmuranchi.ac.in/departments/m.sc.-information-technology"
+      ],
+      "verified_at": "2026-10-26T00:00:00Z",
+      "status": "page_derived",
+      "aliases": ["M.Sc Information Technology", "M.Sc IT"]
+    },
+    {
+      "id": "pg-ma-history",
+      "name": "MA History",
+      "full_name": "Master of Arts in History (MA)",
+      "level": "PG",
+      "degree": "MA",
+      "subject": "History",
+      "department": "History",
+      "page_url": "https://dspmuranchi.ac.in/departments/history",
+      "document_urls": [
+        "https://dspmuranchi.ac.in/uploads/departments/blog/pg-history.pdf"
+      ],
+      "source": "fixture",
+      "source_urls": [
+        "https://dspmuranchi.ac.in/departments/history"
+      ],
+      "verified_at": "2026-10-26T00:00:00Z",
+      "status": "page_derived",
+      "aliases": ["MA History", "M.A. History"]
+    },
+    {
+      "id": "diploma-amanat-survey",
+      "name": "Diploma in Amanat Survey",
+      "full_name": "Diploma in Amanat Survey",
+      "level": "Diploma",
+      "degree": "Diploma",
+      "subject": "Amanat Survey",
+      "department": "Amanat Survey",
+      "page_url": "https://dspmuranchi.ac.in/departments/department-of-amanat-survey",
+      "document_urls": [],
+      "source": "fixture",
+      "source_urls": [
+        "https://dspmuranchi.ac.in/departments/department-of-amanat-survey"
+      ],
+      "verified_at": "2026-10-26T00:00:00Z",
+      "status": "page_derived",
+      "aliases": ["Diploma in Amanat Survey"]
+    }
+  ]
+}

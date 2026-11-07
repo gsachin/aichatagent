@@ -27,6 +27,89 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Keep the existing suite hermetic: the RAG dispatcher must not touch the MCP
+# service in tests (test_rag_dispatcher.py sets the mode per test).
+os.environ.setdefault("USE_MCP_RAG", "off")
+
+# Request-time website retrieval is off in the hermetic suite. The live-site
+# tests inject a fake session; the integration test flips this setting per
+# case with the `override_settings` fixture.
+os.environ.setdefault("LIVE_SITE_ENABLED", "off")
+
+# Keep the suite hermetic: NGA integration tests opt in with
+# override_settings, so a developer .env cannot change what the suite exercises.
+os.environ.setdefault("NGA_ENABLED", "off")
+os.environ.setdefault("NGA_MODE", "off")
+os.environ.setdefault("NGA_PII_GUARD_ENABLED", "off")
+os.environ.setdefault("NGA_SCHEDULER_ENABLED", "off")
+
+# The suite runs against the DSPMU brand and catalogue. These are assigned,
+# not defaulted: a developer shell that exported another profile must not
+# change what the tests assert.
+os.environ["COMPANY_NAME"] = "Dr. Shyama Prasad Mukherjee University"
+os.environ["COMPANY_SHORT_NAME"] = "DSPMU"
+os.environ["UNIVERSITY_NAME"] = "Dr. Shyama Prasad Mukherjee University"
+os.environ["OFFER_EMAIL"] = "registrar@dspmuranchi.ac.in"
+os.environ["ADMISSIONS_EMAIL"] = "registrar@dspmuranchi.ac.in"
+os.environ["ADMISSIONS_PHONE"] = "+91 930 455 261"
+os.environ["PROGRAM_PROFILE"] = "dspmu"
+
+# The demo .env sets CONTEXT_MODE=doc (full-document prompting). The existing
+# retrieval/dispatcher tests were written against the retrieval path, so the
+# suite pins the code default. A test that exercises doc mode overrides this
+# with the `override_settings` fixture or monkeypatch.
+os.environ.setdefault("CONTEXT_MODE", "rag")
+
+# The suite uses the production DSPMU prompt split and entity corpus.
+os.environ["VOICE_KB_PATH"] = "content/dspmu/voice_kb.md"
+os.environ["DOC_PATHS"] = (
+    "content/dspmu/core_cards.md,content/dspmu/site_map.md,"
+    "content/dspmu/recent_notices.md"
+)
+os.environ.setdefault("DOC_MAX_TOKENS", "500000")
+os.environ.setdefault("CONTEXT_MANIFEST_PATH", "")
+
+# The demo .env also sets LLM_PROVIDER=openai. Tests must stay hermetic and
+# must not require LLM_API_KEY; the OpenAI adapter tests inject a fake client
+# and set the provider explicitly. Pre-setting auto here wins over .env because
+# load_dotenv does not override an existing process variable.
+os.environ.setdefault("LLM_PROVIDER", "auto")
+
+# The demo .env sets STT_PROVIDER=sarvam. Tests must never call a paid API or
+# load the 600M ONNX fallback; provider-specific tests patch the adapter. This
+# must win over .env, and load_dotenv does not override an existing variable.
+os.environ["STT_PROVIDER"] = "whisper"
+os.environ.setdefault("STT_FALLBACK_PROVIDERS", "")
+
+# The demo .env routes Gujarati TTS to Sarvam. Tests must not call the paid
+# TTS API; keep the suite on Kokoro and let Sarvam-specific tests override.
+os.environ["TTS_PROVIDER"] = "kokoro"
+os.environ.setdefault("SARVAM_TTS_LANGUAGES", "")
+
+# The greeting warmup is background work for a live box. Tests must not start
+# it: it would load Kokoro or call Sarvam from a TestClient lifespan.
+os.environ.setdefault("GREETING_WARMUP", "0")
+
+# The six-language feature is on by default; pin it so a developer's .env
+# cannot change what the suite exercises. Tests that need it off override the
+# setting and call `configured_foreign_languages.cache_clear()` if needed.
+os.environ.setdefault("FOREIGN_LANGUAGES", "es,fr,it,ja,pt,zh")
+
+# The WhatsApp start-of-chat menu changes what a first message does (it asks
+# for a language instead of falling into the name/RAG flow). The existing
+# WhatsApp tests were written against that flow, so keep it off by default;
+# tests for the menu override the setting on.
+os.environ.setdefault("WHATSAPP_LANGUAGE_MENU", "0")
+
+# ...and keep it out of the LIVE CALL LOG. `app.main` calls `_configure_logging()`
+# at import (main.py:110), which attaches a FileHandler to whatever LOG_FILE
+# names -- so simply importing the app in a test made the suite append to the
+# log a live call is being forensically read from. A test's deliberate
+# `TURN_TIMEOUT` then appears in that record as a real production stall, which
+# is exactly the wrong thing to find while preparing a demo. Forced rather than
+# defaulted: a test run must never write there, whatever the shell has set.
+os.environ["LOG_FILE"] = ""
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 def _find_free_port() -> int:
@@ -57,6 +140,31 @@ def _generate_sine_wav(path: str, duration_s: float = 3.0,
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture
+def override_settings():
+    """
+    Temporarily change a ``Settings`` field, restoring it afterwards.
+
+    ``app.config.Settings`` is a frozen dataclass, so ``monkeypatch.setattr``
+    raises FrozenInstanceError on it; the values are written through
+    ``object.__setattr__`` and put back by hand. Shared by the CRM tests, which
+    need to flip ``CRM_ENABLED`` on for most cases and off for the gate checks.
+    """
+    from app.config import settings
+
+    saved: dict[str, object] = {}
+
+    def override(**kwargs):
+        for key, value in kwargs.items():
+            saved.setdefault(key, getattr(settings, key))
+            object.__setattr__(settings, key, value)
+
+    yield override
+
+    for key, value in saved.items():
+        object.__setattr__(settings, key, value)
 
 
 @pytest.fixture(scope="session")
@@ -94,8 +202,10 @@ def test_server(free_port: int):
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
 
-    # Wait until the server is accepting connections
-    deadline = time.time() + 10
+    # Wait until the server is accepting connections.
+    # The app lifespan pre-warms ChromaDB + Whisper (CUDA) before serving,
+    # which takes ~20-60s on first load (model check against Hugging Face).
+    deadline = time.time() + 90
     while time.time() < deadline:
         try:
             s = socket.create_connection((host, free_port), timeout=0.5)
@@ -104,7 +214,7 @@ def test_server(free_port: int):
         except (ConnectionRefusedError, OSError):
             time.sleep(0.2)
     else:
-        raise RuntimeError(f"Server did not start on port {free_port} within 10s")
+        raise RuntimeError(f"Server did not start on port {free_port} within 90s")
 
     yield f"http://{host}:{free_port}"
 

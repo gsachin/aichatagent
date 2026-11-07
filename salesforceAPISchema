@@ -1,0 +1,1190 @@
+openapi: 3.0.0
+info:
+  title: Salesforce Admission API
+  description: FastAPI integration with Salesforce admission data
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+
+paths:
+  /:
+    get:
+      summary: Root endpoint
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Salesforce Admission API is running"
+
+  /health:
+    get:
+      summary: Health check
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  service:
+                    type: string
+                    example: "Salesforce Admission API"
+
+  # ============================================================
+  # ADMISSIONS ENDPOINTS
+  # ============================================================
+
+  /admissions:
+    get:
+      summary: Get all admission applications
+      tags:
+        - Admissions
+      responses:
+        '200':
+          description: List of all admission applications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdmissionRecord'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+    post:
+      summary: Create admission application
+      tags:
+        - Admissions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdmissionCreate'
+      responses:
+        '200':
+          description: Admission application created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionRecord'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/{application_id}:
+    get:
+      summary: Get admission application by ID
+      tags:
+        - Admissions
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Admission application details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionRecord'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+    patch:
+      summary: Update admission application
+      tags:
+        - Admissions
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdmissionUpdate'
+      responses:
+        '200':
+          description: Admission application updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionRecord'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+    delete:
+      summary: Delete admission application
+      tags:
+        - Admissions
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Admission application deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Admission application deleted successfully"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  # ============================================================
+  # DOCUMENT ENDPOINTS
+  # ============================================================
+
+  /admissions/{application_no}/documents:
+    get:
+      summary: Get all documents for application
+      tags:
+        - Admission Documents
+      parameters:
+        - name: application_no
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of documents for the application
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DocumentResponse'
+        '404':
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/{application_no}/documents/uploads:
+    post:
+      summary: Initialize document upload
+      tags:
+        - Admission Documents
+      parameters:
+        - name: application_no
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file_name
+                - file_size
+                - total_chunks
+                - document_type
+                - source
+              properties:
+                file_name:
+                  type: string
+                file_size:
+                  type: integer
+                  description: Size of file in bytes
+                total_chunks:
+                  type: integer
+                document_type:
+                  type: string
+                source:
+                  type: string
+      responses:
+        '200':
+          description: Upload session initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInitializeResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/{application_no}/documents/uploads/{upload_id}/chunks:
+    post:
+      summary: Upload document chunk
+      tags:
+        - Admission Documents
+      parameters:
+        - name: application_no
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: upload_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - chunk_number
+                - file
+              properties:
+                chunk_number:
+                  type: integer
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Chunk uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChunkUploadResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/{application_no}/documents/uploads/{upload_id}/complete:
+    post:
+      summary: Complete document upload and transfer to Salesforce
+      tags:
+        - Admission Documents
+      parameters:
+        - name: application_no
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: upload_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document upload completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadCompleteResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/documents/{document_id}:
+    get:
+      summary: Get document metadata
+      tags:
+        - Admission Documents
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentResponse'
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/documents/{document_id}/content:
+    get:
+      summary: Download document content (PDF/image)
+      tags:
+        - Admission Documents
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document content
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /admissions/documents/{document_id}/verification:
+    patch:
+      summary: Update document verification status
+      tags:
+        - Admission Documents
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentVerificationUpdate'
+      responses:
+        '200':
+          description: Document verification status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  # ============================================================
+  # USERS ENDPOINTS
+  # ============================================================
+
+  /users/lookup-or-create:
+    post:
+      summary: Lookup existing user or create new user
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLookupCreateRequest'
+      responses:
+        '200':
+          description: User found or created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /users/{user_id}/status:
+    patch:
+      summary: Update user status
+      tags:
+        - Users
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserStatusUpdateRequest'
+      responses:
+        '200':
+          description: User status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+  /users/{user_id}:
+    delete:
+      summary: Delete user
+      tags:
+        - Users
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User deleted successfully
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+
+components:
+  schemas:
+    AdmissionCreate:
+      type: object
+      required:
+        - Application_No__c
+      properties:
+        Application_No__c:
+          type: string
+        User_ID__c:
+          type: string
+          nullable: true
+        Conversation_ID__c:
+          type: string
+          nullable: true
+        First_Name__c:
+          type: string
+          nullable: true
+        Last_Name__c:
+          type: string
+          nullable: true
+        Email__c:
+          type: string
+          format: email
+          nullable: true
+        Phone__c:
+          type: string
+          nullable: true
+        City__c:
+          type: string
+          nullable: true
+        Gender__c:
+          type: string
+          nullable: true
+        Education_Level__c:
+          type: string
+          nullable: true
+        Course__c:
+          type: string
+          nullable: true
+        Major__c:
+          type: string
+          nullable: true
+        Advising_College__c:
+          type: string
+          nullable: true
+        Intake__c:
+          type: string
+          nullable: true
+        Semester__c:
+          type: string
+          nullable: true
+        Residency__c:
+          type: string
+          nullable: true
+        Academic_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        Original_CGPA__c:
+          type: number
+          format: float
+          nullable: true
+        Converted_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        IELTS_Overall_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Course_Eligibility__c:
+          type: string
+          nullable: true
+        Lead_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Lead_Category__c:
+          type: string
+          nullable: true
+        Admission_Status__c:
+          type: string
+          nullable: true
+        Approved_By__c:
+          type: string
+          nullable: true
+        Token_Status__c:
+          type: string
+          nullable: true
+        Token__c:
+          type: string
+          nullable: true
+        Sentiment__c:
+          type: string
+          nullable: true
+        Offer_Status__c:
+          type: string
+          nullable: true
+        Offer_Sent_At__c:
+          type: string
+          format: date-time
+          nullable: true
+        Offer_Letter_Released__c:
+          type: boolean
+          nullable: true
+        Offer_Letter_Accepted__c:
+          type: string
+          nullable: true
+        University_ID__c:
+          type: string
+          nullable: true
+        Remarks__c:
+          type: string
+          nullable: true
+        Created_At__c:
+          type: string
+          format: date-time
+          nullable: true
+        Updated_At__c:
+          type: string
+          format: date-time
+          nullable: true
+        Testing_Record__c:
+          type: boolean
+          default: false
+
+    AdmissionUpdate:
+      type: object
+      properties:
+        User_ID__c:
+          type: string
+          nullable: true
+        Conversation_ID__c:
+          type: string
+          nullable: true
+        First_Name__c:
+          type: string
+          nullable: true
+        Last_Name__c:
+          type: string
+          nullable: true
+        Email__c:
+          type: string
+          format: email
+          nullable: true
+        Phone__c:
+          type: string
+          nullable: true
+        City__c:
+          type: string
+          nullable: true
+        Gender__c:
+          type: string
+          nullable: true
+        Education_Level__c:
+          type: string
+          nullable: true
+        Course__c:
+          type: string
+          nullable: true
+        Major__c:
+          type: string
+          nullable: true
+        Advising_College__c:
+          type: string
+          nullable: true
+        Intake__c:
+          type: string
+          nullable: true
+        Semester__c:
+          type: string
+          nullable: true
+        Residency__c:
+          type: string
+          nullable: true
+        Academic_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        Original_CGPA__c:
+          type: number
+          format: float
+          nullable: true
+        Converted_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        IELTS_Overall_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Course_Eligibility__c:
+          type: string
+          nullable: true
+        Lead_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Lead_Category__c:
+          type: string
+          nullable: true
+        Admission_Status__c:
+          type: string
+          nullable: true
+        Approved_By__c:
+          type: string
+          nullable: true
+        Token_Status__c:
+          type: string
+          nullable: true
+        Token__c:
+          type: string
+          nullable: true
+        Sentiment__c:
+          type: string
+          nullable: true
+        Offer_Status__c:
+          type: string
+          nullable: true
+        Offer_Sent_At__c:
+          type: string
+          format: date-time
+          nullable: true
+        Offer_Letter_Released__c:
+          type: boolean
+          nullable: true
+        Offer_Letter_Accepted__c:
+          type: string
+          nullable: true
+        University_ID__c:
+          type: string
+          nullable: true
+        Remarks__c:
+          type: string
+          nullable: true
+        Updated_At__c:
+          type: string
+          format: date-time
+          nullable: true
+        Testing_Record__c:
+          type: boolean
+          nullable: true
+
+    AdmissionRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        Application_No__c:
+          type: string
+        User_ID__c:
+          type: string
+          nullable: true
+        Conversation_ID__c:
+          type: string
+          nullable: true
+        First_Name__c:
+          type: string
+          nullable: true
+        Last_Name__c:
+          type: string
+          nullable: true
+        Email__c:
+          type: string
+          nullable: true
+        Phone__c:
+          type: string
+          nullable: true
+        City__c:
+          type: string
+          nullable: true
+        Gender__c:
+          type: string
+          nullable: true
+        Education_Level__c:
+          type: string
+          nullable: true
+        Course__c:
+          type: string
+          nullable: true
+        Major__c:
+          type: string
+          nullable: true
+        Advising_College__c:
+          type: string
+          nullable: true
+        Intake__c:
+          type: string
+          nullable: true
+        Semester__c:
+          type: string
+          nullable: true
+        Residency__c:
+          type: string
+          nullable: true
+        Academic_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        Original_CGPA__c:
+          type: number
+          format: float
+          nullable: true
+        Converted_Percentage__c:
+          type: number
+          format: float
+          nullable: true
+        IELTS_Overall_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Course_Eligibility__c:
+          type: string
+          nullable: true
+        Lead_Score__c:
+          type: number
+          format: float
+          nullable: true
+        Lead_Category__c:
+          type: string
+          nullable: true
+        Admission_Status__c:
+          type: string
+          nullable: true
+        Approved_By__c:
+          type: string
+          nullable: true
+        Token_Status__c:
+          type: string
+          nullable: true
+        Token__c:
+          type: string
+          nullable: true
+        Sentiment__c:
+          type: string
+          nullable: true
+        Offer_Status__c:
+          type: string
+          nullable: true
+        Offer_Sent_At__c:
+          type: string
+          nullable: true
+        Offer_Letter_Released__c:
+          type: boolean
+          nullable: true
+        Offer_Letter_Accepted__c:
+          type: string
+          nullable: true
+        University_ID__c:
+          type: string
+          nullable: true
+        Remarks__c:
+          type: string
+          nullable: true
+        Created_At__c:
+          type: string
+          nullable: true
+        Updated_At__c:
+          type: string
+          nullable: true
+        Testing_Record__c:
+          type: boolean
+
+    DocumentResponse:
+      type: object
+      required:
+        - document_id
+        - file_name
+        - document_type
+        - source
+        - upload_datetime
+      properties:
+        document_id:
+          type: string
+        application_id:
+          type: string
+          nullable: true
+        file_name:
+          type: string
+        file_extension:
+          type: string
+          nullable: true
+        file_size:
+          type: integer
+          nullable: true
+        upload_datetime:
+          type: string
+          format: date-time
+        document_type:
+          type: string
+        source:
+          type: string
+        verification_status:
+          type: string
+          enum:
+            - Pending
+            - Verified
+            - Rejected
+          nullable: true
+        rejection_reason:
+          type: string
+          nullable: true
+        verified_by:
+          type: string
+          nullable: true
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    UploadInitializeResponse:
+      type: object
+      required:
+        - upload_id
+        - application_no
+        - file_name
+        - total_chunks
+        - status
+      properties:
+        upload_id:
+          type: string
+          description: Unique identifier for this upload session
+        application_no:
+          type: string
+        file_name:
+          type: string
+        total_chunks:
+          type: integer
+        status:
+          type: string
+          example: "initiated"
+
+    ChunkUploadResponse:
+      type: object
+      required:
+        - upload_id
+        - chunk_number
+        - received_chunks
+        - total_chunks
+        - status
+      properties:
+        upload_id:
+          type: string
+        chunk_number:
+          type: integer
+        received_chunks:
+          type: integer
+          description: Number of chunks received so far
+        total_chunks:
+          type: integer
+        status:
+          type: string
+          example: "uploaded"
+
+    UploadCompleteResponse:
+      type: object
+      required:
+        - upload_id
+        - application_no
+        - status
+        - document
+      properties:
+        upload_id:
+          type: string
+        application_no:
+          type: string
+        status:
+          type: string
+          example: "completed"
+        document:
+          $ref: '#/components/schemas/DocumentResponse'
+
+    DocumentVerificationUpdate:
+      type: object
+      required:
+        - verification_status
+      properties:
+        verification_status:
+          type: string
+          enum:
+            - Pending
+            - Verified
+            - Rejected
+        rejection_reason:
+          type: string
+          nullable: true
+          description: Required if verification_status is "Rejected"
+        verified_by:
+          type: string
+          nullable: true
+
+    UserLookupCreateRequest:
+      type: object
+      required:
+        - name
+        - email
+        - phoneNumber
+        - conversationId
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+        conversationId:
+          type: string
+        course:
+          type: string
+          nullable: true
+
+    UserResponse:
+      type: object
+      required:
+        - userId
+        - name
+        - email
+        - phoneNumber
+        - conversationId
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+        conversationId:
+          type: string
+        course:
+          type: string
+          nullable: true
+        sentiment:
+          type: string
+          nullable: true
+        offerLetterReleased:
+          type: boolean
+          default: false
+        offerLetterAccepted:
+          type: string
+          nullable: true
+
+    UserStatusUpdateRequest:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          nullable: true
+        offerLetterReleased:
+          type: boolean
+          nullable: true
+        offerLetterAccepted:
+          type: string
+          nullable: true

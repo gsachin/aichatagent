@@ -1,0 +1,17 @@
+{"id": "R01", "query": "Reliance Foundation undergraduate scholarship", "expected_urls": ["UG%20launch%20A4.pdf"], "note": "lexical anchor"}
+{"id": "R02", "query": "financial help for undergraduate students", "expected_urls": ["UG%20launch%20A4.pdf", "CentralSectorScholarship.pdf"], "note": "semantic paraphrase; either scholarship notice is relevant"}
+{"id": "R03", "query": "central sector scholarship 2023", "expected_urls": ["CentralSectorScholarship.pdf"], "note": "lexical anchor"}
+{"id": "R04", "query": "government scholarship for college students", "expected_urls": ["CentralSectorScholarship.pdf"], "note": "semantic paraphrase"}
+{"id": "R05", "query": "WIPRO placement drive", "expected_urls": ["WIPRO%20WEBEX%20Meet.pdf"], "note": "lexical anchor"}
+{"id": "R06", "query": "company recruiting final year students", "expected_urls": ["WIPRO%20WEBEX%20Meet.pdf", "tcs%202025", "cms/placement-cell", "PlcementTrainingCell.aspx"], "note": "semantic paraphrase; placement pages or a drive notice are relevant"}
+{"id": "R07", "query": "TCS campus placement drive", "expected_urls": ["tcs%202025"], "note": "lexical anchor"}
+{"id": "R08", "query": "sports marathon notice", "expected_urls": ["Sports%20Marathon.pdf"], "note": "lexical anchor"}
+{"id": "R09", "query": "NCC enrollment physical test", "expected_urls": ["poster%20ncc%20enrollment.pdf"], "note": "lexical anchor"}
+{"id": "R10", "query": "NSS foundation day celebration", "expected_urls": ["NSS23%20Notice.pdf"], "note": "lexical anchor"}
+{"id": "R11", "query": "library trainee walk-in interview", "expected_urls": ["LT%20modified.pdf"], "note": "lexical anchor"}
+{"id": "R12", "query": "national digital library information", "expected_urls": ["National%20Digital%20Library.pdf"], "note": "lexical anchor"}
+{"id": "R13", "query": "UG PG end semester examination schedule 2022", "expected_urls": ["UG_PG_EndSemExamSchedule.pdf"], "note": "lexical anchor"}
+{"id": "R14", "query": "end term exam dates", "expected_urls": ["UG_PG_EndSemExamSchedule.pdf"], "note": "semantic paraphrase"}
+{"id": "R15", "query": "M.Sc Chemistry second provisional admission list", "expected_urls": ["Second%20Provisional%20Selection%20List%20for%20Admission%20to%20M_Sc_%20Chemistry.pdf"], "note": "lexical anchor"}
+{"id": "R16", "query": "B.A. History fourth provisional admission list", "expected_urls": ["4TH%20PG%20ADMISSION%20LIST%20DEPARTMENT%20OF%20HISTORY%20DSPMU.pdf"], "note": "lexical anchor"}
+{"id": "R17", "query": "examination fee submission remote sensing GIS semester 1", "expected_urls": ["04.04.2025_Examination%20Fees%20Submission%20Notice%20and%20Schedule_RS%20GIS_Sem%20I.pdf"], "note": "lexical anchor"}

@@ -43,15 +43,27 @@ class TestTask9RequirementsFile:
 
     def test_requirements_parseable(self):
         """Every non-comment, non-empty line must be a valid package spec."""
+        from packaging.requirements import InvalidRequirement, Requirement
+
         lines = REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            # Valid pip requirement: package_name or package_name==version or package_name>=version
-            assert " " not in stripped, (
-                f"Line {i}: requirement contains space — may be invalid: '{stripped}'"
-            )
+            # Parse it, rather than proxy for it. This used to assert
+            # `" " not in stripped` — "no space, therefore valid" — which is
+            # not the rule: PEP 508 environment markers legitimately contain
+            # spaces, so
+            #   onnxruntime-gpu==1.28.0; platform_system=="Windows" or ...
+            # is valid and was reported invalid. The test failed while
+            # requirements.txt was correct, and a gate that fails on correct
+            # input teaches its reader to ignore it. `packaging` implements
+            # the actual grammar.
+            try:
+                Requirement(stripped)
+            except InvalidRequirement as exc:
+                pytest.fail(f"Line {i}: not a valid PEP 508 requirement: "
+                            f"'{stripped}' ({exc})")
 
 
 class TestTask9PackageImports:

@@ -1,0 +1,540 @@
+"""Pre-synthesise the call assets US-016 plays (BRD-13, AC-3).
+
+Two assets, produced ONCE, ahead of time, in the assistant's own voice:
+
+  busy.wav            the refusal a third caller hears when both lines are live
+  fixed_response.wav  what a caller hears when the inference engine is lost
+
+They exist so that neither situation requires anything to be synthesised or
+generated at request time. That is the whole point of the story: the refusal
+path must not consume the resources it exists to protect, and the engine-loss
+path must work when the engine -- or the synthesiser, or both -- is gone.
+
+Twilio `<Play>` is served WAV, PCM, 8 kHz, mono, 16-bit: the carrier's own
+narrowband rate, which is what the media stream carries anyway.
+
+Wording constraints (AC-5) are enforced by a check, not by intention: no
+internal vocabulary ("error", "timeout", "connection", a model name) and no
+promise the surviving components cannot keep. The check runs here so a bad line
+cannot reach a caller, and the same rules are re-asserted in the test suite.
+
+Run once after a voice change, and any time the boot gate reports drift:
+
+    .venv/Scripts/python.exe scripts/build_call_assets.py
+
+Deployment calls `--ensure`, which renders only what is missing or stale and
+is a no-op on a restart where every asset is current:
+
+    .venv/Scripts/python.exe scripts/build_call_assets.py --ensure
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import wave
+from pathlib import Path
+
+PROJ = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJ))
+os.chdir(PROJ)
+
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(".env")
+
+# The wording lives in app/admission.py, because the refusal path also needs it
+# for its carrier-<Say> fallback when the assets are absent. One home for the
+# words means the recording and the fallback cannot drift apart.
+from app.admission import (  # noqa: E402
+    BUSY_TEXT,
+    FIXED_RESPONSE_TEXT,
+    busy_asset,
+    busy_text,
+    fixed_response_asset,
+    fixed_response_text,
+)
+from app.languages import (  # noqa: E402
+    DEFAULT_FOREIGN_LANGUAGES,
+    configured_foreign_languages,
+    contains_cjk,
+)
+
+#: Internal vocabulary that must never reach a caller (AC-5).
+FORBIDDEN_IN_WORDING = (
+    "error", "timeout", "timed out", "connection", "connect", "exception",
+    "token", "quota", "server", "engine", "model", "qwen", "llama", "ollama",
+    "whisper", "kokoro", "rag", "latency", "500", "503",
+)
+
+TARGET_SR = 8000
+
+#: Every language whose greeting is pre-rendered: the three core languages the
+#: IVR always offers, plus the six configurable foreign languages. The build
+#: covers the full set even when FOREIGN_LANGUAGES is empty, so enabling one
+#: later does not require remembering to rebuild.
+GREETING_LANGUAGES = ("en", "hi", "gu", *DEFAULT_FOREIGN_LANGUAGES)
+
+#: Languages the outbound language menu is prompted in. A call whose fallback
+#: language is one of the six foreign languages hears the English prompt.
+MENU_LANGUAGES = ("en", "hi", "gu")
+
+
+def check_wording(name: str, text: str) -> list[str]:
+    """AC-5, enforced at build time so a bad line cannot reach a caller."""
+    problems = []
+    low = text.lower()
+    for word in FORBIDDEN_IN_WORDING:
+        if word in low:
+            problems.append(f"{name}: contains internal vocabulary {word!r}")
+    if not text.strip():
+        problems.append(f"{name}: empty")
+    if len(text.split()) > 60:
+        problems.append(f"{name}: {len(text.split())} words is too long for a refusal")
+    return problems
+
+
+def check_foreign_wording(name: str, text: str) -> list[str]:
+    """Non-empty and short enough for a refusal, without English word rules.
+
+    The English forbidden-vocabulary list is English-specific; applying it to
+    Japanese or Chinese would be meaningless. Translation review owns the
+    wording quality for these six; this check owns the shape.
+    """
+    problems = []
+    if not text.strip():
+        problems.append(f"{name}: empty")
+    limit = 120 if contains_cjk(text) else 240
+    if len(text) > limit:
+        problems.append(f"{name}: {len(text)} characters is too long for a refusal")
+    return problems
+
+
+def _write_wav(audio, sr: int, out_path: Path, *, text: str,
+               language: str, voice: str,
+               phoneme_language: str | None) -> dict:
+    """Write one carrier-format WAV and return its manifest record."""
+    import numpy as np
+
+    audio = np.asarray(audio, dtype=np.float32)
+    if sr != TARGET_SR:
+        from scipy.signal import resample
+        audio = resample(audio, int(len(audio) * TARGET_SR / sr)).astype(np.float32)
+        sr = TARGET_SR
+
+    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(out_path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm16.tobytes())
+
+    data = out_path.read_bytes()
+    return {
+        "file": out_path.name,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sample_rate": sr,
+        "channels": 1,
+        "sample_width": 2,
+        "duration_s": round(len(pcm16) / sr, 3),
+        "text": text,
+        "language": language,
+        "voice": voice,
+        "phoneme_language": phoneme_language,
+    }
+
+
+def synthesise(text: str, out_path: Path, *,
+               language: str | None = None,
+               voice: str | None = None) -> dict:
+    """Render one asset at the agent's voice, in carrier format.
+
+    ``language=None`` is the English path and must stay byte-identical: it
+    calls ``engine.create`` exactly as it did before this language work (no
+    ``lang`` argument). A foreign language selects its Kokoro voice and
+    phoneme set so the output is not English pronunciation.
+    """
+    import numpy as np
+    from app.languages import normalize_language_code
+    from app.voice_handler import (
+        _get_tts_engine, _kokoro_lang_for, _kokoro_render, _tts_speed,
+        _tts_speed_for, _tts_voice, _tts_voice_for,
+    )
+
+    engine = _get_tts_engine()
+    if language is None:
+        audio, sr = engine.create(text, voice=_tts_voice(), speed=_tts_speed())
+        voice, lang = _tts_voice(), None
+    else:
+        voice = voice or _tts_voice_for(language)
+        speed = _tts_speed_for(language)
+        lang = (
+            "misaki"
+            if normalize_language_code(language) in ("ja", "zh")
+            else _kokoro_lang_for(language, voice)
+        )
+        # Kokoro's `create` truncates at 510 phonemes and then indexes the
+        # voice array with the pre-truncation count, which raises IndexError
+        # for a long CJK sentence. Sentence-sized chunks keep every call below
+        # the limit; the concatenated WAV is one asset with natural pauses.
+        parts = [p for p in re.split(r"(?<=[.!?;。！？])\s*", text) if p.strip()]
+        if len(parts) > 1:
+            pieces = []
+            for part in parts:
+                chunk, sr = _kokoro_render(
+                    engine, part, language, voice, speed
+                )
+                pieces.append(np.asarray(chunk, dtype=np.float32))
+            audio = np.concatenate(pieces)
+        else:
+            audio, sr = _kokoro_render(
+                engine, text, language, voice, speed
+            )
+    return _write_wav(
+        audio, sr, out_path,
+        text=text,
+        language=language or "en",
+        voice=voice,
+        phoneme_language=lang,
+    )
+
+
+def synthesise_greeting(text: str, out_path: Path, language: str) -> dict:
+    """Render a fixed greeting/menu through the same provider the call uses.
+
+    Hindi and Gujarati are routed to Sarvam Bulbul in the demo; every other
+    selectable language uses Kokoro. The asset is therefore in the same voice
+    the caller would have heard from live synthesis.
+    """
+    from app.voice_handler import _use_sarvam_tts
+
+    if _use_sarvam_tts(language):
+        from app import tts_sarvam
+        from app.config import settings
+
+        speaker = tts_sarvam.speaker_for(language)
+        audio, sr = tts_sarvam.synthesise(
+            text, language,
+            speaker=speaker,
+            pace=float(settings.SARVAM_TTS_PACE),
+        )
+        return _write_wav(
+            audio, sr, out_path,
+            text=text,
+            language=language,
+            voice=speaker,
+            phoneme_language="sarvam",
+        )
+    return synthesise(text, out_path, language=language)
+
+
+def live_voice() -> tuple[str, float]:
+    """The voice configuration a build must match."""
+    voice = os.environ.get("KOKORO_VOICE", "af_heart")
+    speed = float(os.environ.get("KOKORO_SPEED", "1.0") or 1.0)
+    return (voice.strip() or "af_heart"), speed
+
+
+def fixed_jobs() -> list[tuple[str, str, str | None]]:
+    """(filename, text, language) for the busy/fixed-response assets."""
+    from app.admission import BUSY_ASSET, FIXED_RESPONSE_ASSET
+
+    jobs = [
+        (BUSY_ASSET, BUSY_TEXT, None),
+        (FIXED_RESPONSE_ASSET, FIXED_RESPONSE_TEXT, None),
+    ]
+    for code in DEFAULT_FOREIGN_LANGUAGES:
+        jobs.append((busy_asset(code), busy_text(code), code))
+        jobs.append((fixed_response_asset(code), fixed_response_text(code), code))
+    return jobs
+
+
+def greeting_jobs() -> list[tuple[str, str, str, str]]:
+    """(language, direction, filename, text) for every pre-rendered greeting."""
+    from app.voice_handler import greeting_asset_name
+    from app.voice_system_prompt import call_greeting
+
+    jobs = []
+    for code in GREETING_LANGUAGES:
+        for direction in ("inbound", "outbound"):
+            text = call_greeting(code, direction)
+            jobs.append((code, direction,
+                         greeting_asset_name(code, direction, text), text))
+    return jobs
+
+
+def menu_jobs() -> list[tuple[str, str, str]]:
+    """(language, filename, text) for the outbound language menu prompts.
+
+    The first-level prompts are rendered in the three core languages. When
+    FOREIGN_LANGUAGES is enabled, the English second-level menu (Spanish,
+    French, Italian, Japanese, Portuguese, Chinese) is rendered too; it is the
+    same voice the caller hears for English rather than a carrier voice.
+    """
+    from app.voice_handler import menu_asset_name
+    from app.voice_system_prompt import (
+        call_foreign_language_menu,
+        call_language_menu,
+    )
+
+    jobs = []
+    for code in MENU_LANGUAGES:
+        text = call_language_menu(code)
+        jobs.append((code, menu_asset_name(code, text), text))
+    if configured_foreign_languages():
+        text = call_foreign_language_menu()
+        jobs.append(("en", menu_asset_name("en", text), text))
+    return jobs
+
+
+def _manifest_skeleton(voice: str, speed: float) -> dict:
+    return {
+        "voice": voice,
+        "speed": speed,
+        "format": {"container": "wav", "codec": "pcm_s16le", "sample_rate": TARGET_SR,
+                   "channels": 1, "note": "Twilio <Play> carrier format"},
+        "assets": {},
+        "greetings": {},
+        "menus": {},
+    }
+
+
+def _record_current(name: str, text: str | None, record: dict | None) -> bool:
+    """True when the file on disk is exactly what this build would produce.
+
+    A greeting's filename carries a digest of text/voice/provider, so a stale
+    greeting is simply a name that is not present. Fixed/busy assets have
+    stable names, so their wording is compared and their hash verified.
+    """
+    if not record:
+        return False
+    if text is not None and record.get("text") != text:
+        return False
+    from app.admission import asset_path
+
+    path = asset_path(name)
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        return hashlib.sha256(path.read_bytes()).hexdigest() == record.get("sha256")
+    except OSError:
+        return False
+
+
+def _write_manifest(manifest: dict) -> Path:
+    from app.admission import ASSET_MANIFEST, asset_path
+
+    path = asset_path(ASSET_MANIFEST)
+    path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8", newline="\n",
+    )
+    return path
+
+
+def _wording_problems(
+    jobs: list[tuple[str, str, str | None]],
+    menus: list[tuple[str, str, str]] = (),
+) -> list[str]:
+    problems = (
+        check_wording("busy", BUSY_TEXT)
+        + check_wording("fixed_response", FIXED_RESPONSE_TEXT)
+    )
+    for name, text, code in jobs:
+        if code is not None:
+            problems.extend(check_foreign_wording(name, text))
+    for code, name, text in menus:
+        if code == "en":
+            problems.extend(check_wording(name, text))
+        else:
+            problems.extend(check_foreign_wording(name, text))
+    return problems
+
+
+def ensure(jobs: list[tuple[str, str, str | None]],
+           greetings: list[tuple[str, str, str, str]],
+           menus: list[tuple[str, str, str]],
+           voice: str, speed: float) -> int:
+    """Build only the assets that are missing or stale.
+
+    This is the deploy path: `start_services.ps1/.sh` call it before FastAPI
+    starts, so a fresh clone -- where `app/static/audio/` is absent because it
+    is gitignored -- gets its greetings without anyone remembering a manual
+    step. When everything is current it reads a few small files and returns;
+    a restart pays nothing.
+    """
+    from app.admission import asset_path, read_manifest
+
+    existing = read_manifest()
+    manifest = _manifest_skeleton(voice, speed)
+
+    # A voice/speed change invalidates every Kokoro asset. Greeting filenames
+    # change with it (the digest covers voice/speed) and are therefore already
+    # "missing"; fixed/busy names are stable, so this check covers those.
+    voice_changed = bool(existing) and (
+        existing.get("voice") != voice or existing.get("speed") != speed
+    )
+
+    build_fixed = []
+    for name, text, code in jobs:
+        record = (existing.get("assets") or {}).get(name)
+        if voice_changed or not _record_current(name, text, record):
+            build_fixed.append((name, text, code))
+        else:
+            manifest["assets"][name] = record
+
+    build_greetings = []
+    for code, direction, name, text in greetings:
+        record = (existing.get("greetings") or {}).get(name)
+        if voice_changed or not _record_current(name, text, record):
+            build_greetings.append((code, direction, name, text))
+        else:
+            manifest["greetings"][name] = record
+
+    build_menus = []
+    for code, name, text in menus:
+        record = (existing.get("menus") or {}).get(name)
+        if voice_changed or not _record_current(name, text, record):
+            build_menus.append((code, name, text))
+        else:
+            manifest["menus"][name] = record
+
+    total = len(jobs) + len(greetings) + len(menus)
+    pending = len(build_fixed) + len(build_greetings) + len(build_menus)
+    if not pending:
+        print(f"  all {total} call assets are present and current")
+        return 0
+
+    print(f"  {total - pending}/{total} current; building {pending}")
+    failures = 0
+
+    for name, text, code in build_fixed:
+        try:
+            info = synthesise(text, asset_path(name), language=code)
+        except Exception as exc:                       # noqa: BLE001 — keep building
+            failures += 1
+            print(f"  FAILED  {name}: {type(exc).__name__}: {exc}")
+            continue
+        manifest["assets"][name] = info
+        print(f"  {name:<24} {info['duration_s']:>6.2f}s  {info['bytes']:>8} bytes  "
+              f"sha256 {info['sha256'][:12]}  lang {info['language']}  "
+              f"voice {info['voice']}")
+
+    for code, direction, name, text in build_greetings:
+        try:
+            info = synthesise_greeting(text, asset_path(name), code)
+        except Exception as exc:                       # noqa: BLE001 — keep building
+            failures += 1
+            print(f"  FAILED  {name}: {type(exc).__name__}: {exc}")
+            continue
+        info["direction"] = direction
+        manifest["greetings"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    for code, name, text in build_menus:
+        try:
+            info = synthesise_greeting(text, asset_path(name), code)
+        except Exception as exc:                       # noqa: BLE001 — keep building
+            failures += 1
+            print(f"  FAILED  {name}: {type(exc).__name__}: {exc}")
+            continue
+        info["kind"] = "language_menu"
+        manifest["menus"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    if failures:
+        # Do not write a manifest that claims a voice/state the disk does not
+        # have. Leaving the previous manifest in place keeps `asset_drift()`
+        # honest and makes the next `--ensure` retry the failures.
+        print(f"\n  {failures} asset(s) could not be built; manifest left unchanged")
+        print("  the live path will synthesise those greetings on demand")
+        return 1
+
+    path = _write_manifest(manifest)
+    print(f"\n  manifest -> {path}")
+    print(f"  voice {manifest['voice']} at speed {manifest['speed']}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    from app.admission import asset_path
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--ensure", action="store_true",
+        help="build only missing or stale assets (the deploy path)",
+    )
+    args = ap.parse_args(argv)
+
+    print("=" * 74)
+    print("US-016 + greetings -- building the pre-synthesised call assets")
+    print("=" * 74)
+
+    jobs = fixed_jobs()
+    greetings = greeting_jobs()
+    menus = menu_jobs()
+
+    problems = _wording_problems(jobs, menus)
+    for p in problems:
+        print(f"  REFUSED  {p}")
+    if problems:
+        print("\n  Fix the wording before building: a caller must never hear this.")
+        return 1
+    print("  wording check: English vocabulary/length and foreign shape pass")
+
+    voice, speed = live_voice()
+
+    if args.ensure:
+        return ensure(jobs, greetings, menus, voice, speed)
+
+    manifest = _manifest_skeleton(voice, speed)
+
+    for name, text, code in jobs:
+        info = synthesise(text, asset_path(name), language=code)
+        manifest["assets"][name] = info
+        print(f"  {name:<24} {info['duration_s']:>6.2f}s  {info['bytes']:>8} bytes  "
+              f"sha256 {info['sha256'][:12]}  lang {info['language']}  "
+              f"voice {info['voice']}")
+
+    # Fixed greetings, one per selectable language and direction. The filename
+    # carries the digest of the live voice/text identity, so a voice change
+    # produces a new file and the runtime falls back to live synthesis until
+    # this script is run again.
+    print("\n  greetings")
+    for code, direction, name, text in greetings:
+        info = synthesise_greeting(text, asset_path(name), code)
+        info["direction"] = direction
+        manifest["greetings"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    # The outbound language menu, prompted in the call's fallback language
+    # before the media stream starts.
+    print("\n  language menus")
+    for code, name, text in menus:
+        info = synthesise_greeting(text, asset_path(name), code)
+        info["kind"] = "language_menu"
+        manifest["menus"][name] = info
+        print(f"  {name:<44} {info['duration_s']:>6.2f}s  "
+              f"{info['bytes']:>8} bytes  sha256 {info['sha256'][:12]}  "
+              f"lang {info['language']}  voice {info['voice']}")
+
+    path = _write_manifest(manifest)
+    print(f"\n  manifest -> {path}")
+    print(f"  voice {manifest['voice']} at speed {manifest['speed']}")
+    print("\n  Served at /static/audio/<file>; Twilio <Play> points at the tunnel host.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

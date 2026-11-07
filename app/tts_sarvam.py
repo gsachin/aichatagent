@@ -1,0 +1,337 @@
+"""Sarvam Bulbul v4 Flash text-to-speech adapter (HTTP streaming).
+
+Kokoro has no Gujarati voice: `_tts_voice_for("gu")` falls back to an English
+voice and the caller hears Gujarati text read with English phonemes. Bulbul v4
+Flash carries Gujarati personas and returns raw 8 kHz linear16 PCM from
+`/text-to-speech/stream`, which is the carrier's rate — no resampling between
+Sarvam and Twilio.
+
+Only the languages listed in `SARVAM_TTS_LANGUAGES` route here. The demo sets
+`gu,hi`: Gujarati has no Kokoro voice, and Hindi is on Bulbul because Kokoro's
+`hf_alpha` mangles code-mixed Latin acronyms ("MBA" -> "ambhee") and vocalises
+the phonemizer's language-switch flags. English stays on Kokoro.
+
+No network call happens at import time. A missing key raises `TTSError`; the
+voice handler logs it and falls back through the existing TTS failure path.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import threading
+import time
+from typing import AsyncIterator
+
+import httpx
+import numpy as np
+
+from app.config import settings
+
+logger = logging.getLogger("tts_sarvam")
+
+#: One async client per running event loop. Building an ``AsyncClient`` per
+#: request paid DNS/TCP/TLS every time; measured on the same Gujarati payload,
+#: first chunk 534/525 ms with a new client vs 311/317 ms reused. The client is
+#: loop-bound, so a new loop (tests, a restarted worker) gets a fresh one.
+_ASYNC_CLIENT: httpx.AsyncClient | None = None
+_ASYNC_CLIENT_LOOP = None
+_ASYNC_CLIENT_LOCK = threading.Lock()
+
+
+class TTSError(RuntimeError):
+    """Sarvam TTS failed; the caller decides whether to degrade or fall back."""
+
+
+#: Bulbul v4 Flash persona IDs, one per supported language. The map is used
+#: when no per-language override is configured, and it is what makes "add hi
+#: to SARVAM_TTS_LANGUAGES" a configuration change rather than a code edit.
+_DEFAULT_SPEAKERS = {
+    "gu": "pooja_gu_customer",
+    "hi": "aparna_hi_customer",
+    "en": "simran_en_customer",
+}
+
+_LANG_TO_BCP = {
+    "hi": "hi-IN",
+    "en": "en-IN",
+    "bn": "bn-IN",
+    "gu": "gu-IN",
+    "kn": "kn-IN",
+    "ml": "ml-IN",
+    "mr": "mr-IN",
+    "or": "od-IN",
+    "pa": "pa-IN",
+    "ta": "ta-IN",
+    "te": "te-IN",
+}
+
+
+def is_configured() -> bool:
+    return bool((settings.SARVAM_API_KEY or "").strip())
+
+
+def supported(language: str | None) -> bool:
+    return (language or "").strip().lower() in _LANG_TO_BCP
+
+
+#: Persona IDs carry their language: pooja_gu_customer, aparna_hi_customer,
+#: simran_en_customer. Used to reject a global override that belongs to a
+#: different language -- the trap that would give Hindi a Gujarati voice.
+_PERSONA_LANGUAGE = re.compile(r"_([a-z]{2})_")
+
+
+def _persona_language(persona: str) -> str:
+    """The language tag inside a Bulbul persona ID, or "" if it has none."""
+    match = _PERSONA_LANGUAGE.search((persona or "").strip().lower())
+    return match.group(1) if match else ""
+
+
+def _configured_speakers() -> dict[str, str]:
+    """Parse ``SARVAM_TTS_SPEAKERS`` ("gu:pooja_gu_customer,hi:...")."""
+    mapping: dict[str, str] = {}
+    for part in (settings.SARVAM_TTS_SPEAKERS or "").split(","):
+        code, sep, persona = part.partition(":")
+        code, persona = code.strip().lower(), persona.strip()
+        if sep and code and persona:
+            mapping[code] = persona
+    return mapping
+
+
+def speaker_for(language: str | None) -> str:
+    """The Bulbul persona for a language.
+
+    Resolution order:
+      1. ``SARVAM_TTS_SPEAKERS`` ("hi:aparna_hi_customer,gu:..."), the
+         per-language map that a multi-language deployment should use;
+      2. ``SARVAM_TTS_SPEAKER``, but only when its persona belongs to the
+         requested language (legacy single-language override);
+      3. ``_DEFAULT_SPEAKERS``.
+
+    Step 2 is the fix for a live trap: the demo sets
+    ``SARVAM_TTS_SPEAKER=pooja_gu_customer``. Adding Hindi to
+    ``SARVAM_TTS_LANGUAGES`` without this guard would have given Hindi a
+    Gujarati voice -- the caller would hear Gujarati-accented Hindi.
+    """
+    code = (language or "").strip().lower()
+    mapped = _configured_speakers().get(code)
+    if mapped:
+        return mapped
+
+    configured = (settings.SARVAM_TTS_SPEAKER or "").strip()
+    if configured:
+        persona_language = _persona_language(configured)
+        if not persona_language or persona_language == code:
+            return configured
+        logger.warning(
+            "SARVAM_TTS_SPEAKER=%r belongs to %s, not %s; using the %s persona",
+            configured, persona_language, code, code,
+        )
+    return _DEFAULT_SPEAKERS.get(code, "pooja_gu_customer")
+
+
+def _payload(text: str, language: str, speaker: str | None,
+             pace: float | None) -> dict:
+    code = (language or "gu").strip().lower()
+    bcp = _LANG_TO_BCP.get(code)
+    if not bcp:
+        raise TTSError(f"Bulbul has no language mapping for {language!r}")
+    return {
+        "text": text[:3500],
+        "language_code": bcp,
+        "speaker": speaker or speaker_for(code),
+        "model": settings.SARVAM_TTS_MODEL,
+        "output_audio_codec": "linear16",
+        "speech_sample_rate": int(settings.SARVAM_TTS_SAMPLE_RATE),
+        "pace": float(pace if pace is not None else settings.SARVAM_TTS_PACE),
+        "enable_preprocessing": True,
+    }
+
+
+def _headers() -> dict:
+    key = (settings.SARVAM_API_KEY or "").strip()
+    if not key:
+        raise TTSError("SARVAM_API_KEY is empty")
+    return {"api-subscription-key": key, "Content-Type": "application/json"}
+
+
+def _timeout() -> httpx.Timeout:
+    return httpx.Timeout(
+        settings.SARVAM_TTS_TIMEOUT_S,
+        connect=min(3.0, settings.SARVAM_TTS_TIMEOUT_S),
+    )
+
+
+def _pcm(data: bytes) -> np.ndarray:
+    # Little-endian 16-bit mono PCM. The caller sets 8 kHz.
+    return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _async_client() -> httpx.AsyncClient:
+    """The loop's shared client, rebuilt if it was closed or the loop changed."""
+    import asyncio
+
+    global _ASYNC_CLIENT, _ASYNC_CLIENT_LOOP
+    loop = asyncio.get_running_loop()
+    with _ASYNC_CLIENT_LOCK:
+        client = _ASYNC_CLIENT
+        if client is None or client.is_closed or _ASYNC_CLIENT_LOOP is not loop:
+            client = httpx.AsyncClient(timeout=_timeout())
+            _ASYNC_CLIENT = client
+            _ASYNC_CLIENT_LOOP = loop
+    return client
+
+
+async def aclose() -> None:
+    """Close the shared client on shutdown (or after a transport failure)."""
+    global _ASYNC_CLIENT, _ASYNC_CLIENT_LOOP
+    with _ASYNC_CLIENT_LOCK:
+        client = _ASYNC_CLIENT
+        _ASYNC_CLIENT = None
+        _ASYNC_CLIENT_LOOP = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+def _error_body(response: httpx.Response) -> str:
+    try:
+        body = response.read().decode("utf-8", errors="replace")
+    except Exception:                            # noqa: BLE001
+        body = ""
+    return body.strip().replace("\n", " ")[:300] or "(empty body)"
+
+
+async def astream(
+    text: str,
+    language: str,
+    *,
+    speaker: str | None = None,
+    pace: float | None = None,
+) -> AsyncIterator[np.ndarray]:
+    """Yield raw float32 PCM chunks at the configured sample rate (8 kHz).
+
+    The response is a binary stream; each chunk is converted to float32 as it
+    arrives. A trailing odd byte is carried to the next chunk, and dropped at
+    the end, so a provider chunk boundary can never shift the sample alignment.
+    """
+    if not text.strip():
+        return
+    payload = _payload(text, language, speaker, pace)
+    headers = _headers()
+    started = time.perf_counter()
+    first = None
+    pending = b""
+    try:
+        client = _async_client()
+        async with client.stream(
+            "POST", settings.SARVAM_TTS_URL, headers=headers, json=payload
+        ) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode(
+                    "utf-8", errors="replace"
+                ).strip().replace("\n", " ")[:300]
+                raise TTSError(
+                    f"Sarvam TTS HTTP {response.status_code}: "
+                    f"{body or '(empty body)'}"
+                )
+            async for raw in response.aiter_bytes(chunk_size=3200):
+                if not raw:
+                    continue
+                data = pending + raw
+                if len(data) % 2:
+                    pending = data[-1:]
+                    data = data[:-1]
+                else:
+                    pending = b""
+                if not data:
+                    continue
+                if first is None:
+                    first = time.perf_counter()
+                    logger.info(
+                        "Sarvam TTS first chunk after %.0f ms (%s, %s)",
+                        (first - started) * 1000.0,
+                        payload["language_code"], payload["speaker"],
+                    )
+                yield _pcm(data)
+        if first is None:
+            raise TTSError("Sarvam TTS returned no audio")
+    except httpx.HTTPError as exc:
+        # Do NOT close the shared client here: a second caller may be streaming
+        # on the same pool. httpx discards the failed connection itself, and the
+        # next request gets a fresh one from the pool.
+        raise TTSError(f"Sarvam TTS request failed: {exc}") from exc
+    finally:
+        logger.info(
+            "Sarvam TTS stream: %d chars, %.0f ms%s",
+            len(payload["text"]), (time.perf_counter() - started) * 1000.0,
+            " (no audio)" if first is None else "",
+        )
+
+
+def synthesise(
+    text: str,
+    language: str,
+    *,
+    speaker: str | None = None,
+    pace: float | None = None,
+) -> tuple[np.ndarray, int]:
+    """Batch wrapper: join the HTTP stream into one float32 buffer."""
+    if not text.strip():
+        raise TTSError("empty TTS text")
+    payload = _payload(text, language, speaker, pace)
+    headers = _headers()
+    started = time.perf_counter()
+    parts: list[np.ndarray] = []
+    pending = b""
+    try:
+        with httpx.Client(timeout=_timeout()) as client:
+            with client.stream(
+                "POST", settings.SARVAM_TTS_URL, headers=headers, json=payload
+            ) as response:
+                if response.status_code >= 400:
+                    raise TTSError(
+                        f"Sarvam TTS HTTP {response.status_code}: "
+                        f"{_error_body(response)}"
+                    )
+                for raw in response.iter_bytes(chunk_size=3200):
+                    if not raw:
+                        continue
+                    data = pending + raw
+                    if len(data) % 2:
+                        pending = data[-1:]
+                        data = data[:-1]
+                    else:
+                        pending = b""
+                    if data:
+                        parts.append(_pcm(data))
+    except httpx.HTTPError as exc:
+        raise TTSError(f"Sarvam TTS request failed: {exc}") from exc
+
+    if not parts:
+        raise TTSError("Sarvam TTS returned no audio")
+    audio = np.concatenate(parts)
+    logger.info(
+        "Sarvam TTS: %d chars -> %.2fs at %d Hz (%.0f ms)",
+        len(payload["text"]), len(audio) / settings.SARVAM_TTS_SAMPLE_RATE,
+        settings.SARVAM_TTS_SAMPLE_RATE,
+        (time.perf_counter() - started) * 1000.0,
+    )
+    return audio, int(settings.SARVAM_TTS_SAMPLE_RATE)
+
+
+def health() -> dict:
+    """Non-secret provider status."""
+    return {
+        "provider": "sarvam_tts",
+        "configured": is_configured(),
+        "model": settings.SARVAM_TTS_MODEL,
+        "languages": sorted(
+            part.strip().lower()
+            for part in (settings.SARVAM_TTS_LANGUAGES or "").split(",")
+            if part.strip()
+        ),
+        "speaker": settings.SARVAM_TTS_SPEAKER or dict(_DEFAULT_SPEAKERS),
+        "speakers": _configured_speakers() or dict(_DEFAULT_SPEAKERS),
+        "sample_rate": settings.SARVAM_TTS_SAMPLE_RATE,
+        "endpoint": settings.SARVAM_TTS_URL,
+    }
